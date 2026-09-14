@@ -91,3 +91,18 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
                                 answer=answer, respond=AsyncMock())
         await self.controller.callback(event)
         self.assertEqual(order, ["answer", "pause"])
+
+    async def test_old_block_button_does_not_toggle_a_different_block(self):
+        self.service.options.return_value = {}
+        self.service.cached_items.return_value = [SimpleNamespace(block="Dyson")]
+        event = SimpleNamespace(respond=AsyncMock(), is_private=True, sender_id=42)
+        await self.controller.show_blocks(event)
+        old_button = event.respond.call_args.kwargs["buttons"][0][0].data
+        self.service.cached_items.return_value = [
+            SimpleNamespace(block="Canon"), SimpleNamespace(block="Dyson")]
+        await self.controller.show_blocks(event)
+        self.service.refresh_format = AsyncMock()
+        event.data = old_button
+        event.answer = AsyncMock()
+        await self.controller.callback(event)
+        self.service.set_option.assert_called_with("disabled_blocks", ["Dyson"])

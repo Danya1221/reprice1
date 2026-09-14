@@ -1,5 +1,6 @@
 """Optional private control bot; the supplier is read by a separate user session."""
 import asyncio
+import hashlib
 import logging
 from contextlib import suppress
 
@@ -52,11 +53,12 @@ class Controller:
 
     async def show_blocks(self, event, page=0):
         blocks = sorted({i.block for i in self.service.cached_items(include_closed=True)})
-        self.block_choices = {str(n): block for n, block in enumerate(blocks)}
+        block_id = lambda block: hashlib.sha256(block.encode()).hexdigest()[:16]
+        self.block_choices = {block_id(block): block for block in blocks}
         disabled = set(self.service.options().get("disabled_blocks", []))
         page = max(0, min(page, max(0, (len(blocks)-1)//8)))
         buttons = [
-            [Button.inline(("☑️ " if b not in disabled else "⬜ ") + b, f"toggle:{n}:{page}".encode())]
+            [Button.inline(("☑️ " if b not in disabled else "⬜ ") + b, f"toggle:{block_id(b)}:{page}".encode())]
             for n, b in enumerate(blocks) if page * 8 <= n < (page + 1) * 8
         ]
         nav = []
