@@ -1,3 +1,4 @@
+"""Interactive alternative to SETUP_MODE; run only on your own computer."""
 import asyncio
 import os
 
@@ -5,35 +6,23 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+from config import env_int
 
 load_dotenv()
 
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "").strip()
-
 
 async def main():
-    if not API_ID or not API_HASH:
-        raise RuntimeError(
-            "Сначала заполни API_ID и API_HASH в .env"
-        )
-
-    client = TelegramClient(
-        StringSession(),
-        API_ID,
-        API_HASH,
-    )
-
-    await client.start()
-
-    print("\nSESSION_STRING:")
-    print(client.session.save())
-    print(
-        "\nСкопируй эту строку в .env / Railway "
-        "как SESSION_STRING."
-    )
-
-    await client.disconnect()
+    api_id = env_int("API_ID", 0, maximum=2**31-1)
+    api_hash = os.getenv("API_HASH", "").strip()
+    if not api_id or not api_hash:
+        raise ValueError("Сначала заполни API_ID и API_HASH в .env")
+    client = TelegramClient(StringSession(), api_id, api_hash)
+    try:
+        await client.start()
+        print("\nSESSION_STRING:\n" + client.session.save())
+        print("\nСкопируй строку в Railway Variables. Не запускай одну сессию в двух местах.")
+    finally:
+        await client.disconnect()
 
 
 if __name__ == "__main__":

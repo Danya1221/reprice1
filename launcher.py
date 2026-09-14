@@ -1,8 +1,9 @@
+"""Use exec so Railway SIGTERM reaches the bot and closes its session."""
 import os
-import subprocess
 import sys
 
-setup_mode = os.getenv("SETUP_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-script = "session_web.py" if setup_mode else "main.py"
-print(f"▶️ Запуск: {script}", flush=True)
-raise SystemExit(subprocess.call([sys.executable, script]))
+if __name__ == "__main__":
+    setup = os.getenv("SETUP_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    script = "session_web.py" if setup else "main.py"
+    print(f"▶️ Запуск: {script}", flush=True)
+    os.execv(sys.executable, [sys.executable, "-u", script])
