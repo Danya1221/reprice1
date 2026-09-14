@@ -1,6 +1,8 @@
 """Edit only managed messages; checkpoint every successful Telegram mutation."""
 import asyncio
 import hashlib
+import html
+import re
 
 from telethon.errors import MessageNotModifiedError
 from telethon.extensions import html as telegram_html
@@ -58,12 +60,57 @@ class Publisher:
                 manifest[next(iter(pages))] = {"id": legacy.id, "hash": None}
         self.state.set("published", {"binding": self.binding(), "messages": manifest})
 
+    async def hide_existing(self):
+        """First deployment at night: hide managed prices even without an item cache."""
+        stored = self.state.get("published", {})
+        manifest = stored.get("messages", {}) if stored.get("binding") == self.binding() else {}
+        keys = {entry["id"]: key for key, entry in manifest.items()}
+        messages = []
+        if keys:
+            messages = await self.client.get_messages(self.target, ids=list(keys))
+        else:
+            me = await self.client.get_me()
+            async for message in self.client.iter_messages(self.target, search=self.settings.header):
+                if ((message.out or message.sender_id == me.id)
+                        and (message.raw_text or "").startswith(self.settings.header + "\n\n")):
+                    messages.append(message)
+        pages = {}
+        recovered = {}
+        for message in messages:
+            if not message:
+                continue
+            sections = (message.raw_text or "").split("\n\n", 2)
+            # Only a genuine managed block heading can be retained; never retain product lines.
+            title = sections[1] if len(sections) > 1 else ""
+            match = re.fullmatch(r"— (.+) —(?:\nЧасть (\d+))?", title)
+            if match:
+                key = hashlib.sha256(match[1].encode()).hexdigest()[:16] + ":" + str(int(match[2] or 1)-1)
+                heading = html.escape(self.settings.header) + "\n\n<b>— " + html.escape(match[1]) + " —</b>"
+                if match[2]:
+                    heading += "\nЧасть " + match[2]
+            else:
+                key = keys.get(message.id, "legacy:0")
+                heading = html.escape(self.settings.header)
+            if key in recovered:
+                # Keep duplicate records visible to the publisher so all stale copies are hidden.
+                key += ":" + str(message.id)
+            recovered[key] = {"id": message.id, "hash": None}
+            pages[key] = heading + "\n\nПродажи закрыты"
+        if recovered:
+            self.state.set("published", {"binding": self.binding(), "messages": recovered})
+        return await self.publish(pages)
+
     async def publish(self, pages):
         async with self.lock:
             stored = self.state.get("published", {})
             manifest = stored.get("messages", {}) if stored.get("binding") == self.binding() else {}
             if not manifest or self.state.get("pending_publish"):
                 await self._recover(pages, manifest)
+            if "legacy:0" in manifest and pages and "legacy:0" not in pages:
+                first_key = next(iter(pages))
+                if first_key not in manifest:
+                    manifest[first_key] = manifest.pop("legacy:0")
+                    self.state.set("published", {"binding": self.binding(), "messages": manifest})
             # Read even on equal hashes: deleted posts must be restored.
             ids = [entry["id"] for entry in manifest.values()]
             current = await self.client.get_messages(self.target, ids=ids) if ids else []

@@ -128,3 +128,23 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         await self.publisher.publish(self.pages)
         self.assertEqual(self.client.sent, 1)
         self.assertEqual(self.client.edited, 1)
+
+    async def test_night_without_cache_hides_existing_price_pages(self):
+        await self.publisher.publish(self.pages)
+        fresh = StateStore(Path(self.temp.name) / "empty.json")
+        await Publisher(self.client, "@target", fresh, Settings(send_delay=0)).hide_existing()
+        self.assertEqual(self.client.sent, 1)
+        self.assertIn("Продажи закрыты", next(iter(self.client.rows.values())).raw_text)
+        self.assertNotIn("60000", next(iter(self.client.rows.values())).raw_text)
+
+    async def test_night_legacy_post_reopens_in_place(self):
+        await self.client.send_message("@target", "📦 АКТУАЛЬНЫЙ ПРАЙС\n\niPhone 17 — 60000")
+        await self.publisher.hide_existing()
+        self.assertNotIn("60000", next(iter(self.client.rows.values())).raw_text)
+        await self.publisher.publish(self.pages)
+        self.assertEqual(self.client.sent, 1)
+
+    async def test_night_does_not_touch_guarantee(self):
+        await self.client.send_message("@target", "ГАРАНТИЯ: 7 дней")
+        await self.publisher.hide_existing()
+        self.assertEqual(next(iter(self.client.rows.values())).raw_text, "ГАРАНТИЯ: 7 дней")

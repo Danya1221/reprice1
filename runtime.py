@@ -83,7 +83,12 @@ class SyncService:
 
     async def render(self, closed=False):
         options = self.options()
-        items = select_items(self.cached_items(include_closed=closed), self.settings, options)
+        catalog = self.cached_items(include_closed=closed)
+        if closed and not catalog:
+            changes = await self.publisher.hide_existing()
+            self.state.update({"last_publish": timestamp(), "published_items": 0})
+            return 0, changes
+        items = select_items(catalog, self.settings, options)
         pages = render_blocks(items, self.settings, options, closed=closed)
         changes = await self.publisher.publish(pages)
         self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(items)})

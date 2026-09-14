@@ -132,3 +132,8 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         self.assertTrue(self.parse("В данный момент мы закрыты. Ждём завтра").closed)
         items = self.parse("iPhone 17 256 Black — 60000\nDyson HS08 — 40000").items
         self.assertEqual([i.block for i in select_items(items, Settings(), {"disabled_blocks": ["Dyson"]})], ["iPhone 17"])
+
+    def test_esim_separators_are_not_physical_sim(self):
+        for label in ("e-SIM", "e SIM", "eSIM"):
+            item = self.parse(f"iPhone 17 256 Black {label} — 60000").items[0]
+            self.assertEqual(item.sim, "esim")

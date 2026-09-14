@@ -105,7 +105,7 @@ def split_price(line, default_currency):
 
 
 def sim_type(text):
-    text = clean(text).lower()
+    text = re.sub(r"\be[\s-]+sim\b", "esim", clean(text).lower())
     if re.search(r"\b(?:2|dual)\s*sim\b|две\s*sim", text):
         return "dual"
     if re.search(r"\bsim\b", text):
