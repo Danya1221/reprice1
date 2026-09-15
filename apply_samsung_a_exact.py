@@ -35,6 +35,11 @@ p.write_text(s, encoding="utf-8")
 
 tp = Path("tests/test_prices.py")
 t = tp.read_text(encoding="utf-8")
+# Old fixtures still used A56 from the previous broad Axx rule. Keep the same
+# scenarios but switch that model to A37, which is one of the explicitly allowed models.
+t = t.replace("A56 8/256 Awesome Graphite 🇪🇺 — 35000", "A37 8/256 Awesome Graphite 🇪🇺 — 35000")
+t = t.replace("A56 8/256 Black — 35000", "A37 8/256 Black — 35000")
+
 marker = '    def test_blank_line_is_added_when_model_changes(self):\n'
 extra = '''    def test_only_requested_galaxy_a_models_are_auto_detected(self):\n        items = self.parse("""A17 6/128GB Gray — 15000\nA27 6/128GB Black — 20800\nA37 8/128GB Lavender — 23900\nA57 8/256GB Navy — 31800""").items\n        self.assertEqual([item.block for item in items], ["Samsung A + S25"] * 4)\n        self.assertEqual([item.title.split()[0] for item in items], ["A17", "A27", "A37", "A57"])\n\n    def test_other_bare_a_models_are_not_assumed_to_be_samsung(self):\n        items = self.parse("""A15 8/256 Black — 19900\nA55 8/256 Blue — 29900""").items\n        self.assertEqual([item.block for item in items], ["Товары", "Товары"])\n\n'''
 if marker not in t:
