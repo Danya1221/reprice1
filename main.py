@@ -94,8 +94,8 @@ async def main():
                 log.warning("ADMIN_IDS не задан: доступ получит владелец SESSION_STRING после авторизации. "
                             "Для другого аккаунта укажи его ID в ADMIN_IDS")
         else:
-            log.warning("BOT_TOKEN не задан: управляющий бот НЕ запущен и на /start отвечать не будет. "
-                        "Добавь токен своего бота из BotFather в BOT_TOKEN")
+            log.warning("BOT_TOKEN / CONTROL_BOT_TOKEN не задан: управляющий бот НЕ запущен. "
+                        "Добавь токен своего бота из BotFather в одну из этих переменных")
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError):

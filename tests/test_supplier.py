@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from config import Settings, Source
 from supplier import SupplierReader, SupplierTimeout, button_label
@@ -76,3 +77,30 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
 
     def test_button_labels_ignore_emoji(self):
         self.assertEqual(button_label("📦 Прайс"), button_label("Прайс"))
+
+    async def test_custom_closed_reply_is_recognized(self):
+        self.reader.source = Source("@supplier", closed_text="Заказы на сегодня завершены")
+        self.reader.messages = AsyncMock(return_value=[message(2, "ЗАКАЗЫ НА СЕГОДНЯ\nЗАВЕРШЕНЫ")])
+        result = await self.reader.fetch()
+        self.assertTrue(result.closed)
+        self.assertEqual(result.items, [])
+
+    async def test_custom_feed_closure_does_not_reuse_older_prices(self):
+        self.reader.source = Source("@supplier", mode="feed", closed_text="Прайс будет завтра")
+        self.client.rows = [message(1, "iPhone 17 256 Black — 60000"),
+                            message(2, "Прайс будет завтра")]
+        result = await self.reader.fetch()
+        self.assertTrue(result.closed)
+        self.assertEqual(result.items, [])
+
+    async def test_custom_closed_reply_stops_button_navigation(self):
+        self.reader.source = Source("@supplier", buttons=("Прайс",), closed_text="Прайс будет завтра")
+        self.reader.collect_action = AsyncMock(return_value=[message(2, "Прайс будет завтра")])
+        result = await self.reader.fetch()
+        self.assertTrue(result.closed)
+        self.reader.collect_action.assert_awaited_once()
+
+    def test_generic_closure_still_works_with_custom_phrase(self):
+        self.reader.source = Source("@supplier", closed_text="Прайс будет завтра")
+        self.assertTrue(self.reader.is_closed_text("В данный момент мы закрыты"))
+        self.assertFalse(self.reader.is_closed_text("Выберите категорию"))

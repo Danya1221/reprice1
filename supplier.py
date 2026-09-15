@@ -46,6 +46,10 @@ class SupplierReader:
     async def resolve(self):
         self.entity = await self.client.get_input_entity(self.source.peer)
 
+    def is_closed_text(self, text):
+        custom = clean(self.source.closed_text).casefold()
+        return bool(CLOSED.search(text or "") or (custom and custom in clean(text or "").casefold()))
+
     async def collect_action(self, action):
         """Snapshot before action, listen before sending, poll as a fallback."""
         s = self.settings
@@ -109,7 +113,7 @@ class SupplierReader:
                 raise SupplierTimeout("Лента поставщика пуста")
             # A closing notice newer than all price messages closes this source.
             latest = next((m for m in messages if (m.raw_text or "").strip() or m.document), None)
-            if latest and CLOSED.search(latest.raw_text or ""):
+            if latest and self.is_closed_text(latest.raw_text):
                 return [latest]
             return list(reversed(messages))
         if not self.source.request:
@@ -117,7 +121,7 @@ class SupplierReader:
         messages = await self.collect_action(
             lambda: self.client.send_message(self.entity, self.source.request, parse_mode=None))
         for wanted in self.source.buttons:
-            if any(CLOSED.search(m.raw_text or "") for m in messages):
+            if any(self.is_closed_text(m.raw_text) for m in messages):
                 return messages
             button = next((b for m in reversed(messages) if (b := find_button(m, wanted))), None)
             if button is None:
@@ -185,6 +189,8 @@ class SupplierReader:
             if message.document:
                 documents.append(await self.document_text(message))
         result = parse_documents(documents, self.settings.currency)
+        if not result.items and any(self.is_closed_text(text) for text in documents):
+            result.closed = True
         if not result.items and not result.closed:
             raise RuntimeError("В ответе нет распознанных товаров. Прайс в канале сохранён")
         return result

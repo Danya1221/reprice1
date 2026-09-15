@@ -11,8 +11,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def env_int(name, default, minimum=0, maximum=10_000_000):
-    raw = os.getenv(name, str(default)).strip()
+def env_value(name, default="", *, aliases=()):
+    """Use the canonical nonempty value, then supported legacy names."""
+    for candidate in (name, *aliases):
+        value = os.getenv(candidate, "").strip()
+        if value:
+            return value
+    return str(default)
+
+
+def env_int(name, default, minimum=0, maximum=10_000_000, *, aliases=()):
+    raw = env_value(name, default, aliases=aliases)
     try:
         value = int(raw)
     except ValueError as exc:
@@ -22,9 +31,9 @@ def env_int(name, default, minimum=0, maximum=10_000_000):
     return value
 
 
-def env_float(name, default, minimum=0.1):
+def env_float(name, default, minimum=0.1, *, aliases=()):
     try:
-        value = float(os.getenv(name, str(default)))
+        value = float(env_value(name, default, aliases=aliases))
     except ValueError as exc:
         raise ValueError(f"{name}: нужно число") from exc
     if not minimum <= value <= 3600:
@@ -57,8 +66,8 @@ def peer(value):
     return "@" + match[1] if match else value
 
 
-def csv_env(name):
-    return tuple(x.strip() for x in os.getenv(name, "").split(",") if x.strip())
+def csv_env(name, *, aliases=()):
+    return tuple(x.strip() for x in env_value(name, aliases=aliases).split(",") if x.strip())
 
 
 @dataclass(frozen=True)
@@ -68,6 +77,7 @@ class Source:
     request: str = "/start"
     buttons: tuple = ()
     label: str = "Поставщик 1"
+    closed_text: str = ""
 
 
 @dataclass
@@ -108,14 +118,20 @@ class Settings:
             source_peer = os.getenv("SUPPLIER_BOT" + suffix, "").strip()
             if not source_peer:
                 continue
-            mode = os.getenv("SOURCE_MODE" + suffix, "bot" if not suffix else "feed").strip().lower()
+            explicit_request = os.getenv("REQUEST_TEXT" + suffix, "").strip()
+            button_path = tuple(x.strip() for x in os.getenv("BUTTON_PATH" + suffix, "").split(">") if x.strip())
+            # A configured request/button path expresses intent to query a bot.
+            # An explicitly configured feed still never receives commands.
+            default_mode = "bot" if not suffix or explicit_request or button_path else "feed"
+            mode = env_value("SOURCE_MODE" + suffix, default_mode).lower()
             if mode not in {"bot", "feed"}:
                 raise ValueError("SOURCE_MODE: допустимо bot или feed")
             sources.append(Source(
                 peer(source_peer), mode,
                 os.getenv("REQUEST_TEXT" + suffix, "/start").strip(),
-                tuple(x.strip() for x in os.getenv("BUTTON_PATH" + suffix, "").split(">") if x.strip()),
+                button_path,
                 "Поставщик 2" if suffix else "Поставщик 1",
+                closed_text=env_value("CLOSED_TEXT_2" if suffix else "CLOSED_TEXT_1"),
             ))
         root = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
         settings = cls(
@@ -127,7 +143,7 @@ class Settings:
             poll_seconds=env_int("POLL_SECONDS", 600, 30, 86400),
             action_delay=env_float("AFTER_ACTION_DELAY", 1),
             response_timeout=env_float("RESPONSE_TIMEOUT", 45),
-            quiet_seconds=env_float("PRICE_SETTLE_SECONDS", 3),
+            quiet_seconds=env_float("PRICE_SETTLE_SECONDS", 3, aliases=("SUPPLIER_QUIET_SECONDS",)),
             history_limit=env_int("HISTORY_LIMIT", 300, 10, 3000),
             header=os.getenv("PRICE_HEADER", "📦 АКТУАЛЬНЫЙ ПРАЙС").strip() or "📦 АКТУАЛЬНЫЙ ПРАЙС",
             state_file=os.getenv("STATE_FILE", str(Path(root) / "state.json") if root else "state.json").strip(),
@@ -140,10 +156,11 @@ class Settings:
             allow_accessories=env_bool("ALLOW_ACCESSORIES", True),
             off_hours=env_bool("OFF_HOURS_ENABLED", True),
             timezone=os.getenv("TIMEZONE", "Europe/Moscow").strip(),
-            open_hour=env_int("OPEN_HOUR", 10, 0, 23), close_hour=env_int("CLOSE_HOUR", 20, 0, 23),
+            open_hour=env_int("OPEN_HOUR", 10, 0, 23, aliases=("WORK_START_HOUR",)),
+            close_hour=env_int("CLOSE_HOUR", 20, 0, 23, aliases=("WORK_END_HOUR",)),
             send_delay=env_float("SEND_DELAY", 1),
-            bot_token=os.getenv("BOT_TOKEN", "").strip(),
-            admin_ids=tuple(int(x) for x in csv_env("ADMIN_IDS")),
+            bot_token=env_value("BOT_TOKEN", aliases=("CONTROL_BOT_TOKEN",)),
+            admin_ids=tuple(int(x) for x in csv_env("ADMIN_IDS", aliases=("ADMIN_ID",))),
         )
         settings.validate(require_sync=require_sync)
         return settings
