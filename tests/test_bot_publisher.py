@@ -41,7 +41,7 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    async def test_supplier_or_user_id_falls_back_to_admin_private_chat(self):
+    async def test_supplier_or_user_id_is_never_used_as_destination(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
         chats = {
             6781674751: {"id": 6781674751, "type": "private", "username": "supplier_bot"},
@@ -49,13 +49,13 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         }
         publisher = FakeBotPublisher(6781674751, self.state, settings, chats)
 
-        target = await publisher.ensure_target()
+        with self.assertRaisesRegex(RuntimeError, "/bind"):
+            await publisher.ensure_target()
 
-        self.assertEqual(target, 42)
-        self.assertTrue(publisher.used_admin_fallback)
-        self.assertIn("администратора", publisher.destination_note())
+        self.assertIsNone(publisher.target)
+        self.assertFalse(publisher.used_admin_fallback)
 
-    async def test_valid_channel_still_wins_over_admin_fallback(self):
+    async def test_valid_channel_is_used_directly(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
         chats = {
             "@prices": {"id": -100123, "type": "channel", "title": "Prices"},
@@ -68,18 +68,20 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(target, -100123)
         self.assertFalse(publisher.used_admin_fallback)
 
-    async def test_publish_works_after_fallback(self):
+    async def test_publish_works_after_persistent_group_binding(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
+        group_id = -100777
         chats = {
             6781674751: {"id": 6781674751, "type": "private", "username": "supplier_bot"},
-            42: {"id": 42, "type": "private", "first_name": "Admin"},
+            group_id: {"id": group_id, "type": "supergroup", "title": "Розница"},
         }
         publisher = FakeBotPublisher(6781674751, self.state, settings, chats)
+        await publisher.bind_group(group_id, title="Розница", chat_type="supergroup")
 
         changes = await publisher.publish({"iphone:0": "Прайс"})
 
         self.assertEqual(changes, 1)
-        self.assertTrue(any(method == "sendMessage" and payload["chat_id"] == 42
+        self.assertTrue(any(method == "sendMessage" and payload["chat_id"] == group_id
                             for method, payload in publisher.calls))
 
 
