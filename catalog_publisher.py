@@ -142,9 +142,32 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             self.save_catalog(records)
         return changes
 
+    async def _repair_first_message_layout_once(self):
+        text = str(self.state.get("first_message_text", "") or "").strip()
+        if not text or self.state.get("first_message_layout_version", 0) >= 2:
+            return
+
+        records = self.catalog_records()
+        first = self.state.get("first_message", {}) or {}
+        ids = []
+        if first.get("id"):
+            ids.append(int(first["id"]))
+        ids.extend(int(record["id"]) for record in records if record.get("id"))
+        for message_id in dict.fromkeys(ids):
+            try:
+                await self._delete(message_id)
+            except RuntimeError as exc:
+                if "message to delete not found" not in str(exc).lower():
+                    raise
+        self.save_catalog([])
+        self.state.set("first_message", {})
+        await self._clear_managed_price_posts()
+        self.state.set("first_message_layout_version", 2)
+
     async def publish(self, pages):
         async with self.layout_lock:
             await self.ensure_target()
+            await self._repair_first_message_layout_once()
             await self._ensure_first_message()
             # First publish/reorder every price page. Only then create or move the
             # navigation catalog, otherwise Telegram places it before later posts.
@@ -169,4 +192,6 @@ class CatalogPublisher(PinnedBotAPIPublisher):
                             raise
                     records.remove(record)
                     self.save_catalog(records)
-            return await super().set_first_message(text)
+            changes = await super().set_first_message(text)
+            self.state.set("first_message_layout_version", 2)
+            return changes

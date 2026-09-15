@@ -137,6 +137,47 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ident, self.state.get("first_message")["id"])
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
 
+    async def test_saved_first_message_is_rebuilt_before_prices_after_layout_repair(self):
+        await self.publisher.ensure_target()
+        binding = self.publisher.binding()
+        self.state.set("first_message_text", "Гарантия и выдача")
+        self.state.set("first_message", {
+            "binding": binding, "chat_id": -100777, "id": 50,
+            "hash": "old", "text": "Гарантия и выдача", "pinned": True,
+        })
+        self.state.set("catalog", {
+            "binding": binding, "messages": [{"id": 50, "hash": "catalog", "pinned": True}],
+        })
+        self.state.set("published", {
+            "binding": binding, "messages": {"old:0": {"id": 60, "hash": "x", "content": "old"}},
+        })
+
+        await self.publisher.publish(self.pages())
+
+        first = self.state.get("first_message")["id"]
+        price_ids = [entry["id"] for entry in self.state.get("published")["messages"].values()]
+        catalog = self.state.get("catalog")["messages"][0]["id"]
+        self.assertLess(first, min(price_ids))
+        self.assertGreater(catalog, max(price_ids))
+        self.assertEqual(self.state.get("first_message_layout_version"), 2)
+        self.assertTrue(any(method == "pinChatMessage" and payload.get("message_id") == first
+                            for method, payload in self.publisher.calls))
+
+    async def test_samsung_series_get_separate_working_catalog_buttons(self):
+        items = parse_documents(["""Samsung
+A56 8/256 Black — 35000
+S26 12/256 Black — 65000
+Z Fold 7 12/256 Black — 120000"""]).items
+        pages = render_blocks(items, Settings())
+        await self.publisher.publish(pages)
+        edit = self.catalog_edit()
+        buttons = [button for row in edit["reply_markup"]["inline_keyboard"] for button in row]
+        samsung = [button for button in buttons if button["text"].startswith("Samsung")]
+        self.assertEqual([button["text"] for button in samsung], [
+            "Samsung Galaxy A", "Samsung Galaxy S", "Samsung Fold / Flip"
+        ])
+        self.assertTrue(all(button.get("url") for button in samsung))
+
     async def test_closed_catalog_keeps_buttons_and_removes_prices(self):
         await self.publisher.publish(self.pages())
         await self.publisher.hide_existing()

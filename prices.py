@@ -40,6 +40,7 @@ BRANDS = (
     ("LEGO", r"\blego\b|лего"),
     ("Dyson", r"\bdyson\b|дайсон"),
     ("Canon", r"\bcanon\b|кэнон|канон"),
+    ("Rode", r"\br(?:o|ø)de\b"),
     ("DJI / Insta360", r"\bdji\b|\binsta\s*360\b"),
     ("Kodak / Fujifilm", r"\bkodak\b|\bfujifilm\b"),
     ("Bowers & Wilkins", r"bowers|b&w|\bpx[78]\b"),
@@ -48,7 +49,7 @@ BRANDS = (
     ("Samsung", r"\bsamsung\b|\bgalaxy\b|самсунг"),
     ("Apple", r"\bapple\b|\biphone\b|айфон|\bipad\b|\bmacbook\b|\bairpods\b|\bimac\b|apple\s*watch"),
     ("Sony", r"\bsony\b"),
-    ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b|^\s*(?:redmi\s+)?note\s+\d{1,2}\b"),
+    ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b|^\s*(?:redmi\s+)?note\s+\d{1,2}[a-z]*\b"),
     ("Huawei", r"\bhuawei\b"),
     ("Honor", r"\bhonor\b"),
     ("Realme", r"\brealme\b|реалми"),
@@ -188,10 +189,29 @@ def apple_watch_block(title):
     return "Apple Watch"
 
 
+def samsung_block(title):
+    if not re.search(r"\bsamsung\b|\bgalaxy\b|самсунг", title, re.I):
+        return ""
+    if re.search(r"\b(?:galaxy\s*)?(?:z\s*)?(?:fold|flip)\b", title, re.I):
+        return "Samsung Fold / Flip"
+    if re.search(r"\b(?:galaxy\s*)?a\s*\d{1,3}[a-z]*\b|\bsamsung\s+a\s*\d{1,3}[a-z]*\b", title, re.I):
+        return "Samsung Galaxy A"
+    if re.search(r"\b(?:galaxy\s*)?s\s*\d{1,3}(?:\s*(?:\+|plus|ultra|fe))?\b|\bsamsung\s+s\s*\d{1,3}", title, re.I):
+        return "Samsung Galaxy S"
+    if re.search(r"\bgalaxy\s+a\b|\bsamsung\s+galaxy\s+a\b", title, re.I):
+        return "Samsung Galaxy A"
+    if re.search(r"\bgalaxy\s+s\b|\bsamsung\s+galaxy\s+s\b", title, re.I):
+        return "Samsung Galaxy S"
+    return "Samsung"
+
+
 def product_block(title):
     watch = apple_watch_block(title)
     if watch:
         return watch
+    samsung = samsung_block(title)
+    if samsung:
+        return samsung
     if re.search(r"\b(?:MacBook|iMac)\b", title, re.I):
         return "MacBook / iMac"
     for label in ("AirPods", "iPad", "Mac mini", "Mac Studio", "Apple TV", "AirTag"):
@@ -202,17 +222,18 @@ def product_block(title):
 
 def ordered_blocks(blocks, preferred=()):
     defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook / iMac", "Apple", "Ray-Ban Meta",
-                "Samsung", "Honor", "Realme", "Huawei", "Tecno", "Xiaomi", "Google", "Dyson",
+                "Samsung", "Honor", "Realme", "Huawei", "Tecno", "Xiaomi", "Google", "Rode", "Dyson",
                 "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
     def order_key(name):
         if name in preferred:
             return (-1, preferred.index(name), (), "")
         model = iphone_model(name)
-        family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else name)
+        family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else ("Samsung" if name.startswith("Samsung") else name))
         rank = defaults.index(family) if family in defaults else len(defaults) - 4
+        samsung_rank = {"Samsung Galaxy A": 0, "Samsung Galaxy S": 1, "Samsung Fold / Flip": 2, "Samsung": 3}.get(name, 0) if family == "Samsung" else 0
         numbered = model if model else (name if family == "Apple Watch" else "")
         number = re.search(r"\d+", numbered)
-        return (rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name.casefold())), name)
+        return (rank, samsung_rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name.casefold())), name)
     return sorted(set(blocks), key=order_key)
 
 

@@ -60,7 +60,7 @@ eSIM
 
     def test_google_plus_and_samsung_sm_code(self):
         result = self.parse("Samsung Galaxy S26+ SM-S947B 12/256 Cobalt Violet 🇦🇪 — 68300")
-        self.assertEqual(result.items[0].block, "Samsung")
+        self.assertEqual(result.items[0].block, "Samsung Galaxy S")
         self.assertIn("S26+", result.items[0].title)
         self.assertNotIn("SM-", result.items[0].title)
         self.assertIn("🇦🇪", result.items[0].title)
@@ -79,6 +79,46 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
             "Ray-Ban Meta", "Ray-Ban Meta"])
         self.assertIn(" M ", items[-2].title)
         self.assertIn(" L ", items[-1].title)
+
+    def test_note_14s_and_rode_do_not_inherit_dji_section(self):
+        items = self.parse("""DJI / Insta360
+Note 14S 8/256 Aurora Purple 🇪🇺 — 17800
+Note 14S 8/256 Midnight Black 🇪🇺 — 17800
+RODE Wireless Me Dual Set 🇷🇺 — 12700
+RODE Wireless Pro 🇷🇺 — 23300
+DJI Osmo Pocket 4 Creator Combo — 44800
+Insta360 X6 Standard Bundle — 51100""").items
+        self.assertEqual([item.block for item in items], [
+            "Xiaomi", "Xiaomi", "Rode", "Rode", "DJI / Insta360", "DJI / Insta360"
+        ])
+        self.assertTrue(items[0].title.startswith("Note 14S"))
+        self.assertTrue(items[2].title.startswith("RODE Wireless"))
+        self.assertNotIn("DJI / Insta360 Note", items[0].title)
+        self.assertNotIn("DJI / Insta360 RODE", items[2].title)
+
+    def test_samsung_series_are_read_and_split_into_catalog_blocks(self):
+        items = self.parse("""Samsung
+Galaxy A
+A27 8/256 Black 🇪🇺 — 24000
+A56 8/256 Awesome Graphite 🇪🇺 — 35000
+A57 12/256 Blue 🇪🇺 — 42000
+Galaxy S
+S26 12/256 Black 🇦🇪 — 65000
+S26+ 12/256 Cobalt Violet 🇦🇪 — 68300
+S26 Ultra 12/512 Titanium Black 🇦🇪 — 99000
+Galaxy Z
+Z Fold 7 12/256 Black 🇦🇪 — 120000
+Z Flip 7 12/256 Mint 🇦🇪 — 78000""").items
+        self.assertEqual([item.block for item in items], [
+            "Samsung Galaxy A", "Samsung Galaxy A", "Samsung Galaxy A",
+            "Samsung Galaxy S", "Samsung Galaxy S", "Samsung Galaxy S",
+            "Samsung Fold / Flip", "Samsung Fold / Flip",
+        ])
+        pages = render_blocks(items, Settings())
+        headers = [content.split("\n", 1)[0] for content in pages.values()]
+        self.assertIn("<b>Samsung Galaxy A</b>", headers)
+        self.assertIn("<b>Samsung Galaxy S</b>", headers)
+        self.assertIn("<b>Samsung Fold / Flip</b>", headers)
 
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]
