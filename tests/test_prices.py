@@ -18,7 +18,7 @@ class PriceTests(unittest.TestCase):
 15 Pro Max 256 Black 🇯🇵 — 85 000
 12 128 White 🇮🇳 — 33 000""")
         self.assertEqual(len(result.items), 5)
-        self.assertEqual(result.items[2].block, "iPhone 16 Pro")
+        self.assertEqual(result.items[2].block, "CPO")
         self.assertIn("CPO", result.items[2].title)
         self.assertIn("🇺🇸", result.items[2].title)
         self.assertEqual(result.items[0].price, Decimal("58800"))
@@ -39,10 +39,26 @@ SIM
         self.assertEqual(len(select_items(items, Settings(sim_filter="sim"))), 2)
         self.assertEqual(len(select_items(items, Settings(sim_filter="esim"))), 1)
 
-    def test_country_does_not_guess_sim(self):
+    def test_country_flag_infers_iphone17_sim(self):
         item = self.parse("🇺🇸 iPhone 17 256GB Black — 58800").items[0]
-        self.assertEqual(item.sim, "unknown")
-        self.assertEqual(select_items([item], Settings(sim_filter="esim")), [])
+        self.assertEqual(item.sim, "esim")
+        self.assertEqual(len(select_items([item], Settings(sim_filter="esim"))), 1)
+
+    def test_iphone17_region_sim_matrix(self):
+        items = self.parse("""🇺🇸 iPhone 17 256 Black — 60000
+🇯🇵 iPhone 17 Pro 256 Black — 70000
+🇦🇪 iPhone 17 Pro Max 256 Black — 80000
+🇨🇳 iPhone 17 256 Black — 61000
+🇮🇳 iPhone 17 256 Black — 62000
+🇭🇰 iPhone 17 Pro 256 Black — 71000
+🇨🇳 iPhone 17e 256 Black — 50000""").items
+        self.assertEqual([item.sim for item in items], [
+            "esim", "esim", "esim", "dual", "hybrid", "hybrid", "hybrid"
+        ])
+
+    def test_explicit_sim_beats_region_fallback(self):
+        item = self.parse("🇺🇸 iPhone 17 256 Black SIM + eSIM — 60000").items[0]
+        self.assertEqual(item.sim, "hybrid")
 
     def test_google_plus_and_samsung_sm_code(self):
         result = self.parse("Samsung Galaxy S26+ SM-S947B 12/256 Cobalt Violet 🇦🇪 — 68300")
@@ -69,6 +85,29 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]
         self.assertIn("Актив (Ориг. Упаковка)", item.title)
+
+    def test_asis_and_cpo_are_separate_messages(self):
+        items = self.parse("""iPhone 16 Pro 256 Natural CPO 🇺🇸 — 79000
+ASIS
+iPhone 16 Pro Max 256 Black 🇺🇸 — 80000
+iPhone 17 256 Black 🇮🇳 — 60000""").items
+        self.assertEqual(items[0].block, "CPO")
+        self.assertEqual(items[1].block, "ASIS")
+        pages = render_blocks(items, Settings())
+        contents = list(pages.values())
+        self.assertTrue(any("— CPO —" in page for page in contents))
+        self.assertTrue(any("— ASIS —" in page for page in contents))
+
+    def test_active_and_inactive_are_sorted_inside_message(self):
+        items = self.parse("""iPhone 17 256 Black Актив 🇮🇳 — 60000
+iPhone 17 256 White Неактив 🇮🇳 — 61000
+iPhone 17 256 Blue 🇮🇳 — 62000""").items
+        content = next(iter(render_blocks(items, Settings()).values()))
+        self.assertIn("— Неактив —", content)
+        self.assertIn("— Актив —", content)
+        self.assertIn("— Статус не указан —", content)
+        self.assertLess(content.index("— Неактив —"), content.index("— Актив —"))
+        self.assertLess(content.index("— Актив —"), content.index("— Статус не указан —"))
 
     def test_accessories_filter(self):
         items = self.parse("Чехол iPhone 17 Black — 500\niPhone 17 256 Black — 60000").items
@@ -121,7 +160,7 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         self.assertIn("Продажи закрыты", closed)
 
     def test_pages_fit_telegram_limit(self):
-        items = [Item(f"iPhone 17 256GB Black {i} 🇺🇸", Decimal(60000), "RUB", "iPhone 17")
+        items = [Item(f"iPhone 17 256GB Black {i} 🇺🇸", Decimal(60000), "RUB", "iPhone 17", "esim")
                  for i in range(220)]
         pages = render_blocks(items, Settings())
         self.assertGreater(len(pages), 1)
@@ -137,3 +176,7 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         for label in ("e-SIM", "e SIM", "eSIM"):
             item = self.parse(f"iPhone 17 256 Black {label} — 60000").items[0]
             self.assertEqual(item.sim, "esim")
+
+
+if __name__ == "__main__":
+    unittest.main()
