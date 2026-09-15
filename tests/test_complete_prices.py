@@ -22,7 +22,7 @@ class CompletePriceTests(unittest.TestCase):
     def test_new_brands_and_apple_families_have_their_own_blocks(self):
         rows = ["Realme C75", "Tecno Camon 40", "Infinix Note 50", "OnePlus 13", "Nothing Phone 3", "AirPods 4", "Apple Watch S10", "iPad Air M3", "MacBook Air M4"]
         items = parse_documents(["\n".join(name + " — 20000" for name in rows)]).items
-        self.assertEqual([item.block for item in items], ["Realme", "Tecno", "Infinix", "OnePlus", "Nothing", "AirPods", "Apple Watch Series 10", "iPad", "MacBook / iMac"])
+        self.assertEqual([item.block for item in items], ["Realme", "Tecno", "Infinix", "OnePlus", "Nothing", "AirPods", "Apple Watch", "iPad", "MacBook / iMac"])
 
     def test_accessory_below_100_and_no_status_defaults_inactive(self):
         items = parse_documents(["AirTag 1 pack — 35 $\niPhone 16 Pro 256 Natural CPO 🇺🇸 — 79000"]).items

@@ -24,10 +24,29 @@ class ParserRegressionTests(unittest.TestCase):
 
     def test_watch_series_and_macs_are_grouped(self):
         items = self.parse("Apple Watch\nSeries 11 46mm Jet Black — 40000\nUltra 3 49mm Black — 70000\nMacBook Air M4 16/256 — 90000\niMac M4 24 16/256 — 110000").items
-        self.assertEqual([i.block for i in items], ["Apple Watch Series 11", "Apple Watch Ultra 3", "MacBook / iMac", "MacBook / iMac"])
+        self.assertEqual([i.block for i in items], ["Apple Watch", "Apple Watch", "MacBook / iMac", "MacBook / iMac"])
+        watch_pages = [page for page in render_blocks(items, Settings()).values() if page.startswith("<b>Apple Watch</b>")]
+        self.assertEqual(len(watch_pages), 1)
+        self.assertIn("Series 11", watch_pages[0])
+        self.assertIn("Ultra 3", watch_pages[0])
         pages = "\n".join(render_blocks(items, Settings()).values())
         self.assertIn("<b>MacBook / iMac</b>", pages)
         self.assertNotIn("<b>— MacBook / iMac —</b>", pages)
+
+    def test_iphone_11_to_15_are_one_publication_block(self):
+        items = self.parse("""iPhone: 13-14-15
+🇮🇳 13 128GB Midnight - 45100
+🇺🇸 14 128GB Midnight - 46400
+🇮🇳 15 128GB Black - 55400
+🇮🇳 15 Plus 128GB Pink - 61400
+🇦🇪 15 Pro 128GB Blue - 83600
+iPhone 12 128 Black — 40000
+iPhone 11 Pro Max 256 Green — 39000""").items
+        self.assertEqual({item.block for item in items}, {"iPhone 11–15"})
+        self.assertTrue(any("iPhone 15 Pro" in item.title for item in items))
+        pages = render_blocks(items, Settings())
+        self.assertTrue(all(page.startswith("<b>iPhone 11–15</b>") for page in pages.values()))
+
 
     def test_saved_wrong_block_is_reclassified(self):
         item = Item.from_dict({"title": "Oura Ring 4 Silver", "price": "35000", "currency": "RUB", "block": "DJI / Insta360", "sim": "unknown", "accessory": False})

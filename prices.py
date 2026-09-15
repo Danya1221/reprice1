@@ -167,6 +167,14 @@ def iphone_model(title):
     return "iPhone " + model
 
 
+def iphone_publish_block(model):
+    if not model:
+        return ""
+    match = re.match(r"iPhone\s+(\d{1,2})\b", model, re.I)
+    if match and 11 <= int(match.group(1)) <= 15:
+        return "iPhone 11–15"
+    return model
+
 
 def brand_of(text):
     for name, pattern in BRANDS:
@@ -176,50 +184,43 @@ def brand_of(text):
 
 
 def apple_watch_block(title):
-    if not re.search(r"\b(?:apple\s*)?watch\b", title, re.I):
-        return ""
-    ultra = re.search(r"\bultra(?:\s*(\d{1,2}))?\b", title, re.I)
-    if ultra:
-        return "Apple Watch Ultra" + (" " + ultra.group(1) if ultra.group(1) else "")
-    series = re.search(r"\b(?:series|s)\s*(\d{1,2})\b", title, re.I)
-    if series:
-        return "Apple Watch Series " + series.group(1)
-    se = re.search(r"\bse(?:\s*(\d{1,2}))?\b", title, re.I)
-    if se:
-        return "Apple Watch SE" + (" " + se.group(1) if se.group(1) else "")
-    return "Apple Watch"
+    if re.search(r"\b(?:apple\s*)?watch\b", title, re.I):
+        return "Apple Watch"
+    return ""
 
 
 def samsung_block(title):
-    if not re.search(r"\bsamsung\b|\bgalaxy\b|самсунг", title, re.I):
-        return ""
+    plain = FLAGS.sub("", clean(title)).strip()
+    has_brand = bool(re.search(r"\bsamsung\b|\bgalaxy\b|самсунг", plain, re.I))
 
-    # Galaxy Tab S is a tablet family, never a Galaxy S phone.
-    if re.search(r"\b(?:galaxy\s*)?tab\s*s\s*\d*", title, re.I):
+    # Supplier often omits "Samsung" from every product row.
+    if re.search(r"^(?:samsung\s+|galaxy\s+)?buds\s*[34]\b", plain, re.I):
+        return "Samsung Buds"
+    if re.search(r"^(?:samsung\s+|galaxy\s+)?a\s*\d{2,3}[a-z]*\b", plain, re.I):
+        return "Samsung A + S25"
+    if re.search(r"^(?:samsung\s+|galaxy\s+)?s\s*25(?:\s*(?:fe|edge|ultra|\+|plus))?\b", plain, re.I):
+        return "Samsung A + S25"
+    if re.search(r"^(?:samsung\s+|galaxy\s+)?s\s*26(?:\s*(?:fe|edge|ultra|\+|plus))?\b", plain, re.I):
+        return "Samsung S26"
+    if re.search(r"^(?:samsung\s+|galaxy\s+)?tab\s*s\s*\d*", plain, re.I):
         return "Samsung Tab S"
-
-    # Keep foldables separate when they are present.
-    if re.search(r"\b(?:galaxy\s*)?(?:z\s*)?(?:fold|flip)\b", title, re.I):
+    if re.search(r"^(?:samsung\s+|galaxy\s+)?(?:z\s*)?(?:fold|flip)\b", plain, re.I):
         return "Samsung Fold / Flip"
 
-    # The requested phone layout is deliberately balanced into two messages:
-    # A-series together with S25, then the complete S26 family.
-    if re.search(r"\b(?:galaxy\s*)?a\s*\d{1,3}[a-z]*\b|\bsamsung\s+a\s*\d{1,3}[a-z]*\b", title, re.I):
-        return "Samsung A + S25"
-    if re.search(r"\b(?:galaxy\s*)?s\s*25(?:\s*(?:\+|plus|ultra|fe))?\b|\bsamsung\s+s\s*25", title, re.I):
-        return "Samsung A + S25"
-    if re.search(r"\b(?:galaxy\s*)?s\s*26(?:\s*(?:\+|plus|ultra|fe))?\b|\bsamsung\s+s\s*26", title, re.I):
-        return "Samsung S26"
-
-    # Header-only sections from supplier menus.
-    if re.search(r"\bgalaxy\s+a\b|\bsamsung\s+galaxy\s+a\b", title, re.I):
-        return "Samsung A + S25"
-    if re.search(r"\bgalaxy\s+s\s*25\b", title, re.I):
-        return "Samsung A + S25"
-    if re.search(r"\bgalaxy\s+s\s*26\b", title, re.I):
-        return "Samsung S26"
-    if re.search(r"\b(?:galaxy\s*)?tab\s*s\b", title, re.I):
+    if not has_brand:
+        return ""
+    if re.search(r"\b(?:galaxy\s*)?tab\s*s\s*\d*", plain, re.I):
         return "Samsung Tab S"
+    if re.search(r"\b(?:galaxy\s*)?(?:z\s*)?(?:fold|flip)\b", plain, re.I):
+        return "Samsung Fold / Flip"
+    if re.search(r"\b(?:galaxy\s*)?buds\s*[34]\b", plain, re.I):
+        return "Samsung Buds"
+    if re.search(r"\bgalaxy\s+a\b|\bsamsung\s+galaxy\s+a\b", plain, re.I):
+        return "Samsung A + S25"
+    if re.search(r"\bgalaxy\s+s\s*25\b", plain, re.I):
+        return "Samsung A + S25"
+    if re.search(r"\bgalaxy\s+s\s*26\b", plain, re.I):
+        return "Samsung S26"
     return "Samsung"
 
 
@@ -248,7 +249,7 @@ def ordered_blocks(blocks, preferred=()):
         model = iphone_model(name)
         family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else ("Samsung" if name.startswith("Samsung") else name))
         rank = defaults.index(family) if family in defaults else len(defaults) - 4
-        samsung_rank = {"Samsung A + S25": 0, "Samsung S26": 1, "Samsung Tab S": 2, "Samsung Fold / Flip": 3, "Samsung": 4}.get(name, 0) if family == "Samsung" else 0
+        samsung_rank = {"Samsung Buds": 0, "Samsung A + S25": 1, "Samsung S26": 2, "Samsung Tab S": 3, "Samsung Fold / Flip": 4, "Samsung": 5}.get(name, 0) if family == "Samsung" else 0
         numbered = model if model else (name if family == "Apple Watch" else "")
         number = re.search(r"\d+", numbered)
         return (rank, samsung_rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name.casefold())), name)
@@ -327,7 +328,8 @@ class Item:
         data = {**value, "price": Decimal(value["price"])}
         data["title"] = normal_title(data["title"])
         if data.get("block") not in {"ASIS", "CPO", "Аксессуары"}:
-            known = iphone_model(data["title"]) or product_block(data["title"])
+            model = iphone_model(data["title"])
+            known = iphone_publish_block(model) if model else product_block(data["title"])
             if known:
                 data["block"] = known
         return cls(**data)
@@ -410,7 +412,8 @@ def parse_documents(documents, default_currency="RUB"):
         special = special_block(title)
         if not special and section in {"ASIS", "CPO"}:
             special = section
-        block = "Аксессуары" if accessory else (special or model or own_brand or section or "Товары")
+        publish_model = iphone_publish_block(model) if model else ""
+        block = "Аксессуары" if accessory else (special or publish_model or own_brand or section or "Товары")
         sim = sim_type(title)
         if sim == "unknown":
             sim = section_sim if model else "unknown"
@@ -490,7 +493,24 @@ def units(text):
 
 def item_sort(item):
     size = 0 if re.search(r"\bM\b", item.title) else 1 if re.search(r"\bL\b", item.title) else 2
-    return size, clean(item.title).casefold()
+    plain = FLAGS.sub("", clean(item.title)).strip().casefold()
+    return size, plain
+
+
+def samsung_a_s25_sort(item):
+    plain = FLAGS.sub("", clean(item.title)).strip()
+    a = re.search(r"\bA\s*(\d{2,3})\b", plain, re.I)
+    if a:
+        return 0, int(a.group(1)), 0, plain.casefold()
+    if re.search(r"\bS\s*25\s*FE\b", plain, re.I):
+        return 1, 0, 0, plain.casefold()
+    if re.search(r"\bS\s*25\s*Edge\b", plain, re.I):
+        return 1, 2, 0, plain.casefold()
+    if re.search(r"\bS\s*25\s*Ultra\b", plain, re.I):
+        return 1, 3, 0, plain.casefold()
+    if re.search(r"\bS\s*25\b", plain, re.I):
+        return 1, 1, 0, plain.casefold()
+    return 9, 0, 0, plain.casefold()
 
 
 def display_title(item):
@@ -533,7 +553,14 @@ def render_blocks(items, settings, overrides=None, closed=False):
                 if has_activation:
                     lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
                 last_sim = None
-                for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), item_sort(i))):
+                last_samsung_section = None
+                sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
+                for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), sorter(i))):
+                    if block == "Samsung A + S25":
+                        samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
+                        if samsung_section != last_samsung_section:
+                            lines.append("<b>— " + samsung_section + " —</b>")
+                            last_samsung_section = samsung_section
                     if iphone_model(item.title) and item.sim != last_sim:
                         label = SIM_LABELS.get(item.sim)
                         if label:

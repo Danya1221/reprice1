@@ -158,6 +158,44 @@ Tab S11 Ultra 12/512 Silver — 98000""").items
         self.assertIn("<b>Samsung S26</b>", headers)
         self.assertIn("<b>Samsung Tab S</b>", headers)
 
+    def test_supplier_style_samsung_sections(self):
+        items = self.parse("""Buds 3 FE Black 🇦🇪 - 6400
+Buds 4 White 🇰🇿 - 10400
+🇷🇺A17 6/128GB Gray — 15000
+🇷🇺A27 8/256GB Blue — 23800
+🇷🇺A57 12/512GB Navy — 40500
+S25 FE 8/128 Navy 🇮🇳 - 37400
+S25 12/128 Navy 🇪🇺 - 45000
+S25 Edge 12/256 Jetblack 🇪🇺 - 49100
+S25 Ultra 12/1TB Gray 🇨🇱 - 79400
+S26 FE 8/128 Graphite 🇿🇦 - 46500
+S26+ 12/256 White 🇰🇿 - 69500
+S26 Ultra 16/1TB Black 🇨🇱 - 117500""").items
+        self.assertEqual([item.block for item in items], [
+            "Samsung Buds", "Samsung Buds",
+            "Samsung A + S25", "Samsung A + S25", "Samsung A + S25",
+            "Samsung A + S25", "Samsung A + S25", "Samsung A + S25", "Samsung A + S25",
+            "Samsung S26", "Samsung S26", "Samsung S26",
+        ])
+        pages = render_blocks(items, Settings())
+        text = "\n".join(pages.values())
+        self.assertIn("<b>Samsung Buds</b>", text)
+        self.assertIn("<b>— Galaxy A —</b>", text)
+        self.assertIn("<b>— Galaxy S25 —</b>", text)
+        self.assertIn("<b>Samsung S26</b>", text)
+        combined = next(page for page in pages.values() if page.startswith("<b>Samsung A + S25</b>"))
+        self.assertLess(combined.index("Galaxy A"), combined.index("Galaxy S25"))
+
+    def test_all_apple_watches_share_one_block(self):
+        items = self.parse("""Apple Watch
+Series 11 46mm Black — 40000
+SE 3 44mm Silver — 30000
+Ultra 3 49mm Black — 70000""").items
+        self.assertEqual([item.block for item in items], ["Apple Watch"] * 3)
+        pages = render_blocks(items, Settings())
+        self.assertEqual(len(pages), 1)
+        self.assertTrue(next(iter(pages.values())).startswith("<b>Apple Watch</b>"))
+
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]
         self.assertIn("Актив (Ориг. Упаковка)", item.title)
