@@ -8,7 +8,7 @@ from telethon.sessions import StringSession
 
 from bot_publisher import BotAPIPublisher
 from config import Settings
-from control_botapi import BotAPIController
+from control_group import GroupBindingController as BotAPIController
 from runtime import SyncService
 from state import StateStore
 
