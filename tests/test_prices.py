@@ -51,6 +51,12 @@ SIM
         self.assertNotIn("SM-", result.items[0].title)
         self.assertIn("🇦🇪", result.items[0].title)
 
+    def test_samsung_bare_region_code_is_removed(self):
+        result = self.parse("Samsung\nGalaxy S26 12/512 Black S942B/DS 🇰🇿 - 66400")
+        self.assertEqual(len(result.items), 1)
+        self.assertNotIn("S942B/DS", result.items[0].title)
+        self.assertIn("🇰🇿", result.items[0].title)
+
     def test_brands_are_not_misclassified(self):
         items = self.parse("""LEGO Star Wars 75313 — 78000
 Dyson Airwrap HS08 — 42000
@@ -66,6 +72,13 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         self.assertIn(" M ", items[-2].title)
         self.assertIn(" L ", items[-1].title)
 
+    def test_more_real_supplier_brands(self):
+        items = self.parse("""Tecno:
+Tecno Camon 50 Ultra 12/256 black - 29200
+Dell Pro Max 128GB - 431000
+Sony PlayStation 5 Pro Digital Edition - 90000""").items
+        self.assertEqual([i.block for i in items], ["Tecno", "Dell", "PlayStation"])
+
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]
         self.assertIn("Актив (Ориг. Упаковка)", item.title)
@@ -77,10 +90,16 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         self.assertEqual(len(selected), 1)
         self.assertFalse(selected[0].accessory)
 
+    def test_dyson_device_with_case_is_not_accessory(self):
+        item = self.parse("Dyson HS05 Long Prussian Blue/Copper (case) — 42000").items[0]
+        self.assertEqual(item.block, "Dyson")
+        self.assertFalse(item.accessory)
+
     def test_wholesale_tier_does_not_replace_retail(self):
         items = self.parse("iPhone 17 256 Black — 60000 от 6 шт — 58000").items
         self.assertEqual(items[0].price, Decimal(60000))
         self.assertEqual(self.parse("от 6 шт iPhone 17 256 Black — 58000").items, [])
+        self.assertEqual(self.parse("крупный опт — 57000").items, [])
 
     def test_menus_and_unavailable_are_not_products(self):
         self.assertEqual(self.parse("Прайс\nАктуальный прайс\nВыберите категорию\nОбновлён 2026").items, [])
@@ -98,17 +117,25 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         for value in ["79 000", "79,000", "79.000"]:
             self.assertEqual(amount_value(value), Decimal(79000))
 
-    def test_multi_document_headers_and_duplicates(self):
+    def test_multi_document_duplicates_keep_lower_price(self):
         result = parse_documents(["iPhone 17\n17 256 Black — 60000", "17 256 Black — 61000"])
         self.assertEqual(len(result.items), 1)
-        self.assertEqual(result.items[0].price, Decimal(61000))
+        self.assertEqual(result.items[0].price, Decimal(60000))
 
-    def test_source_priority_keeps_countries_separate(self):
-        one = self.parse("🇺🇸 iPhone 17 256GB Black — 60000").items
-        two = self.parse("iPhone 17 256 Black 🇺🇸 — 61000\n🇮🇳 iPhone 17 256 Black — 62000").items
+    def test_merge_sources_uses_lower_price_and_keeps_countries_separate(self):
+        one = self.parse("🇺🇸 iPhone 17 256GB Black — 61000").items
+        two = self.parse("iPhone 17 256 Black 🇺🇸 — 60000\n🇮🇳 iPhone 17 256 Black — 62000").items
         merged = merge_sources([one, two])
         self.assertEqual(len(merged), 2)
-        self.assertEqual(merged[0].price, Decimal(60000))
+        usa = next(item for item in merged if "🇺🇸" in item.title)
+        self.assertEqual(usa.price, Decimal(60000))
+
+    def test_samsung_aliases_deduplicate(self):
+        one = self.parse("Samsung Galaxy S26 12/256 Black 🇰🇿 — 65000").items
+        two = self.parse("Galaxy S26 12/256 Black 🇰🇿 — 64000").items
+        merged = merge_sources([one, two])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].price, Decimal(64000))
 
     def test_escaped_html_copyable_name_and_closed_prices(self):
         items = self.parse("B&W Px8 Black <Special> — 50000").items
@@ -119,6 +146,13 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         closed = next(iter(render_blocks(items, Settings(), closed=True).values()))
         self.assertNotIn("50 000", closed)
         self.assertIn("Продажи закрыты", closed)
+
+    def test_stable_empty_block_is_kept_without_old_prices(self):
+        pages = render_blocks([], Settings(), stable_blocks=["Samsung"])
+        self.assertEqual(len(pages), 1)
+        text = next(iter(pages.values()))
+        self.assertIn("Samsung", text)
+        self.assertIn("Сейчас нет в наличии", text)
 
     def test_pages_fit_telegram_limit(self):
         items = [Item(f"iPhone 17 256GB Black {i} 🇺🇸", Decimal(60000), "RUB", "iPhone 17")
