@@ -196,7 +196,7 @@ def samsung_block(title):
     # Supplier often omits "Samsung" from every product row.
     if re.search(r"^(?:samsung\s+|galaxy\s+)?buds\s*[34]\b", plain, re.I):
         return "Samsung Buds"
-    if re.search(r"^(?:samsung\s+|galaxy\s+)?a\s*\d{2,3}[a-z]*\b", plain, re.I):
+    if re.search(r"^(?:samsung\s+|galaxy\s+)?a\s*(?:17|27|37|57)\b", plain, re.I):
         return "Samsung A + S25"
     if re.search(r"^(?:samsung\s+|galaxy\s+)?s\s*25(?:\s*(?:fe|edge|ultra|\+|plus))?\b", plain, re.I):
         return "Samsung A + S25"
@@ -215,7 +215,7 @@ def samsung_block(title):
         return "Samsung Fold / Flip"
     if re.search(r"\b(?:galaxy\s*)?buds\s*[34]\b", plain, re.I):
         return "Samsung Buds"
-    if re.search(r"\bgalaxy\s+a\b|\bsamsung\s+galaxy\s+a\b", plain, re.I):
+    if re.search(r"\b(?:galaxy\s+|samsung\s+(?:galaxy\s+)?)?a\s*(?:17|27|37|57)\b", plain, re.I):
         return "Samsung A + S25"
     if re.search(r"\bgalaxy\s+s\s*25\b", plain, re.I):
         return "Samsung A + S25"
@@ -499,7 +499,7 @@ def item_sort(item):
 
 def samsung_a_s25_sort(item):
     plain = FLAGS.sub("", clean(item.title)).strip()
-    a = re.search(r"\bA\s*(\d{2,3})\b", plain, re.I)
+    a = re.search(r"\bA\s*(17|27|37|57)\b", plain, re.I)
     if a:
         return 0, int(a.group(1)), 0, plain.casefold()
     if re.search(r"\bS\s*25\s*FE\b", plain, re.I):

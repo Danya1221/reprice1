@@ -100,7 +100,7 @@ Insta360 X6 Standard Bundle — 51100""").items
         items = self.parse("""Samsung
 Galaxy A
 A27 8/256 Black 🇪🇺 — 24000
-A56 8/256 Awesome Graphite 🇪🇺 — 35000
+A37 8/256 Awesome Graphite 🇪🇺 — 35000
 A57 12/256 Blue 🇪🇺 — 42000
 Galaxy S
 S26 12/256 Black 🇦🇪 — 65000
@@ -133,7 +133,7 @@ Coros Pace 4 Jacob&Co collaboration fabric strap version 🇨🇳 — 25300""").
     def test_requested_samsung_phone_split_and_tab_tablets(self):
         items = self.parse("""Samsung
 Galaxy A
-A56 8/256 Black — 35000
+A37 8/256 Black — 35000
 A57 12/256 Blue — 42000
 Galaxy S25
 S25 12/256 Black — 65000
@@ -195,6 +195,19 @@ Ultra 3 49mm Black — 70000""").items
         pages = render_blocks(items, Settings())
         self.assertEqual(len(pages), 1)
         self.assertTrue(next(iter(pages.values())).startswith("<b>Apple Watch</b>"))
+
+    def test_only_requested_galaxy_a_models_are_auto_detected(self):
+        items = self.parse("""A17 6/128GB Gray — 15000
+A27 6/128GB Black — 20800
+A37 8/128GB Lavender — 23900
+A57 8/256GB Navy — 31800""").items
+        self.assertEqual([item.block for item in items], ["Samsung A + S25"] * 4)
+        self.assertEqual([item.title.split()[0] for item in items], ["A17", "A27", "A37", "A57"])
+
+    def test_other_bare_a_models_are_not_assumed_to_be_samsung(self):
+        items = self.parse("""A15 8/256 Black — 19900
+A55 8/256 Blue — 29900""").items
+        self.assertEqual([item.block for item in items], ["Товары", "Товары"])
 
     def test_blank_line_is_added_when_model_changes(self):
         items = self.parse("""A17 6/128GB Gray — 15000
