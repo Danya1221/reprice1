@@ -30,8 +30,13 @@ async def prepare_supplier(service, settings, controller=None):
     if me is None or me.bot:
         raise ValueError("Сессия должна принадлежать пользовательскому аккаунту, которому доступны прайсы")
     if controller is not None and not settings.admin_ids:
-        # Keep the original owner fallback, but only after Telegram verifies that identity.
         controller.admins = {me.id}
+    # Persist an env-provided session into durable state too, so /login and
+    # Railway Variables converge on the same PostgreSQL-backed source of truth.
+    saved = client.session.save()
+    if saved and service.state.get("session_string") != saved:
+        service.state.set("session_string", saved)
+        settings.session = saved
     await client.get_dialogs(limit=None)
     target = await client.get_entity(settings.target)
     permissions = await client.get_permissions(target, me)
@@ -45,9 +50,22 @@ async def prepare_supplier(service, settings, controller=None):
 
 
 async def run_supplier(service, settings, controller=None, retry_seconds=30):
+    database = getattr(service.state, "database", None)
+    if database is not None:
+        def waiting():
+            service.startup_error = "Жду завершения предыдущего Railway deployment"
+            log.warning("Жду PostgreSQL runtime lock перед подключением Telegram-сессии")
+        await asyncio.to_thread(database.acquire_runtime_lock, waiting)
+        log.info("PostgreSQL runtime lock получен")
+
     while not service.stop_event.is_set():
         service.ready = False
         try:
+            # /login writes the latest session to StateStore/PostgreSQL while
+            # this task may be retrying. Reload it before every attempt.
+            stored = service.state.get("session_string", "")
+            if stored:
+                settings.session = stored
             await asyncio.wait_for(prepare_supplier(service, settings, controller), timeout=90)
             await service.run()
             return
@@ -60,7 +78,6 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
                       service.startup_error)
         finally:
             service.ready = False
-            # Commands check readiness under this same lock before using the user client.
             async with service.lock:
                 if service.client is not None:
                     with suppress(Exception):
@@ -73,14 +90,10 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
 
 
 async def main():
-    # Only Telegram API credentials and common option syntax are needed to start control.
-    # Missing/invalid supplier settings are reported by /start and /status after it starts.
     settings = Settings.from_env(require_sync=False)
     state = StateStore(settings.state_file)
     state.acquire()
 
-    # /login stores the user StringSession in durable state. Prefer it over the
-    # Railway variable so a revoked session can be replaced without editing Variables.
     stored_session = state.get("session_string", "")
     if stored_session:
         settings.session = stored_session
@@ -98,6 +111,10 @@ async def main():
             log.info("Управляющий бот @%s готов. Открой его в личных сообщениях и отправь /start",
                      bot.username)
             print(f"🤖 Управляющий бот @{bot.username} готов — /start должен отвечать", flush=True)
+            if state.database is not None:
+                print("💾 State и Telegram-сессия сохраняются в PostgreSQL", flush=True)
+            else:
+                print("⚠️ DATABASE_URL не задан: session хранится только в state.json", flush=True)
             if not settings.admin_ids:
                 log.warning("ADMIN_IDS не задан: до авторизации сессии /start покажет ID. "
                             "Для входа через /login заранее укажи ADMIN_IDS/ADMIN_ID")
