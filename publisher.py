@@ -61,7 +61,7 @@ class Publisher:
         self.state.set("published", {"binding": self.binding(), "messages": manifest})
 
     async def hide_existing(self):
-        """First deployment at night: hide managed prices even without an item cache."""
+        """First deployment before opening: hide managed prices even without an item cache."""
         stored = self.state.get("published", {})
         manifest = stored.get("messages", {}) if stored.get("binding") == self.binding() else {}
         keys = {entry["id"]: key for key, entry in manifest.items()}
@@ -119,6 +119,7 @@ class Publisher:
             for key, content in pages.items():
                 entry = manifest.get(key)
                 target = existing.get(entry["id"]) if entry else None
+                mutated = False
                 if target:
                     parsed, entities = telegram_html.parse(content)
                     if target.raw_text != parsed or list(target.entities or []) != list(entities or []):
@@ -128,6 +129,7 @@ class Publisher:
                         except MessageNotModifiedError:
                             pass
                         changes += 1
+                        mutated = True
                     target_id = target.id
                 else:
                     # If send succeeds but the response is lost, recover this text next time.
@@ -136,12 +138,15 @@ class Publisher:
                                                              parse_mode="html", link_preview=False)
                     target_id = message.id
                     changes += 1
+                    mutated = True
                 manifest[key] = {"id": target_id, "hash": digest(content)}
                 self.state.update({
                     "published": {"binding": self.binding(), "messages": manifest},
                     "pending_publish": None,
                 })
-                if changes:
+                # Delay only after a real Telegram mutation. Previously one edit
+                # caused sleeps after every later unchanged page as well.
+                if mutated:
                     await asyncio.sleep(self.settings.send_delay)
             # Disabled/obsolete pages belong to this manifest only. Other posts are untouched.
             for key in list(manifest):
