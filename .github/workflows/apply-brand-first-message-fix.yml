@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/apply-brand-first-message-fix.yml
+      - scripts/apply_brand_first_message_fix.py
   workflow_dispatch:
 
 permissions:
@@ -34,5 +35,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add prices.py catalog_publisher.py tests/test_prices.py tests/test_catalog.py
           git diff --cached --check
-          git commit -m "Fix DJI misclassification and restore first message"
+          git commit -m "Fix product categories, Samsung buttons and first message"
           git push origin HEAD:main
