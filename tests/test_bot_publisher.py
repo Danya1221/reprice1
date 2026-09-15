@@ -84,6 +84,38 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(method == "sendMessage" and payload["chat_id"] == group_id
                             for method, payload in publisher.calls))
 
+    async def test_unchanged_page_is_not_edited_again(self):
+        settings = Settings(send_delay=0, admin_ids=(42,))
+        group_id = -100777
+        chats = {
+            group_id: {"id": group_id, "type": "supergroup", "title": "Розница"},
+        }
+        publisher = FakeBotPublisher(group_id, self.state, settings, chats)
+
+        first_changes = await publisher.publish({"iphone:0": "Одинаковый прайс"})
+        self.assertEqual(first_changes, 1)
+
+        publisher.calls.clear()
+        second_changes = await publisher.publish({"iphone:0": "Одинаковый прайс"})
+
+        self.assertEqual(second_changes, 0)
+        self.assertFalse(any(method == "editMessageText" for method, _ in publisher.calls))
+
+    async def test_changed_page_is_still_edited(self):
+        settings = Settings(send_delay=0, admin_ids=(42,))
+        group_id = -100777
+        chats = {
+            group_id: {"id": group_id, "type": "supergroup", "title": "Розница"},
+        }
+        publisher = FakeBotPublisher(group_id, self.state, settings, chats)
+        await publisher.publish({"iphone:0": "Старый прайс"})
+
+        publisher.calls.clear()
+        changes = await publisher.publish({"iphone:0": "Новый прайс"})
+
+        self.assertEqual(changes, 1)
+        self.assertTrue(any(method == "editMessageText" for method, _ in publisher.calls))
+
 
 if __name__ == "__main__":
     unittest.main()
