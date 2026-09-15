@@ -16,6 +16,43 @@ from supplier import resolve_input_peer
 log = logging.getLogger(__name__)
 
 
+def cached_target_peer(state, target_value):
+    cache = state.get("resolved_target_peer", {})
+    if not isinstance(cache, dict) or cache.get("source") != str(target_value):
+        return None
+    try:
+        if cache.get("kind") == "channel":
+            return types.InputPeerChannel(
+                channel_id=int(cache["id"]),
+                access_hash=int(cache["access_hash"]),
+            )
+        if cache.get("kind") == "chat":
+            return types.InputPeerChat(chat_id=int(cache["id"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None
+
+
+def save_target_peer(state, target_value, input_peer):
+    if isinstance(input_peer, types.InputPeerChannel):
+        payload = {
+            "source": str(target_value),
+            "kind": "channel",
+            "id": input_peer.channel_id,
+            "access_hash": input_peer.access_hash,
+        }
+    elif isinstance(input_peer, types.InputPeerChat):
+        payload = {
+            "source": str(target_value),
+            "kind": "chat",
+            "id": input_peer.chat_id,
+        }
+    else:
+        return
+    if state.get("resolved_target_peer") != payload:
+        state.set("resolved_target_peer", payload)
+
+
 async def prepare_supplier(service, settings, controller=None):
     """Prepare the user Telegram session used only for supplier/channel access.
 
@@ -48,26 +85,36 @@ async def prepare_supplier(service, settings, controller=None):
     if controller is not None and not settings.admin_ids:
         controller.admins = {me.id}
 
-    # Keep an env-provided session and /login session converged in persistent state.
     saved = client.session.save()
     if saved and service.state.get("session_string") != saved:
         service.state.set("session_string", saved)
         settings.session = saved
 
-    # StringSession does not keep Telethon's entity cache between Railway deploys.
-    # Resolve TARGET_CHANNEL to a full InputPeer with access_hash once and give the
-    # same stable peer to Publisher. This prevents later send/edit calls from trying
-    # to rediscover a bare PeerUser/PeerChannel and failing with "input entity".
-    target_peer = await resolve_input_peer(
-        client,
-        settings.target,
-        label="TARGET_CHANNEL",
-    )
-    target = await client.get_entity(target_peer)
+    # Reuse the full InputPeer after the first successful resolution. PostgreSQL
+    # keeps channel_id + access_hash across Railway redeploys, so StringSession's
+    # empty entity cache no longer matters after initial setup.
+    target_peer = cached_target_peer(service.state, settings.target)
+    target = None
+    if target_peer is not None:
+        try:
+            target = await client.get_entity(target_peer)
+        except Exception:
+            target_peer = None
+
+    if target_peer is None:
+        target_peer = await resolve_input_peer(
+            client,
+            settings.target,
+            label="TARGET_CHANNEL",
+            expected="channel",
+        )
+        target = await client.get_entity(target_peer)
+        save_target_peer(service.state, settings.target, target_peer)
+
     if not isinstance(target, (types.Channel, types.Chat)):
         raise RuntimeError(
             "TARGET_CHANNEL указывает не на канал/группу. "
-            "Укажи @username канала или его корректный -100... ID"
+            "Поддерживаются @username, -100... ID и raw channel ID"
         )
 
     permissions = await client.get_permissions(target_peer, me)
@@ -76,8 +123,6 @@ async def prepare_supplier(service, settings, controller=None):
 
     service.publisher.target = target_peer
 
-    # Supplier usernames are resolved explicitly through ResolveUsernameRequest,
-    # so their access_hash never depends on a dialog cache from a previous container.
     for reader in service.readers:
         await reader.resolve()
 
@@ -100,7 +145,6 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
     while not service.stop_event.is_set():
         service.ready = False
         try:
-            # /login may replace the session while this task is retrying.
             stored = service.state.get("session_string", "")
             if stored:
                 settings.session = stored
@@ -144,8 +188,6 @@ async def main():
     service = SyncService(None, settings, state)
 
     try:
-        # The control bot uses Telegram HTTP Bot API. This completely avoids
-        # ImportBotAuthorizationRequest and its long MTProto FloodWait.
         if settings.bot_token:
             controller = BotAPIController(settings.bot_token, service, settings.admin_ids)
             try:
