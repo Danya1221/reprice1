@@ -6,7 +6,7 @@ import time
 from collections import OrderedDict
 from contextlib import suppress
 
-from telethon import events
+from telethon import events, utils
 from telethon.errors import BotResponseTimeoutError
 from telethon.tl import types
 
@@ -44,7 +44,21 @@ class SupplierReader:
         self.entity = None
 
     async def resolve(self):
-        self.entity = await self.client.get_input_entity(self.source.peer)
+        """Resolve @username through Telegram and keep a full InputPeer with access_hash.
+
+        StringSession does not persist Telethon's entity cache. Calling
+        get_input_entity('@username') directly after a fresh Railway deploy may leave
+        Telethon with only PeerUser(user_id=...) and no access_hash. Resolve the
+        public username first, then build the input peer from the returned entity.
+        """
+        try:
+            entity = await self.client.get_entity(self.source.peer)
+            self.entity = utils.get_input_peer(entity)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{self.source.label}: не удалось открыть {self.source.peer!r}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     def is_closed_text(self, text):
         custom = clean(self.source.closed_text).casefold()
