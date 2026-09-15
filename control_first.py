@@ -59,7 +59,7 @@ class FirstMessageController(GroupBindingController):
 
     async def handle_callback(self, callback):
         data = callback.get("data") or ""
-        if data == "first_message":
+        if data in {"first_message", "sim"} or data.startswith("sim:"):
             user_id = callback.get("from", {}).get("id")
             message = callback.get("message") or {}
             chat = message.get("chat") or {}
@@ -69,8 +69,34 @@ class FirstMessageController(GroupBindingController):
                 await self.answer_callback(callback["id"], f"Нет доступа. Твой ID: {user_id}", True)
                 return
             await self.answer_callback(callback["id"])
-            await self._prompt_first_message(chat_id, user_id)
+
+            if data == "first_message":
+                await self._prompt_first_message(chat_id, user_id)
+                return
+
+            if data == "sim":
+                await self.send(chat_id, "Фильтр iPhone. Для 17-й линейки SIM также определяется по флагу региона, если поставщик не написал тип явно:", {
+                    "inline_keyboard": [
+                        [{"text": "Все", "callback_data": "sim:all"}, {"text": "SIM", "callback_data": "sim:sim"}],
+                        [{"text": "SIM + eSIM", "callback_data": "sim:hybrid"}, {"text": "eSIM", "callback_data": "sim:esim"}],
+                        [{"text": "2 SIM", "callback_data": "sim:dual"}, {"text": "Не указан", "callback_data": "sim:unknown"}],
+                    ]
+                })
+                return
+
+            choice = data.split(":", 1)[1]
+            if choice not in {"all", "sim", "hybrid", "esim", "dual", "unknown"}:
+                await self.send(chat_id, "Неизвестный фильтр SIM", self.menu())
+                return
+            self.service.set_option("sim_filter", choice)
+            try:
+                await self.service.refresh_format()
+            except Exception as exc:
+                await self.send(chat_id, "Фильтр сохранён, но прайс пока не обновился: " + str(exc), self.menu())
+                return
+            await self.send(chat_id, "Фильтр применён: " + choice, self.menu())
             return
+
         await super().handle_callback(callback)
 
     async def handle_message(self, message):
