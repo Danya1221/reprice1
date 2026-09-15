@@ -21,9 +21,20 @@ async def prepare_supplier(service, settings, controller=None):
         session = StringSession(settings.session)
     except Exception:
         raise ValueError("SESSION_STRING повреждена; выполни /login в управляющем боте") from None
-    client = TelegramClient(session, settings.api_id, settings.api_hash,
-                            auto_reconnect=True, connection_retries=5, retry_delay=2,
-                            request_retries=3, flood_sleep_threshold=0)
+
+    # Short Telegram flood-waits are normal right after a fresh login/redeploy.
+    # Let Telethon wait them out instead of dropping the supplier runtime and
+    # reconnecting every 30 seconds (which can create an endless GetDialogs loop).
+    client = TelegramClient(
+        session,
+        settings.api_id,
+        settings.api_hash,
+        auto_reconnect=True,
+        connection_retries=5,
+        retry_delay=2,
+        request_retries=3,
+        flood_sleep_threshold=60,
+    )
     service.attach_client(client)
     await service.connect()
     me = await client.get_me()
@@ -31,19 +42,32 @@ async def prepare_supplier(service, settings, controller=None):
         raise ValueError("Сессия должна принадлежать пользовательскому аккаунту, которому доступны прайсы")
     if controller is not None and not settings.admin_ids:
         controller.admins = {me.id}
+
     # Persist an env-provided session into durable state too, so /login and
     # Railway Variables converge on the same PostgreSQL-backed source of truth.
     saved = client.session.save()
     if saved and service.state.get("session_string") != saved:
         service.state.set("session_string", saved)
         settings.session = saved
-    await client.get_dialogs(limit=None)
-    target = await client.get_entity(settings.target)
+
+    # Do NOT preload the entire dialog list here. get_dialogs(limit=None) was
+    # the source of repeated GetDialogsRequest FloodWait errors on Railway.
+    # Resolve the configured target directly. Numeric channel IDs may need a
+    # small one-time dialog cache warm-up because StringSession does not keep
+    # the full entity cache between fresh containers.
+    try:
+        target = await client.get_entity(settings.target)
+    except (ValueError, TypeError):
+        await client.get_dialogs(limit=100)
+        target = await client.get_entity(settings.target)
+
     permissions = await client.get_permissions(target, me)
     if not (permissions.is_admin or permissions.is_creator):
         raise RuntimeError("Аккаунт сессии должен быть администратором целевого канала")
+
     for reader in service.readers:
         await reader.resolve()
+
     service.startup_error = None
     service.ready = True
     log.info("Чтение прайсов готово; источников: %s", len(service.readers))
@@ -66,7 +90,7 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
             stored = service.state.get("session_string", "")
             if stored:
                 settings.session = stored
-            await asyncio.wait_for(prepare_supplier(service, settings, controller), timeout=90)
+            await asyncio.wait_for(prepare_supplier(service, settings, controller), timeout=120)
             await service.run()
             return
         except asyncio.CancelledError:
