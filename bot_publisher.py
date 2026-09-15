@@ -37,6 +37,9 @@ class BotAPIPublisher:
         self.bot_username = ""
         self.target_kind = ""
         self.target_title = ""
+        # Kept only for backward-compatible diagnostics/tests. Private fallback is
+        # intentionally disabled; finished prices must go to a bound group/channel.
+        self.used_admin_fallback = False
 
     async def api(self, method, **payload):
         if not self.token:
@@ -129,7 +132,7 @@ class BotAPIPublisher:
             "type": resolved_type,
             "title": resolved_title,
         })
-        self.state.delete("botapi_target")
+        self.state.set("botapi_target", {})
         self.target = None
         self.target_kind = ""
         self.target_title = ""
