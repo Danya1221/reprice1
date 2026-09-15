@@ -62,30 +62,35 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(attempts), 2)
         client.disconnect.assert_awaited_once()
 
-    async def test_real_startup_registers_control_before_missing_session_error(self):
-        # Exercises main's actual order: bot -> handlers -> supplier validation failure.
-        bot_client = MagicMock()
-        bot_client.start = AsyncMock()
-        bot_client.get_me = AsyncMock(return_value=SimpleNamespace(username="reprice_test_bot"))
-        bot_client.disconnect = AsyncMock()
+    async def test_real_startup_starts_bot_api_control_before_missing_session_error(self):
+        # Exercises main's actual order: HTTP Bot API control starts first, then
+        # supplier initialization may fail without killing the control runtime.
         failed = asyncio.Event()
+        fake_controller = MagicMock()
+        fake_controller.admins = {42}
+        fake_controller.start = AsyncMock()
+        fake_controller.close = AsyncMock()
+
+        async def control_run():
+            await asyncio.Event().wait()
+
+        fake_controller.run = control_run
+
         with patch("main.Settings.from_env", return_value=self.settings), \
-             patch("main.TelegramClient", return_value=bot_client), \
+             patch("main.BotAPIController", return_value=fake_controller), \
+             patch("main.prepare_supplier", new=AsyncMock(side_effect=ValueError("SESSION_STRING не задана"))), \
              patch("main.log.error", side_effect=lambda *args: failed.set()), \
              patch.object(asyncio.get_running_loop(), "add_signal_handler"):
             task = asyncio.create_task(main())
             try:
                 await asyncio.wait_for(failed.wait(), timeout=1)
-                handler = bot_client.add_event_handler.call_args_list[0].args[0]
-                event = SimpleNamespace(is_private=True, sender_id=42, raw_text="/start", respond=AsyncMock())
-                await handler(event)
-                self.assertIn("SESSION_STRING", event.respond.call_args.args[0])
-                self.assertTrue(event.respond.call_args.kwargs["buttons"])
+                fake_controller.start.assert_awaited_once()
                 self.assertFalse(task.done())
             finally:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-        bot_client.disconnect.assert_awaited_once()
+
+        fake_controller.close.assert_awaited()
 
     async def test_fallback_owner_is_never_granted_to_first_message_sender(self):
         controller = Controller(MagicMock(), self.service, [])
