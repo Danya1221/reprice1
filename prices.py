@@ -287,7 +287,9 @@ def marked_price(item, settings, overrides=None):
 def price_text(value, currency):
     places = 0 if currency == "RUB" or value == value.to_integral() else 2
     number = f"{value:,.{places}f}".replace(",", " ")
-    return number + " " + {"RUB": "₽", "USD": "$", "EUR": "€"}[currency]
+    if currency == "RUB":
+        return number
+    return number + " " + {"USD": "$", "EUR": "€"}[currency]
 
 
 def units(text):
