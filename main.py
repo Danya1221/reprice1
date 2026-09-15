@@ -16,10 +16,11 @@ log = logging.getLogger(__name__)
 
 
 async def prepare_supplier(service, settings, controller=None):
-    """Prepare the user Telegram session used only for supplier access.
+    """Prepare the Telegram user session used to talk to supplier bots.
 
-    Reading suppliers uses the user's Telethon session. Publishing to TARGET_CHANNEL
-    uses Bot API separately, so TARGET_CHANNEL never needs an MTProto access_hash.
+    SUPPLIER_BOT / SUPPLIER_BOT_2 are Telegram bots. Their availability must be
+    checked independently from the place where the finished price is published.
+    A bad TARGET_CHANNEL must never make supplier reading appear unavailable.
     """
     settings.validate()
     try:
@@ -42,7 +43,7 @@ async def prepare_supplier(service, settings, controller=None):
 
     me = await client.get_me()
     if me is None or me.bot:
-        raise ValueError("Сессия должна принадлежать пользовательскому аккаунту, которому доступны прайсы")
+        raise ValueError("Сессия должна принадлежать пользовательскому аккаунту, которому доступны боты-поставщики")
     if controller is not None and not settings.admin_ids:
         controller.admins = {me.id}
 
@@ -52,20 +53,15 @@ async def prepare_supplier(service, settings, controller=None):
         service.state.set("session_string", saved)
         settings.session = saved
 
-    # TARGET_CHANNEL is intentionally resolved through Bot API, not through this
-    # user Telethon session. Bot API accepts channel chat_id directly and does not
-    # require an access_hash, which removes the PeerUser/PeerChannel restart loop.
-    if hasattr(service.publisher, "ensure_target"):
-        await service.publisher.ensure_target()
-
-    # Supplier usernames still need full MTProto peers because messages are read
-    # and commands/buttons are sent from the logged-in user account.
+    # Resolve the supplier BOTS first. Publishing is a separate subsystem and is
+    # intentionally not validated here. This prevents a TARGET_CHANNEL mistake from
+    # blocking both supplier bots and leaving their statuses as "неизвестно".
     for reader in service.readers:
         await reader.resolve()
 
     service.startup_error = None
     service.ready = True
-    log.info("Чтение прайсов готово; источников: %s", len(service.readers))
+    log.info("Боты-поставщики подключены; источников: %s", len(service.readers))
 
 
 async def run_supplier(service, settings, controller=None, retry_seconds=30):
@@ -95,7 +91,7 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
             service.startup_error = str(exc) or type(exc).__name__
             service.ready = False
             log.error(
-                "Чтение прайсов недоступно: %s. Управляющий бот остаётся доступен",
+                "Чтение ботов-поставщиков недоступно: %s. Управляющий бот остаётся доступен",
                 service.startup_error,
             )
         finally:
@@ -125,9 +121,8 @@ async def main():
     control_task = None
     service = SyncService(None, settings, state)
 
-    # Always publish through Bot API. The control bot must be an administrator of
-    # TARGET_CHANNEL. The supplier user account no longer needs channel admin rights
-    # and TARGET_CHANNEL no longer depends on Telethon's transient entity cache.
+    # Publishing is separate from supplier-bot reading. TARGET_CHANNEL is checked
+    # only when the bot actually needs to publish/edit the finished price.
     if settings.bot_token:
         service.publisher = BotAPIPublisher(
             settings.bot_token,
@@ -170,7 +165,7 @@ async def main():
             with suppress(NotImplementedError):
                 loop.add_signal_handler(sig, lambda: (service.stop_event.set(), service.wake.set()))
 
-        log.info("reprice1 запущен; проверка подключения к поставщикам")
+        log.info("reprice1 запущен; подключаю ботов-поставщиков")
         supplier_task = asyncio.create_task(
             run_supplier(service, settings, controller), name="supplier-runtime"
         )
