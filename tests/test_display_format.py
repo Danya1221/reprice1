@@ -8,7 +8,8 @@ class DisplayFormatTests(unittest.TestCase):
     def test_full_row_including_price_is_copyable_and_generic_header_removed(self):
         items = parse_documents(["AirPods 4 — 9800"]).items
         content = next(iter(render_blocks(items, Settings()).values()))
-        self.assertIn("<code>AirPods 4 — 9 800 ₽</code>", content)
+        self.assertIn("<code>AirPods 4 — 9 800</code>", content)
+        self.assertNotIn("₽", content)
         self.assertNotIn("АКТУАЛЬНЫЙ ПРАЙС", content)
         self.assertTrue(content.startswith("<b>— Apple —</b>"))
 
@@ -16,7 +17,8 @@ class DisplayFormatTests(unittest.TestCase):
         items = parse_documents(["iPhone 17\neSIM\n17 256 Black — 60000"]).items
         content = next(iter(render_blocks(items, Settings()).values()))
         self.assertIn("<b>— eSIM —</b>", content)
-        self.assertIn("<code>iPhone 17 256 Black · eSIM — 60 000 ₽</code>", content)
+        self.assertIn("<code>iPhone 17 256 Black · eSIM — 60 000</code>", content)
+        self.assertNotIn("₽", content)
 
     def test_unknown_sim_is_visible_in_iphone_row(self):
         items = parse_documents(["iPhone 17 256 Black — 60000"]).items
