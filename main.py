@@ -4,6 +4,7 @@ import signal
 from contextlib import suppress
 
 from telethon import TelegramClient
+from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 
 from config import Settings
@@ -113,6 +114,60 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
             pass
 
 
+async def start_control_client(settings, state):
+    """Start the BotFather control bot without re-authorizing it on every Railway deploy.
+
+    A fresh Telethon StringSession makes Telegram execute ImportBotAuthorizationRequest.
+    Repeating that on each container restart triggers long FloodWaits. Keep the bot's
+    own MTProto StringSession in StateStore/PostgreSQL and, on the first authorization,
+    wait out Telegram's FloodWait inside the same process instead of crashing Railway.
+    """
+    stored = state.get("control_bot_session_string", "")
+    try:
+        session = StringSession(stored) if stored else StringSession()
+    except Exception:
+        log.warning("Сохранённая сессия управляющего бота повреждена; создаю новую")
+        state.set("control_bot_session_string", "")
+        stored = ""
+        session = StringSession()
+
+    client = TelegramClient(
+        session,
+        settings.api_id,
+        settings.api_hash,
+        auto_reconnect=True,
+        connection_retries=5,
+        retry_delay=2,
+        request_retries=3,
+        flood_sleep_threshold=0,
+    )
+
+    while True:
+        try:
+            await client.start(bot_token=settings.bot_token)
+            break
+        except FloodWaitError as exc:
+            wait_seconds = max(1, int(exc.seconds)) + 2
+            log.warning(
+                "Telegram ограничил авторизацию управляющего бота на %s сек. "
+                "Не перезапускаю контейнер; жду в текущем процессе.",
+                exc.seconds,
+            )
+            print(
+                f"⏳ Telegram FloodWait для управляющего бота: жду {wait_seconds} сек. "
+                "Не делай Redeploy до окончания ожидания.",
+                flush=True,
+            )
+            await asyncio.sleep(wait_seconds)
+
+    saved = client.session.save()
+    if isinstance(saved, str) and saved and saved != stored:
+        state.set("control_bot_session_string", saved)
+        log.info("Сессия управляющего бота сохранена в StateStore")
+
+    return client
+
+
 async def main():
     settings = Settings.from_env(require_sync=False)
     state = StateStore(settings.state_file)
@@ -127,16 +182,14 @@ async def main():
     service = SyncService(None, settings, state)
     try:
         if settings.bot_token:
-            control_client = TelegramClient(StringSession(), settings.api_id, settings.api_hash,
-                                             flood_sleep_threshold=0)
-            await asyncio.wait_for(control_client.start(bot_token=settings.bot_token), timeout=30)
+            control_client = await start_control_client(settings, state)
             bot = await control_client.get_me()
             controller = Controller(control_client, service, settings.admin_ids, username=bot.username)
             log.info("Управляющий бот @%s готов. Открой его в личных сообщениях и отправь /start",
                      bot.username)
             print(f"🤖 Управляющий бот @{bot.username} готов — /start должен отвечать", flush=True)
             if state.database is not None:
-                print("💾 State и Telegram-сессия сохраняются в PostgreSQL", flush=True)
+                print("💾 State, пользовательская и bot-сессии сохраняются в PostgreSQL", flush=True)
             else:
                 print("⚠️ DATABASE_URL не задан: session хранится только в state.json", flush=True)
             if not settings.admin_ids:
