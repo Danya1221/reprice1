@@ -13,10 +13,11 @@ log = logging.getLogger(__name__)
 
 
 class Controller:
-    def __init__(self, client, service, admins):
+    def __init__(self, client, service, admins, username=None):
         self.client = client
         self.service = service
         self.admins = set(admins)
+        self.username = (username or "").lstrip("@").lower()
         self.task = None
         self.block_choices = {}
         client.add_event_handler(self.message, events.NewMessage(incoming=True))
@@ -24,6 +25,18 @@ class Controller:
 
     def allowed(self, event):
         return event.is_private and event.sender_id in self.admins
+
+    async def explain_access(self, event):
+        if not event.is_private:
+            buttons = [[Button.url("Открыть бота", "https://t.me/" + self.username + "?start=menu")]] if self.username else None
+            await self.respond(event, "Управление прайсом работает в личных сообщениях с ботом. "
+                               "Открой бота и отправь /start.", buttons)
+            return
+        await self.respond(event,
+            "Бот работает, но для этого аккаунта ещё не настроен доступ.\n"
+            f"Твой Telegram ID: {event.sender_id}\n"
+            "Владелец сервиса должен добавить этот ID в ADMIN_IDS в Railway и обновить сервис.\n"
+            "Если прайсы читает другой аккаунт, здесь нужен ID аккаунта, с которого ты пишешь боту.")
 
     def menu(self):
         return [
@@ -72,7 +85,9 @@ class Controller:
 
     async def callback(self, event):
         if not self.allowed(event):
-            await event.answer("Нет доступа", alert=True)
+            message = ("Открой бота в личных сообщениях и отправь /start" if not event.is_private
+                       else f"Нет доступа. Твой ID: {event.sender_id}. Добавь его в ADMIN_IDS")
+            await event.answer(message, alert=True)
             return
         # Answer first: do not leave Telegram's loading spinner running during sync.
         await event.answer()
@@ -132,19 +147,30 @@ class Controller:
             await self.respond(event, "Не удалось применить: " + str(exc))
 
     async def message(self, event):
-        if not self.allowed(event):
-            return
-        words = event.raw_text.strip().split(maxsplit=1)
+        words = (event.raw_text or "").strip().split(maxsplit=1)
         if not words:
             return
-        command = words[0].split("@")[0].lower()
+        command, _, recipient = words[0].lower().partition("@")
+        if recipient and self.username and recipient != self.username:
+            return
+        if command not in {"/start", "/help", "/id", "/status", "/sync", "/stop", "/resume",
+                           "/markup", "/percent", "/interval", "/order", "/rejected"}:
+            return
+        if command == "/id" and event.is_private:
+            await self.respond(event, f"Твой Telegram ID: {event.sender_id}")
+            return
+        if not self.allowed(event):
+            await self.explain_access(event)
+            return
         value = words[1] if len(words) > 1 else ""
         try:
             if command in {"/start", "/help"}:
                 await self.respond(event,
                     "Управление прайсом\n/markup 500 — наценка\n/percent 5 — процент\n"
                     "/interval 15 — интервал в минутах\n/order iPhone 17, Samsung, Dyson — порядок блоков\n"
-                    "/rejected — строки, которые нужно проверить\n/status /sync /stop /resume",
+                    "/rejected — строки, которые нужно проверить\n/id — твой Telegram ID\n"
+                    "/status /sync /stop /resume"
+                    + ("\n\n⚠️ " + self.service.startup_status() if not self.service.ready else ""),
                     self.menu())
             elif command == "/status":
                 await self.respond(event, self.service.status(), self.menu())

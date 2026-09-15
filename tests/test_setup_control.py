@@ -73,12 +73,53 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         event = SimpleNamespace(is_private=True, sender_id=99, raw_text="/stop", respond=AsyncMock())
         await self.controller.message(event)
         self.service.pause.assert_not_awaited()
-        event.respond.assert_not_awaited()
+        event.respond.assert_awaited_once()
+        text = event.respond.call_args.args[0]
+        self.assertIn("99", text)
+        self.assertIn("ADMIN_IDS", text)
+        self.assertIsNone(event.respond.call_args.kwargs["buttons"])
 
     async def test_group_cannot_control(self):
         event = SimpleNamespace(is_private=False, sender_id=42, raw_text="/stop", respond=AsyncMock())
         await self.controller.message(event)
         self.service.pause.assert_not_awaited()
+        self.assertIn("личных сообщениях", event.respond.call_args.args[0])
+
+    async def test_id_works_without_admin_access(self):
+        event = SimpleNamespace(is_private=True, sender_id=99, raw_text="/id", respond=AsyncMock())
+        await self.controller.message(event)
+        self.assertEqual(event.respond.call_args.args[0], "Твой Telegram ID: 99")
+        self.service.status.assert_not_called()
+
+    async def test_authorized_start_shows_menu(self):
+        self.service.ready = True
+        event = SimpleNamespace(is_private=True, sender_id=42, raw_text="/start", respond=AsyncMock())
+        await self.controller.message(event)
+        self.assertIn("Управление прайсом", event.respond.call_args.args[0])
+        self.assertTrue(event.respond.call_args.kwargs["buttons"])
+
+    async def test_start_during_supplier_error_still_responds(self):
+        self.service.ready = False
+        self.service.startup_status.return_value = "SESSION_STRING недействительна"
+        event = SimpleNamespace(is_private=True, sender_id=42, raw_text="/start", respond=AsyncMock())
+        await self.controller.message(event)
+        self.assertIn("SESSION_STRING", event.respond.call_args.args[0])
+        self.assertTrue(event.respond.call_args.kwargs["buttons"])
+
+    async def test_group_start_provides_private_chat_link(self):
+        self.controller.username = "reprice_test_bot"
+        event = SimpleNamespace(is_private=False, sender_id=42, raw_text="/start", respond=AsyncMock())
+        await self.controller.message(event)
+        self.assertEqual(event.respond.call_args.kwargs["buttons"][0][0].url,
+                         "https://t.me/reprice_test_bot?start=menu")
+        self.service.status.assert_not_called()
+
+    async def test_command_for_other_bot_is_ignored(self):
+        self.controller.username = "reprice_test_bot"
+        event = SimpleNamespace(is_private=False, sender_id=42,
+                                raw_text="/start@other_bot", respond=AsyncMock())
+        await self.controller.message(event)
+        event.respond.assert_not_awaited()
 
     async def test_callback_answer_happens_before_slow_operation(self):
         order = []

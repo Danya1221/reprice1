@@ -98,3 +98,17 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.client.is_connected = lambda: False
         await self.service.connect()
         self.client.connect.assert_awaited_once()
+
+    async def test_manual_sync_during_initialization_does_not_use_client(self):
+        self.service.ready = False
+        self.service.startup_error = "SESSION_STRING недействительна"
+        self.assertIn("SESSION_STRING", await self.service.sync(force=True))
+        self.service.readers[0].fetch.assert_not_awaited()
+        self.client.is_user_authorized.assert_not_awaited()
+
+    async def test_format_change_during_initialization_is_reported(self):
+        self.service.ready = False
+        self.service.startup_error = "SESSION_STRING недействительна"
+        with self.assertRaisesRegex(RuntimeError, "SESSION_STRING"):
+            await self.service.refresh_format()
+        self.service.publisher.publish.assert_not_awaited()

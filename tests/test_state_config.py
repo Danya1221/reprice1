@@ -52,6 +52,18 @@ class StateTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_control_configuration_can_start_without_supplier_settings(self):
+        with patch.dict(os.environ, {"API_ID": "123", "API_HASH": "test"}, clear=True):
+            settings = Settings.from_env(require_sync=False)
+            self.assertEqual(settings.sources, ())
+            with self.assertRaisesRegex(ValueError, "SESSION_STRING"):
+                settings.validate()
+
+    def test_chat_id_is_not_accepted_as_operator_id(self):
+        with patch.dict(os.environ, {"API_ID": "123", "API_HASH": "test", "ADMIN_IDS": "-100123"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "ADMIN_IDS"):
+                Settings.from_env(require_sync=False)
+
     def test_numeric_and_url_peer(self):
         self.assertEqual(peer("-1001234567890"), -1001234567890)
         self.assertEqual(peer("https://t.me/channel/"), "@channel")

@@ -102,7 +102,7 @@ class Settings:
     admin_ids: tuple = ()
 
     @classmethod
-    def from_env(cls):
+    def from_env(cls, *, require_sync=True):
         sources = []
         for suffix in ("", "_2"):
             source_peer = os.getenv("SUPPLIER_BOT" + suffix, "").strip()
@@ -145,17 +145,19 @@ class Settings:
             bot_token=os.getenv("BOT_TOKEN", "").strip(),
             admin_ids=tuple(int(x) for x in csv_env("ADMIN_IDS")),
         )
-        settings.validate()
+        settings.validate(require_sync=require_sync)
         return settings
 
-    def validate(self):
-        missing = [name for name, value in (
-            ("API_ID", self.api_id), ("API_HASH", self.api_hash),
-            ("SESSION_STRING", self.session), ("SUPPLIER_BOT", self.sources),
-            ("TARGET_CHANNEL", self.target),
-        ) if not value]
+    def validate(self, *, require_sync=True):
+        required = [("API_ID", self.api_id), ("API_HASH", self.api_hash)]
+        if require_sync:
+            required += [("SESSION_STRING", self.session), ("SUPPLIER_BOT", self.sources),
+                         ("TARGET_CHANNEL", self.target)]
+        missing = [name for name, value in required if not value]
         if missing:
             raise ValueError("Не заполнены переменные: " + ", ".join(missing))
+        if any(value <= 0 for value in self.admin_ids):
+            raise ValueError("ADMIN_IDS: нужны положительные ID пользователей, а не ID группы")
         if self.markup_percent <= -100:
             raise ValueError("MARKUP_PERCENT должен быть больше -100")
         if self.sim_filter not in {"all", "sim", "esim", "dual", "unknown"}:

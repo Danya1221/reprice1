@@ -44,6 +44,18 @@ class SyncService:
         self.busy = False
         self.last_attempt = 0.0
         self.retry_after = 0.0
+        self.ready = client is not None
+        self.startup_error = None
+
+    def attach_client(self, client):
+        self.client = client
+        self.publisher.client = client
+        for reader in self.readers:
+            reader.client = client
+            reader.entity = None
+
+    def startup_status(self):
+        return self.startup_error or "Подключение к аккаунту поставщика ещё выполняется"
 
     def options(self):
         return self.state.get("options", {})
@@ -97,6 +109,8 @@ class SyncService:
     async def sync(self, force=False):
         # /stop waits for an active synchronization to finish before acknowledging.
         async with self.lock:
+            if not self.ready:
+                return self.startup_status()
             if not self.enabled() and not force:
                 return "Синхронизация остановлена"
             if asyncio.get_running_loop().time() < self.retry_after:
@@ -179,6 +193,8 @@ class SyncService:
 
     async def refresh_format(self):
         async with self.lock:
+            if not self.ready:
+                raise RuntimeError(self.startup_status())
             # Changes are applied to the last fully parsed cache without supplier commands.
             await self.connect()
             cache = self.state.get("sources", {})
@@ -197,6 +213,8 @@ class SyncService:
             "Последняя проверка: " + self.state.get("last_check", "ещё не было"),
             "Результат: " + self.state.get("last_result", "ожидание"),
         ]
+        if not self.ready:
+            lines[0] = "⚠️ Чтение прайса недоступно: " + self.startup_status()
         for reader in self.readers:
             source = cache.get(self.source_key(reader), {})
             status = "ошибка чтения" if source.get("error") else {"open": "открыт", "closed": "закрыт"}.get(source.get("status"), "неизвестно")
