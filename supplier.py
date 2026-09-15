@@ -3,10 +3,9 @@ import asyncio
 import io
 import re
 import time
-from collections import OrderedDict
 from contextlib import suppress
 
-from telethon import events, utils
+from telethon import events, functions, utils
 from telethon.errors import BotResponseTimeoutError
 from telethon.tl import types
 
@@ -36,6 +35,77 @@ def find_button(message, wanted):
     return None
 
 
+def _username(value):
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    match = re.fullmatch(r"(?:https?://)?t\.me/([A-Za-z0-9_]+)/?", text, re.I)
+    if match:
+        text = match.group(1)
+    text = text.lstrip("@")
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,}", text):
+        return text
+    return None
+
+
+def _resolved_entity(result):
+    peer = result.peer
+    if isinstance(peer, types.PeerUser):
+        return next((item for item in result.users if item.id == peer.user_id), None)
+    if isinstance(peer, types.PeerChannel):
+        return next((item for item in result.chats if item.id == peer.channel_id), None)
+    if isinstance(peer, types.PeerChat):
+        return next((item for item in result.chats if item.id == peer.chat_id), None)
+    return None
+
+
+async def resolve_input_peer(client, value, *, label="Telegram peer", dialog_limit=400):
+    """Resolve a configured peer without depending on Telethon's transient entity cache.
+
+    Public usernames are resolved explicitly with ResolveUsernameRequest, which returns
+    the access_hash required for bots/users/channels. Numeric/private peers fall back to
+    the current dialog list only when the direct lookup cannot work from StringSession.
+    """
+    username = _username(value)
+    if username:
+        try:
+            result = await client(functions.contacts.ResolveUsernameRequest(username))
+            entity = _resolved_entity(result)
+            if entity is None:
+                raise RuntimeError("Telegram вернул username без полной entity")
+            return utils.get_input_peer(entity)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{label}: не удалось открыть @{username}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    try:
+        return await client.get_input_entity(value)
+    except Exception as direct_error:
+        wanted_id = None
+        try:
+            wanted_id = utils.get_peer_id(value)
+        except Exception:
+            pass
+
+        try:
+            async for dialog in client.iter_dialogs(limit=dialog_limit):
+                entity = dialog.entity
+                if wanted_id is not None and utils.get_peer_id(entity) == wanted_id:
+                    return utils.get_input_peer(entity)
+        except Exception as dialog_error:
+            raise RuntimeError(
+                f"{label}: не удалось найти {value!r} в Telegram: "
+                f"{type(dialog_error).__name__}: {dialog_error}"
+            ) from dialog_error
+
+        raise RuntimeError(
+            f"{label}: Telegram знает ID {value!r}, но не дал access_hash. "
+            "Укажи публичный @username или открой этот чат на аккаунте поставщиков. "
+            f"Исходная ошибка: {type(direct_error).__name__}: {direct_error}"
+        ) from direct_error
+
+
 class SupplierReader:
     def __init__(self, client, settings, source):
         self.client = client
@@ -44,21 +114,11 @@ class SupplierReader:
         self.entity = None
 
     async def resolve(self):
-        """Resolve @username through Telegram and keep a full InputPeer with access_hash.
-
-        StringSession does not persist Telethon's entity cache. Calling
-        get_input_entity('@username') directly after a fresh Railway deploy may leave
-        Telethon with only PeerUser(user_id=...) and no access_hash. Resolve the
-        public username first, then build the input peer from the returned entity.
-        """
-        try:
-            entity = await self.client.get_entity(self.source.peer)
-            self.entity = utils.get_input_peer(entity)
-        except Exception as exc:
-            raise RuntimeError(
-                f"{self.source.label}: не удалось открыть {self.source.peer!r}: "
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
+        self.entity = await resolve_input_peer(
+            self.client,
+            self.source.peer,
+            label=self.source.label,
+        )
 
     def is_closed_text(self, text):
         custom = clean(self.source.closed_text).casefold()
@@ -110,7 +170,6 @@ class SupplierReader:
                     return [collected[k] for k in sorted(collected)]
                 await asyncio.sleep(s.action_delay)
             if collected:
-                # Avoid publishing a truncated snapshot if replies never settled.
                 raise SupplierTimeout("Ответ поставщика не завершён: увеличь RESPONSE_TIMEOUT")
             raise SupplierTimeout("Поставщик не прислал нового ответа; старое меню не будет опубликовано")
         finally:
@@ -125,7 +184,6 @@ class SupplierReader:
                 self.entity, limit=self.settings.history_limit)]
             if not messages:
                 raise SupplierTimeout("Лента поставщика пуста")
-            # A closing notice newer than all price messages closes this source.
             latest = next((m for m in messages if (m.raw_text or "").strip() or m.document), None)
             if latest and self.is_closed_text(latest.raw_text):
                 return [latest]
