@@ -1,9 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from bot_publisher import BotAPIPublisher
 from config import Settings
+from control_group import GroupBindingController
 from state import StateStore
 
 
@@ -57,6 +60,73 @@ class GroupBindingTests(unittest.IsolatedAsyncioTestCase):
         restarted = FakePublisher("token", 6781674751, self.state, self.settings, chats=chats)
         self.assertEqual(await restarted.ensure_target(), group_id)
         self.assertEqual(restarted.target_title, "Розница")
+
+
+class ForwardBindingControllerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.state = StateStore(Path(self.temp.name) / "state.json")
+        self.publisher = SimpleNamespace(bind_group=AsyncMock(return_value=-100777))
+        self.service = SimpleNamespace(
+            publisher=self.publisher,
+            state=self.state,
+            ready=False,
+            settings=Settings(admin_ids=(42,), send_delay=0),
+        )
+        self.controller = GroupBindingController("TOKEN", self.service, [42])
+        self.controller.username = "Pricebottok_bot"
+        self.controller.send = AsyncMock()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    async def test_forwarded_group_message_binds_without_command(self):
+        message = {
+            "from": {"id": 42},
+            "chat": {"id": 42, "type": "private"},
+            "text": "любое сообщение",
+            "forward_origin": {
+                "type": "channel",
+                "chat": {"id": -100777, "type": "supergroup", "title": "Розница"},
+            },
+        }
+
+        await self.controller.handle_message(message)
+
+        self.publisher.bind_group.assert_awaited_once_with(
+            -100777, title="Розница", chat_type="supergroup"
+        )
+        self.assertIn("Группа публикации привязана", self.state.get("last_result"))
+
+    async def test_hidden_group_origin_offers_native_chat_picker(self):
+        message = {
+            "from": {"id": 42},
+            "chat": {"id": 42, "type": "private"},
+            "text": "переслано",
+            "forward_origin": {"type": "user", "sender_user": {"id": 7}},
+        }
+
+        await self.controller.handle_message(message)
+
+        self.publisher.bind_group.assert_not_awaited()
+        payload = self.controller.send.await_args.args
+        markup = payload[2]
+        button = markup["keyboard"][0][0]
+        self.assertIn("request_chat", button)
+        self.assertTrue(button["request_chat"]["bot_is_member"])
+
+    async def test_chat_shared_result_binds_group(self):
+        message = {
+            "from": {"id": 42},
+            "chat": {"id": 42, "type": "private"},
+            "chat_shared": {"request_id": 731, "chat_id": -100888, "title": "Опт"},
+        }
+
+        await self.controller.handle_message(message)
+
+        self.publisher.bind_group.assert_awaited_once_with(
+            -100888, title="Опт", chat_type="group"
+        )
 
 
 if __name__ == "__main__":
