@@ -13,7 +13,11 @@ CLOSED = re.compile(r"(?:мы\s+)?(?:сейчас\s+|временно\s+)?зак
                     r"рабочий\s+день\s+окончен|магазин\s+закрыт|не\s+работаем|"
                     r"при[её]м\s+заказов\s+(?:заверш[её]н|закрыт)", re.I)
 UNAVAILABLE = re.compile(r"нет\s+в\s+наличии|нет\s+на\s+складе|закончились|продано|❌", re.I)
-WHOLESALE = re.compile(r"\b(?:от|from)\s*\d+\s*(?:шт|штук|pcs)\b", re.I)
+WHOLESALE = re.compile(
+    r"(?:\b(?:от|from)\s*\d+\s*(?:шт|штук|pcs)\b|"
+    r"\b\d+\s*(?:шт|штук|pcs)\s*(?:\+|и\s+более)?\b|"
+    r"\b(?:мелк(?:ий|ого)|крупн(?:ый|ого))\s+опт\b|"
+    r"\bопт(?:ом|овый|овая|овые)?\b|\bwholesale\b)", re.I)
 PRICE = re.compile(
     r"(?P<prefix>[$€₽])?\s*"
     r"(?P<amount>(?:\d{1,3}(?:[ ,.]\d{3})+|\d{3,7})(?:[.,]\d{1,2})?)"
@@ -22,12 +26,13 @@ PRICE = re.compile(
     re.I,
 )
 ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|кабел[ья]|кабель|адаптер|зарядк|"
-                       r"ремеш|бампер|case\b|charger\b|cable\b", re.I)
+                       r"ремеш|бампер|переходник|кейс\b|амбушюр|case\b|charger\b|cable\b", re.I)
 IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max\b|pro\b|"
                     r"plus\b|mini\b|air\b)?|air\b|se(?:\s*\d)?)", re.I)
-SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini))?)\s+(?=\d{2,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
+SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini|air))?)\s+(?=\d{2,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
+DYSON_DEVICE = re.compile(r"\bdyson\b.*\b(?:hs|hd|ht|v)\s*\d{1,3}\b", re.I)
 BRANDS = (
-    ("Ray-Ban Meta", r"ray[\s-]?ban|wayfarer|skyler"),
+    ("Ray-Ban Meta", r"ray[\s-]?ban|wayfarer|skyler|headliner"),
     ("LEGO", r"\blego\b|лего"),
     ("Dyson", r"\bdyson\b|дайсон"),
     ("Canon", r"\bcanon\b|кэнон|канон"),
@@ -38,13 +43,21 @@ BRANDS = (
     ("Google", r"\bgoogle\b|\bpixel\b|\bfitbit\b"),
     ("Samsung", r"\bsamsung\b|\bgalaxy\b|самсунг"),
     ("Apple", r"\bapple\b|\biphone\b|айфон|\bipad\b|\bmacbook\b|\bairpods\b|\bimac\b|apple\s*watch"),
+    ("PlayStation", r"playstation|\bps5\b"),
     ("Sony", r"\bsony\b"),
     ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b"),
     ("Huawei", r"\bhuawei\b"),
     ("Honor", r"\bhonor\b"),
+    ("Tecno", r"\btecno\b"),
+    ("Dell", r"\bdell\b"),
+    ("Realme", r"\brealme\b"),
+    ("Nothing", r"\bnothing\b"),
+    ("OnePlus", r"\bone\s*plus\b"),
+    ("OPPO", r"\boppo\b"),
+    ("Vivo", r"\bvivo\b"),
+    ("Motorola", r"\bmotorola\b|\bmoto\b"),
     ("JBL", r"\bjbl\b"),
     ("Nintendo", r"\bnintendo\b|\bswitch\b"),
-    ("PlayStation", r"playstation|\bps5\b"),
     ("Xbox", r"\bxbox\b"),
 )
 
@@ -54,7 +67,7 @@ def clean(text):
 
 
 def strip_decoration(text):
-    return clean(text).strip(" \t•▫▪◽◾🔹🔸📱📦🎧⌚🔥✅*_-—–")
+    return clean(text).strip(" \t•▫▪◽◾🔹🔸📱📦🎧⌚👓🔥✅*_-—–")
 
 
 def currency_name(value, default="RUB"):
@@ -78,8 +91,8 @@ def split_price(line, default_currency):
         return None
     wholesale = WHOLESALE.search(original)
     if wholesale:
-        # Keep only an explicitly listed retail price before the wholesale tier.
-        original = original[:wholesale.start()].rstrip(" ,;/—-")
+        # Keep only an explicitly listed normal retail price before the wholesale tier.
+        original = original[:wholesale.start()].rstrip(" ,;/|—–-")
     match = PRICE.search(original)
     if not match:
         return None
@@ -134,7 +147,9 @@ def brand_of(text):
 
 def normal_title(title, context=""):
     title = strip_decoration(title)
-    title = re.sub(r"\bSM-[A-Za-z0-9/]+\b", "", title, flags=re.I)
+    # Samsung supplier SKUs are not customer-facing product attributes.
+    title = re.sub(r"\bSM-[A-Za-z0-9/+-]+\b", "", title, flags=re.I)
+    title = re.sub(r"\b[A-Z]\d{3,4}[A-Z]?/DS\b", "", title, flags=re.I)
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
     plain = FLAGS.sub("", title).strip()
     if SHORT_IPHONE.match(plain):
@@ -145,7 +160,7 @@ def normal_title(title, context=""):
         title = context + " " + title
     title = re.sub(r"\b(\d+)\s*(?:GB|ГБ)\b", r"\1GB", title, flags=re.I)
     title = re.sub(r"\b(\d+)\s*(?:TB|ТБ)\b", r"\1TB", title, flags=re.I)
-    if re.search(r"ray[\s-]?ban|wayfarer|skyler", title, re.I):
+    if re.search(r"ray[\s-]?ban|wayfarer|skyler|headliner", title, re.I):
         title = re.sub(r"\bS\s*50\b", "M", title, flags=re.I)
         title = re.sub(r"\bS\s*53\b", "L", title, flags=re.I)
         if not re.search(r"ray[\s-]?ban", title, re.I):
@@ -156,9 +171,25 @@ def normal_title(title, context=""):
 def identity(title, sim, currency):
     flags = "".join(sorted(FLAGS.findall(title)))
     body = FLAGS.sub("", clean(title).lower())
+    # Supplier aliases must not create duplicate products.
+    body = re.sub(r"^samsung\s+galaxy\b", "galaxy", body)
+    body = re.sub(r"^apple\s+iphone\b", "iphone", body)
     body = re.sub(r"(\d+)\s*(?:gb|гб)\b", r"\1", body)
+    body = re.sub(r"(\d+)\s*(?:tb|тб)\b", r"\1tb", body)
     body = re.sub(r"[^\w+/]+", " ", body)
     return clean(body) + "|" + flags + "|" + sim + "|" + currency
+
+
+def is_accessory(title, section=""):
+    """Accessory keywords must not turn a real device into an accessory block."""
+    if section == "Аксессуары" and not brand_of(title):
+        return True
+    if not ACCESSORY.search(title):
+        return False
+    # Dyson kits frequently contain the word "case" while the row is still a device.
+    if DYSON_DEVICE.search(title):
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -223,7 +254,7 @@ def parse_documents(documents, default_currency="RUB"):
             title, amount, currency = price
             title = normal_title(title, context)
             own_brand = brand_of(title)
-            accessory = bool(ACCESSORY.search(title)) or (section == "Аксессуары" and not own_brand)
+            accessory = is_accessory(title, section)
             model = iphone_model(title)
             block = "Аксессуары" if accessory else (model or own_brand or section)
             if not block:
@@ -235,7 +266,10 @@ def parse_documents(documents, default_currency="RUB"):
             if sim == "unknown":
                 sim = section_sim if model else "unknown"
             item = Item(title, amount, currency, block, sim, accessory)
-            items[item.key] = item
+            previous = items.get(item.key)
+            # Duplicate rows inside one supplier price keep the lower purchase price.
+            if previous is None or item.price < previous.price:
+                items[item.key] = item
     return ParseResult(list(items.values()), rejected, closed and not items)
 
 
@@ -271,11 +305,13 @@ def select_items(items, settings, overrides=None):
 
 
 def merge_sources(sources):
-    """First source wins, but differing country/SIM/condition/storage stay distinct."""
+    """Merge identical variants from suppliers using the lowest purchase price."""
     merged = OrderedDict()
     for items in sources:
         for item in items:
-            merged.setdefault(item.key, item)
+            previous = merged.get(item.key)
+            if previous is None or item.price < previous.price:
+                merged[item.key] = item
     return list(merged.values())
 
 
@@ -304,10 +340,14 @@ def item_sort(item):
     return size, clean(item.title).casefold()
 
 
-def render_blocks(items, settings, overrides=None, closed=False):
+def render_blocks(items, settings, overrides=None, closed=False, stable_blocks=()):
     """Return stable page keys and HTML; code entities make names easy to copy."""
     overrides = overrides or {}
+    disabled = set(overrides.get("disabled_blocks", []))
     groups = OrderedDict()
+    for block in stable_blocks:
+        if block not in disabled:
+            groups.setdefault(block, [])
     for item in items:
         groups.setdefault(item.block, []).append(item)
     order = overrides.get("block_order", [])
@@ -317,6 +357,8 @@ def render_blocks(items, settings, overrides=None, closed=False):
         header = html.escape(settings.header) + "\n\n<b>— " + html.escape(block) + " —</b>"
         if closed:
             chunks = [["Продажи закрыты"]]
+        elif not groups[block]:
+            chunks = [["Сейчас нет в наличии"]]
         else:
             lines = []
             last_sim = None
