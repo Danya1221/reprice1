@@ -25,6 +25,10 @@ ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|к�
                        r"ремеш|бампер|case\b|charger\b|cable\b", re.I)
 ASIS = re.compile(r"\bAS[\s-]?IS\b|\bASIS\b|асис", re.I)
 CPO = re.compile(r"\bCPO\b", re.I)
+PACKAGING_NOTE = r"ориг(?:инальная)?\.?\s*упак(?:овка)?\.?"
+ORIGINAL_PACKAGING = re.compile(
+    r"\(\s*" + PACKAGING_NOTE + r"(?:\s*iphone)?\s*\)|\b" + PACKAGING_NOTE + r"(?!\w)", re.I,
+)
 INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activated|не[\s-]*активирован\w*", re.I)
 ACTIVE = re.compile(r"\bактив\w*|\bactive\b|\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
 IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max\b|pro\b|"
@@ -189,7 +193,9 @@ def normal_title(title, context=""):
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
     plain = FLAGS.sub("", title).strip()
     if SHORT_IPHONE.match(plain):
-        pos = title.find(plain)
+        # A flag in the middle means the flag-free text is not a substring.
+        # Insert before the model, never at find()'s -1 position near the end.
+        pos = re.search(r"\d", title).start()
         title = title[:pos] + "iPhone " + title[pos:]
     elif context and not brand_of(title):
         title = context + " " + title
@@ -384,9 +390,10 @@ def item_sort(item):
 
 def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
-    title = item.title
-    if iphone_model(item.title):
-        explicit = sim_type(item.title)
+    # Apply at render time so previously saved prices lose the note as well.
+    title = normal_title(ORIGINAL_PACKAGING.sub("", item.title))
+    if iphone_model(title):
+        explicit = sim_type(title)
         if explicit == "unknown" and SIM_LABELS.get(item.sim):
             title += " · " + SIM_LABELS[item.sim]
     return title
