@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Correct migration regression expectation
+        run: python fix_compact_spacing_test.py
       - name: Apply compact catalog and spacing
         run: python apply_compact_catalog_spacing.py
       - name: Install dependencies
