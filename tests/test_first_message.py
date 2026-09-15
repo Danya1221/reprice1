@@ -76,6 +76,29 @@ class FirstMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(1 for method, _ in self.publisher.calls if method == "sendMessage"), send_count)
         self.assertTrue(any(method == "editMessageText" for method, _ in self.publisher.calls))
 
+    async def test_deleted_saved_first_message_is_recreated_even_when_text_is_unchanged(self):
+        await self.publisher.set_first_message("Гарантия и выдача")
+        old_id = self.state.get("first_message")["id"]
+        self.publisher.calls.clear()
+        real = self.publisher.api
+
+        async def missing(method, **payload):
+            if method == "editMessageText" and int(payload.get("message_id") or 0) == old_id:
+                self.publisher.calls.append((method, payload))
+                raise RuntimeError("Bad Request: message to edit not found")
+            return await real(method, **payload)
+
+        self.publisher.api = missing
+        await self.publisher.publish({})
+
+        record = self.state.get("first_message")
+        self.assertNotEqual(record["id"], old_id)
+        self.assertTrue(record["pinned"])
+        self.assertTrue(any(method == "sendMessage" and payload.get("text") == "Гарантия и выдача"
+                            for method, payload in self.publisher.calls))
+        self.assertTrue(any(method == "pinChatMessage" and payload.get("message_id") == record["id"]
+                            for method, payload in self.publisher.calls))
+
 
 if __name__ == "__main__":
     unittest.main()
