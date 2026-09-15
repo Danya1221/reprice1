@@ -47,6 +47,7 @@ BRANDS = (
     ("PlayStation", r"playstation|\bps5\b"),
     ("Xbox", r"\bxbox\b"),
 )
+SIM_LABELS = {"sim": "SIM", "esim": "eSIM", "dual": "2 SIM", "unknown": "SIM не указан"}
 
 
 def clean(text):
@@ -64,7 +65,6 @@ def currency_name(value, default="RUB"):
 
 def amount_value(value):
     value = value.replace(" ", "")
-    # Group separators and a fractional suffix may both occur (79,000.50).
     fraction = re.search(r"([.,]\d{1,2})$", value)
     if fraction:
         whole = value[:fraction.start()].replace(",", "").replace(".", "")
@@ -78,7 +78,6 @@ def split_price(line, default_currency):
         return None
     wholesale = WHOLESALE.search(original)
     if wholesale:
-        # Keep only an explicitly listed retail price before the wholesale tier.
         original = original[:wholesale.start()].rstrip(" ,;/—-")
     match = PRICE.search(original)
     if not match:
@@ -89,7 +88,6 @@ def split_price(line, default_currency):
     if not separated and not (match["currency"] or match["prefix"]) and amount < 1000:
         return None
     title = title.rstrip(" -—–=:|")
-    # Avoid turning years, headers, stock counters, phone numbers into products.
     if not title or not re.search(r"[A-Za-zА-Яа-яЁё]", title):
         return None
     if re.search(r"https?://|@\w+|доставка|гарантия|телефон:|заказ(?:ы|ов)?\s*:|"
@@ -105,13 +103,14 @@ def split_price(line, default_currency):
 
 
 def sim_type(text):
-    text = re.sub(r"\be[\s-]+sim\b", "esim", clean(text).lower())
+    text = clean(text).lower()
+    text = re.sub(r"\be[\s-]+sim\b", "esim", text)
     if re.search(r"\b(?:2|dual)\s*sim\b|две\s*sim", text):
         return "dual"
-    if re.search(r"\bsim\b", text):
-        return "sim"
-    if re.search(r"\be[\s-]?sim\b|есим", text):
+    if re.search(r"\besim\b|есим", text):
         return "esim"
+    if re.search(r"\b(?:1\s*)?(?:nano\s*)?sim\b|physical\s*sim|физическ\w*\s*sim", text):
+        return "sim"
     return "unknown"
 
 
@@ -138,7 +137,6 @@ def normal_title(title, context=""):
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
     plain = FLAGS.sub("", title).strip()
     if SHORT_IPHONE.match(plain):
-        # Model/storage shorthand is common even when a supplier omits headers.
         pos = title.find(plain)
         title = title[:pos] + "iPhone " + title[pos:]
     elif context and not brand_of(title):
@@ -209,7 +207,6 @@ def parse_documents(documents, default_currency="RUB"):
             if price is None:
                 model = iphone_model(line)
                 brand = brand_of(line)
-                # A header is short and has no numeric price or advertising link.
                 is_header = len(line) <= 80 and not re.search(r"https?://|@\w+|[-—=]\s*\d{3}", line)
                 if is_header and (model or brand or ACCESSORY.search(line)):
                     context = model or (brand if brand != "Apple" else line.strip(":"))
@@ -227,8 +224,6 @@ def parse_documents(documents, default_currency="RUB"):
             model = iphone_model(title)
             block = "Аксессуары" if accessory else (model or own_brand or section)
             if not block:
-                # Unknown products are retained under their source heading when present.
-                # Without a heading, expose them for review instead of silently misclassifying.
                 rejected.append(line)
                 continue
             sim = sim_type(title)
@@ -304,8 +299,18 @@ def item_sort(item):
     return size, clean(item.title).casefold()
 
 
+def display_title(item):
+    """Self-contained copy text: model attributes plus SIM kind for every iPhone."""
+    title = item.title
+    if iphone_model(item.title):
+        explicit = sim_type(item.title)
+        if explicit == "unknown" or item.sim == "unknown":
+            title += " · " + SIM_LABELS[item.sim]
+    return title
+
+
 def render_blocks(items, settings, overrides=None, closed=False):
-    """Return stable page keys and HTML; code entities make names easy to copy."""
+    """Return stable page keys and HTML; each full product+price row is copyable."""
     overrides = overrides or {}
     groups = OrderedDict()
     for item in items:
@@ -314,7 +319,8 @@ def render_blocks(items, settings, overrides=None, closed=False):
     names = sorted(groups, key=lambda x: (order.index(x) if x in order else len(order), x.casefold()))
     pages = OrderedDict()
     for block in names:
-        header = html.escape(settings.header) + "\n\n<b>— " + html.escape(block) + " —</b>"
+        # No generic "АКТУАЛЬНЫЙ ПРАЙС" banner: the message starts with the block itself.
+        header = "<b>— " + html.escape(block) + " —</b>"
         if closed:
             chunks = [["Продажи закрыты"]]
         else:
@@ -322,11 +328,10 @@ def render_blocks(items, settings, overrides=None, closed=False):
             last_sim = None
             for item in sorted(groups[block], key=lambda i: (i.sim, item_sort(i))):
                 if iphone_model(item.title) and item.sim != last_sim:
-                    label = {"sim": "SIM", "esim": "eSIM", "dual": "2 SIM", "unknown": "SIM не указан"}[item.sim]
-                    lines.append("<b>— " + label + " —</b>")
+                    lines.append("<b>— " + SIM_LABELS[item.sim] + " —</b>")
                     last_sim = item.sim
-                name = html.escape(item.title)
-                line = "<code>" + name + "</code> — " + price_text(marked_price(item, settings, overrides), item.currency)
+                row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
+                line = "<code>" + html.escape(row) + "</code>"
                 if units(line) > 3000:
                     raise ValueError("Слишком длинное наименование товара")
                 lines.append(line)
