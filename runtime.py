@@ -1,4 +1,4 @@
-"""Synchronization lifecycle: one lock, isolated sources, durable settings and cache."""
+"""Synchronization lifecycle for two supplier prices."""
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -18,13 +18,14 @@ class LoginRequired(RuntimeError):
 
 
 def is_open(settings, now=None):
-    if not settings.off_hours:
-        return True
+    """Compatibility helper: the fixed daily *start* has been reached.
+
+    There is intentionally no fixed closing hour anymore. Publication closes
+    only when every configured supplier explicitly reports closed.
+    """
     now = now or datetime.now(timezone.utc)
     hour = now.astimezone(ZoneInfo(settings.timezone)).hour
-    if settings.open_hour < settings.close_hour:
-        return settings.open_hour <= hour < settings.close_hour
-    return hour >= settings.open_hour or hour < settings.close_hour
+    return hour >= settings.open_hour
 
 
 def timestamp():
@@ -74,10 +75,10 @@ class SyncService:
             if not self.client.is_connected():
                 await self.client.connect()
             if not await self.client.is_user_authorized():
-                raise LoginRequired("Сессия недействительна. Получи SESSION_STRING через SETUP_MODE")
+                raise LoginRequired("Сессия недействительна. Выполни /login в управляющем боте")
         except (errors.AuthKeyDuplicatedError, errors.UnauthorizedError) as exc:
             raise LoginRequired(
-                "Telegram отозвал SESSION_STRING. Останови другие копии и создай новую сессию"
+                "Telegram отозвал сессию. Останови другие копии и выполни /login заново"
             ) from exc
 
     def source_key(self, reader):
@@ -93,21 +94,23 @@ class SyncService:
             groups.append([Item.from_dict(item) for item in source.get("items", [])])
         return merge_sources(groups)
 
-    async def render(self, closed=False):
+    async def render(self, closed=False, items=None):
         options = self.options()
-        catalog = self.cached_items(include_closed=closed)
+        catalog = self.cached_items(include_closed=closed) if items is None else items
         if closed and not catalog:
             changes = await self.publisher.hide_existing()
             self.state.update({"last_publish": timestamp(), "published_items": 0})
             return 0, changes
-        items = select_items(catalog, self.settings, options)
-        pages = render_blocks(items, self.settings, options, closed=closed)
+        selected = select_items(catalog, self.settings, options)
+        pages = render_blocks(selected, self.settings, options, closed=closed)
         changes = await self.publisher.publish(pages)
-        self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(items)})
-        return len(items), changes
+        self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(selected)})
+        return len(selected), changes
+
+    def _both_fresh_open(self, fresh_status):
+        return len(self.readers) >= 2 and all(fresh_status.get(self.source_key(r)) == "open" for r in self.readers)
 
     async def sync(self, force=False):
-        # /stop waits for an active synchronization to finish before acknowledging.
         async with self.lock:
             if not self.ready:
                 return self.startup_status()
@@ -120,58 +123,82 @@ class SyncService:
                 await self.connect()
                 self.last_attempt = asyncio.get_running_loop().time()
                 self.state.set("last_check", timestamp())
-                if not is_open(self.settings):
-                    await self.render(closed=True)
-                    self.state.set("last_result", "Продажи закрыты: ночной период")
-                    return "Продажи закрыты: ночной период. Цены скрыты"
+
                 old_cache = self.state.get("sources", {})
                 cache = dict(old_cache)
                 errors_found = []
+                fresh_status = {}
+                fresh_open_groups = []
+
                 for reader in self.readers:
                     key = self.source_key(reader)
                     try:
                         budget = self.settings.response_timeout * (len(reader.source.buttons) + 1) * 2 + 120
                         result = await asyncio.wait_for(reader.fetch(), timeout=budget)
                         previous = cache.get(key, {})
+                        status = "closed" if result.closed else "open"
+                        fresh_status[key] = status
                         cache[key] = {
-                            "status": "closed" if result.closed else "open",
+                            "status": status,
                             "checked": timestamp(),
-                            # Retain titles on closure; prices are not rendered.
                             "items": previous.get("items", []) if result.closed else [i.to_dict() for i in result.items],
                             "rejected": result.rejected[:200],
                             "rejected_count": len(result.rejected),
                             "error": None,
                         }
+                        if status == "open":
+                            fresh_open_groups.append(result.items)
                     except (errors.AuthKeyDuplicatedError, errors.UnauthorizedError) as exc:
-                        raise LoginRequired("Сессия Telegram отозвана; получи новую SESSION_STRING") from exc
+                        raise LoginRequired("Сессия Telegram отозвана; выполни /login заново") from exc
                     except errors.FloodWaitError:
                         raise
                     except Exception as exc:
                         log.warning("Не удалось прочитать %s: %s", reader.source.label, type(exc).__name__)
                         old = cache.get(key, {})
-                        cache[key] = {**old, "error": f"{type(exc).__name__}: {exc}", "checked": timestamp()}
-                        errors_found.append(reader.source.label + ": " + str(exc))
-                if errors_found:
-                    # Never replace a complete publication with half a failed snapshot.
-                    # A successful source stays cached and will be used after recovery.
-                    preserved = {}
-                    for reader in self.readers:
-                        key = self.source_key(reader)
-                        preserved[key] = {
-                            **old_cache.get(key, {}),
-                            "error": cache.get(key, {}).get("error") or "Ожидается другой источник",
+                        cache[key] = {
+                            **old,
+                            "error": f"{type(exc).__name__}: {exc}",
                             "checked": timestamp(),
                         }
-                    self.state.set("sources", preserved)
-                    message = "Прайс сохранён; " + " | ".join(errors_found)
+                        fresh_status[key] = "error"
+                        errors_found.append(reader.source.label + ": " + str(exc))
+
+                self.state.set("sources", cache)
+
+                statuses = [fresh_status.get(self.source_key(r), "error") for r in self.readers]
+                if self.readers and all(status == "closed" for status in statuses):
+                    count, changes = await self.render(closed=True)
+                    message = "Оба поставщика закрыты: цены скрыты"
                     self.state.set("last_result", message)
                     return message
-                self.state.set("sources", cache)
-                closed = all(cache[self.source_key(r)].get("status") == "closed" for r in self.readers)
-                count, changes = await self.render(closed=closed)
-                message = "Продажи закрыты, цены скрыты" if closed else f"Прайс обновлён: {count} позиций, изменений: {changes}"
+
+                if not fresh_open_groups:
+                    message = "Прайс сохранён; нет свежего открытого источника"
+                    if errors_found:
+                        message += ": " + " | ".join(errors_found)
+                    self.state.set("last_result", message)
+                    return message
+
+                # Before 10:00 MSK publication may open early only when BOTH
+                # suppliers are freshly open. At/after 10:00 one open source is enough.
+                if not is_open(self.settings) and not self._both_fresh_open(fresh_status):
+                    await self.publisher.hide_existing()
+                    message = (
+                        f"До {self.settings.open_hour:02d}:00: ждём открытия обоих поставщиков. "
+                        "Цены скрыты"
+                    )
+                    self.state.set("last_result", message)
+                    return message
+
+                # Merge only sources that succeeded and are open in THIS check.
+                # Same full variant chooses the lower purchase price before markup.
+                catalog = merge_sources(fresh_open_groups)
+                count, changes = await self.render(items=catalog)
+                source_note = "/".join(statuses)
+                message = f"Прайс обновлён: {count} позиций, изменений: {changes}; источники: {source_note}"
                 self.state.set("last_result", message)
                 return message
+
             except errors.FloodWaitError as exc:
                 self.retry_after = asyncio.get_running_loop().time() + exc.seconds + 1
                 message = f"Telegram просит подождать {exc.seconds} сек."
@@ -195,12 +222,13 @@ class SyncService:
         async with self.lock:
             if not self.ready:
                 raise RuntimeError(self.startup_status())
-            # Changes are applied to the last fully parsed cache without supplier commands.
             await self.connect()
             cache = self.state.get("sources", {})
-            closed = not is_open(self.settings) or all(
-                cache.get(self.source_key(r), {}).get("status") == "closed" for r in self.readers)
-            return await self.render(closed=closed)
+            statuses = [cache.get(self.source_key(r), {}).get("status") for r in self.readers]
+            closed = bool(self.readers) and all(status == "closed" for status in statuses)
+            if closed:
+                return await self.render(closed=True)
+            return await self.render(closed=False)
 
     def status(self):
         options = self.options()
@@ -222,17 +250,20 @@ class SyncService:
         return "\n".join(lines)
 
     async def run(self):
-        last_window = None
+        last_start_state = None
         while not self.stop_event.is_set():
             self.wake.clear()
             now = asyncio.get_running_loop().time()
-            window = is_open(self.settings)
+            start_state = is_open(self.settings)
             interval = self.options().get("poll_seconds", self.settings.poll_seconds)
-            due = now - self.last_attempt >= interval or self.last_attempt == 0 or window != last_window
+            due = now - self.last_attempt >= interval or self.last_attempt == 0 or start_state != last_start_state
             if self.enabled() and due and now >= self.retry_after:
-                await self.sync()
-                last_window = window
-            # A short scheduler tick hides prices at closing time even with a 2h interval.
+                try:
+                    await self.sync()
+                except LoginRequired as exc:
+                    self.startup_error = str(exc)
+                    return
+                last_start_state = start_state
             try:
                 await asyncio.wait_for(self.wake.wait(), timeout=5)
             except asyncio.TimeoutError:
