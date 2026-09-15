@@ -120,9 +120,10 @@ class Settings:
                 continue
             explicit_request = os.getenv("REQUEST_TEXT" + suffix, "").strip()
             button_path = tuple(x.strip() for x in os.getenv("BUTTON_PATH" + suffix, "").split(">") if x.strip())
-            # A configured request/button path expresses intent to query a bot.
-            # An explicitly configured feed still never receives commands.
-            default_mode = "bot" if not suffix or explicit_request or button_path else "feed"
+            # Both configured suppliers are bots by default. A feed/channel must
+            # be explicitly opted into with SOURCE_MODE[_2]=feed so a missing
+            # REQUEST_TEXT_2 never silently disables requests to supplier #2.
+            default_mode = "bot"
             mode = env_value("SOURCE_MODE" + suffix, default_mode).lower()
             if mode not in {"bot", "feed"}:
                 raise ValueError("SOURCE_MODE: допустимо bot или feed")
