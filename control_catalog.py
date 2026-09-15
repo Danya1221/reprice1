@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 
 from control_first import FirstMessageController
-from prices import ordered_blocks
+from prices import Item, ordered_blocks
 
 
 def block_id(block):
@@ -23,16 +23,32 @@ class CatalogController(FirstMessageController):
         return {"inline_keyboard": rows}
 
     def known_blocks(self):
-        return {item.block for item in self.service.cached_items(include_closed=True)}
+        blocks = {item.block for item in self.service.cached_items(include_closed=True)}
+        # Read every raw cached supplier row as well. This avoids the order screen
+        # looking like it contains only iPhones when merged/current items are partial.
+        sources = self.service.state.get("sources", {}) or {}
+        for source in sources.values():
+            for raw in source.get("items", []) or []:
+                try:
+                    block = Item.from_dict(raw).block
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if block:
+                    blocks.add(block)
+        blocks.update(block for block in self.service.options().get("block_order", []) if block)
+        return blocks
 
     async def show_order(self, chat_id, user_id, page=0):
         known = self.known_blocks()
         preferred = self.order_drafts.get(user_id, self.service.options().get("block_order", []))
         order = ordered_blocks(known, preferred)
         self.order_drafts[user_id] = order
-        page = max(0, min(page, max(0, (len(order) - 1) // 8)))
+        page_size = 24
+        total_pages = max(1, (len(order) + page_size - 1) // page_size)
+        page = max(0, min(page, total_pages - 1))
         rows = []
-        for index, block in enumerate(order[page * 8:page * 8 + 8], start=page * 8):
+        start = page * page_size
+        for index, block in enumerate(order[start:start + page_size], start=start):
             ident = block_id(block)
             row = [{"text": f"{index + 1}. {block}", "callback_data": f"order:show:{page}"}]
             if index:
@@ -42,17 +58,21 @@ class CatalogController(FirstMessageController):
             rows.append(row)
         navigation = []
         if page:
-            navigation.append({"text": "←", "callback_data": f"order:show:{page - 1}"})
-        if (page + 1) * 8 < len(order):
-            navigation.append({"text": "→", "callback_data": f"order:show:{page + 1}"})
+            navigation.append({"text": "← Предыдущие", "callback_data": f"order:show:{page - 1}"})
+        if page + 1 < total_pages:
+            navigation.append({"text": "Следующие →", "callback_data": f"order:show:{page + 1}"})
         if navigation:
             rows.append(navigation)
         if order:
             rows.append([{"text": "✅ Применить порядок", "callback_data": "order:apply"},
                          {"text": "По умолчанию", "callback_data": "order:reset"}])
-        await self.send(chat_id, "Подними или опусти блок стрелками, затем нажми «Применить порядок»."
-                        if order else "Сначала запроси прайс — здесь появятся все его блоки.",
-                        {"inline_keyboard": rows})
+        text = (
+            f"Порядок блоков: всего {len(order)} · страница {page + 1}/{total_pages}.\n"
+            "Здесь собраны блоки из всех сохранённых прайсов поставщиков. "
+            "Подними или опусти блок стрелками, затем нажми «Применить порядок»."
+            if order else "Сначала запроси прайс — здесь появятся все его блоки."
+        )
+        await self.send(chat_id, text, {"inline_keyboard": rows})
 
     async def _refresh_result(self, chat_id):
         try:

@@ -71,33 +71,36 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             records.append(record)
         else:
             records[index] = record
-        # Save the sent ID before pinning so denied pin permission never duplicates it.
         self.save_catalog(records)
-        if index == 0 and not record.get("pinned"):
-            try:
-                await self.api("pinChatMessage", chat_id=self.target, message_id=record["id"], disable_notification=True)
-                record["pinned"] = True
-                record.pop("pin_error", None)
-            except RuntimeError as exc:
-                record["pin_error"] = str(exc)
-            self.save_catalog(records)
         if changed:
             await asyncio.sleep(max(0, self.settings.send_delay))
         return changed
 
     async def _prepare_catalog(self, count):
+        """Ensure catalog messages exist strictly after every managed price post."""
         records = self.catalog_records()
-        # When enabling navigation on an existing price, convert its first post
-        # into the catalog; subsequent posts remain reusable price slots.
-        if not records:
-            stored = self.state.get("published", {}) or {}
-            manifest = stored.get("messages", {}) if stored.get("binding") == self.binding() else {}
-            if manifest:
-                key = min(manifest, key=lambda k: int(manifest[k]["id"]))
-                records = [{"id": int(manifest[key]["id"])}]
-                del manifest[key]
-                self.state.update({"catalog": {"binding": self.binding(), "messages": records},
-                                   "published": {"binding": self.binding(), "messages": manifest}})
+        stored = self.state.get("published", {}) or {}
+        manifest = stored.get("messages", {}) if stored.get("binding") == self.binding() else {}
+        price_ids = [int(entry["id"]) for entry in manifest.values() if entry.get("id")]
+        catalog_ids = [int(record["id"]) for record in records if record.get("id")]
+
+        # Old versions pinned the catalog and sometimes reused the first price slot.
+        # Recreate such records once so the custom intro remains the only pin and
+        # the catalog becomes physically the last managed message.
+        must_rebuild = bool(records) and (
+            any(record.get("pinned") for record in records)
+            or (price_ids and catalog_ids and min(catalog_ids) <= max(price_ids))
+        )
+        if must_rebuild:
+            for record in list(records):
+                try:
+                    await self._delete(record["id"])
+                except RuntimeError as exc:
+                    if "message to delete not found" not in str(exc).lower():
+                        raise
+            records = []
+            self.save_catalog(records)
+
         for index in range(count):
             if index >= len(records) or not records[index].get("hash"):
                 await self._catalog_entry(records, index, CATALOG_TEXT + "\n\nОбновляю разделы…", [])
@@ -143,9 +146,11 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         async with self.layout_lock:
             await self.ensure_target()
             await self._ensure_first_message()
+            # First publish/reorder every price page. Only then create or move the
+            # navigation catalog, otherwise Telegram places it before later posts.
+            changes = await super().publish(pages)
             count = max(1, (len({key.rsplit(":", 1)[0] for key in pages}) + 79) // 80)
             records = await self._prepare_catalog(count)
-            changes = await super().publish(pages)
             changes += await self._update_catalog(pages, records)
             return changes
 

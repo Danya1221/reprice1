@@ -41,8 +41,8 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_links_and_physical_post_order_follow_new_order(self):
         await self.publisher.publish(self.pages())
         before = {entry["id"] for entry in self.state.get("published")["messages"].values()}
-        first = self.state.get("catalog")["messages"][0]["id"]
-        self.assertLess(first, min(before))
+        catalog_id = self.state.get("catalog")["messages"][0]["id"]
+        self.assertGreater(catalog_id, max(before))
         self.publisher.calls.clear()
         await self.publisher.publish(self.pages(["Dyson", "AirPods", "iPhone 17"]))
         manifest = self.state.get("published")["messages"]
@@ -57,15 +57,17 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         await self.publisher.publish(self.pages(["Dyson", "AirPods", "iPhone 17"]))
         self.assertEqual(self.publisher.calls, [])
 
-    async def test_existing_first_price_becomes_catalog_without_losing_products(self):
+    async def test_existing_price_slots_stay_prices_and_catalog_is_last(self):
         await self.publisher.ensure_target()
         self.state.set("published", {"binding": self.publisher.binding(), "messages": {
             "old:0": {"id": 20, "content": "old"}, "old:1": {"id": 21, "content": "old2"}}})
         await self.publisher.publish(self.pages())
-        self.assertEqual(self.state.get("catalog")["messages"][0]["id"], 20)
         entries = self.state.get("published")["messages"].values()
         self.assertEqual(len(entries), 3)
-        self.assertNotIn(20, [entry["id"] for entry in entries])
+        price_ids = [entry["id"] for entry in entries]
+        self.assertIn(20, price_ids)
+        self.assertIn(21, price_ids)
+        self.assertGreater(self.state.get("catalog")["messages"][0]["id"], max(price_ids))
 
     async def test_pagination_keeps_all_catalog_sections(self):
         pages = {f"block{i}:0": f"<b>— Device {i} —</b>\n\n<code>Device {i} — 1000</code>" for i in range(91)}
@@ -77,26 +79,39 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(b["text"].startswith("Device") for b in buttons), 91)
         self.assertTrue(all(len(row) <= 2 for edit in edits for row in edit["reply_markup"]["inline_keyboard"]))
 
-    async def test_pin_failure_keeps_catalog_id_and_does_not_duplicate(self):
-        real = self.publisher.api
-        async def denied(method, **kwargs):
-            if method == "pinChatMessage":
-                raise RuntimeError("CHAT_ADMIN_REQUIRED")
-            return await real(method, **kwargs)
-        self.publisher.api = denied
+    async def test_catalog_is_never_pinned(self):
         await self.publisher.publish(self.pages())
-        ident = self.state.get("catalog")["messages"][0]["id"]
-        self.publisher.calls.clear()
-        await self.publisher.publish(self.pages())
-        self.assertEqual(ident, self.state.get("catalog")["messages"][0]["id"])
-        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+        self.assertFalse(any(method == "pinChatMessage" for method, _ in self.publisher.calls))
+        record = self.state.get("catalog")["messages"][0]
+        self.assertNotIn("pinned", record)
 
-    async def test_custom_intro_stays_before_catalog_and_is_unchanged(self):
+    async def test_custom_intro_is_only_pin_and_catalog_is_last(self):
         await self.publisher.set_first_message("Гарантия и выдача")
         first = self.state.get("first_message")["id"]
         await self.publisher.publish(self.pages())
-        self.assertLess(first, self.state.get("catalog")["messages"][0]["id"])
+        price_ids = [entry["id"] for entry in self.state.get("published")["messages"].values()]
+        catalog_id = self.state.get("catalog")["messages"][0]["id"]
+        self.assertLess(first, min(price_ids))
+        self.assertGreater(catalog_id, max(price_ids))
+        pins = [payload["message_id"] for method, payload in self.publisher.calls if method == "pinChatMessage"]
+        self.assertEqual(pins, [first])
         self.assertEqual(self.state.get("first_message_text"), "Гарантия и выдача")
+
+    async def test_old_pinned_catalog_is_rebuilt_last(self):
+        await self.publisher.publish(self.pages())
+        record = self.state.get("catalog")["messages"][0]
+        old_id = record["id"]
+        record["pinned"] = True
+        self.state.set("catalog", {"binding": self.publisher.binding(), "messages": [record]})
+        self.publisher.calls.clear()
+        await self.publisher.publish(self.pages())
+        new_id = self.state.get("catalog")["messages"][0]["id"]
+        price_ids = [entry["id"] for entry in self.state.get("published")["messages"].values()]
+        self.assertNotEqual(old_id, new_id)
+        self.assertGreater(new_id, max(price_ids))
+        self.assertTrue(any(method == "deleteMessage" and payload.get("message_id") == old_id
+                            for method, payload in self.publisher.calls))
+        self.assertFalse(any(method == "pinChatMessage" for method, _ in self.publisher.calls))
 
     async def test_restart_keeps_order_ids_and_catalog_without_resending(self):
         await self.publisher.publish(self.pages(["Dyson"]))
@@ -181,6 +196,18 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.task
         self.assertEqual(self.options["block_order"], ["Dyson", "iPhone 17"])
         self.service.refresh_format.assert_awaited_once()
+
+    async def test_order_screen_includes_blocks_from_all_raw_supplier_caches(self):
+        raw = parse_documents(["Samsung Galaxy S26 12/256 Black — 70000\nVivo V70 12/256 Grey — 46300\nOura Ring 4 Silver — 35000"]).items
+        self.state.set("sources", {"extra": {"items": [item.to_dict() for item in raw]}})
+        await self.controller.show_order(42, 42, 0)
+        text = self.controller.send.await_args.args[1]
+        keyboard = self.controller.send.await_args.args[2]["inline_keyboard"]
+        labels = [button["text"] for row in keyboard for button in row]
+        self.assertIn("Samsung", " ".join(labels))
+        self.assertIn("Vivo", " ".join(labels))
+        self.assertIn("Oura Ring", " ".join(labels))
+        self.assertIn("всего 5", text)
 
     async def test_unknown_user_and_group_cannot_change_order_or_selection(self):
         for callback in [self.callback("catalog:all", user=99), self.callback("order:apply", kind="supergroup")]:

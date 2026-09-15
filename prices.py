@@ -512,6 +512,5 @@ def render_blocks(items, settings, overrides=None, closed=False):
                 chunks.append(chunk)
         for index, chunk in enumerate(chunks):
             key = hashlib.sha256(block.encode()).hexdigest()[:16] + ":" + str(index)
-            part = f"\nЧасть {index + 1}" if index else ""
-            pages[key] = header + part + "\n\n" + "\n".join(chunk)
+            pages[key] = header + "\n\n" + "\n".join(chunk)
     return pages

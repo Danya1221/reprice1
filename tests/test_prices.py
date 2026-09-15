@@ -165,6 +165,13 @@ iPhone 17 256 Blue 🇮🇳 — 62000""").items
         self.assertTrue(all(units(p) <= 4096 for p in pages.values()))
         self.assertEqual(sum(p.count("<code>") for p in pages.values()), 220)
 
+    def test_split_pages_have_no_part_labels(self):
+        items = [Item(f"iPhone 17 256GB Black {i} 🇺🇸", Decimal(60000), "RUB", "iPhone 17", "esim")
+                 for i in range(220)]
+        pages = render_blocks(items, Settings())
+        self.assertGreater(len(pages), 1)
+        self.assertTrue(all("Часть " not in page for page in pages.values()))
+
     def test_closure_and_block_filter(self):
         self.assertTrue(self.parse("В данный момент мы закрыты. Ждём завтра").closed)
         items = self.parse("iPhone 17 256 Black — 60000\nDyson HS08 — 40000").items
