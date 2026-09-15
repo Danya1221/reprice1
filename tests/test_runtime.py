@@ -17,7 +17,9 @@ from state import StateStore
 class HoursTests(unittest.TestCase):
     def test_moscow_start_has_no_fixed_close(self):
         settings = Settings()
-        for hour, expected in [(6, False), (7, True), (16, True), (17, True), (23, True)]:
+        # UTC -> Moscow (+3): 06=09 (before start), 07=10 (start),
+        # 16=19 and 17=20 stay open; 23=02 next day is before the next start.
+        for hour, expected in [(6, False), (7, True), (16, True), (17, True), (23, False)]:
             now = datetime(2026, 9, 14, hour, tzinfo=timezone.utc)
             self.assertEqual(is_open(settings, now), expected)
 
