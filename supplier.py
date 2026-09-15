@@ -3,13 +3,14 @@ import asyncio
 import io
 import re
 import time
+from collections import deque
 from contextlib import suppress
 
 from telethon import events, functions, utils
 from telethon.errors import BotResponseTimeoutError
 from telethon.tl import types
 
-from prices import CLOSED, parse_documents, clean
+from prices import CLOSED, parse_documents, clean, brand_of, ACCESSORY
 
 
 class SupplierTimeout(RuntimeError):
@@ -33,6 +34,35 @@ def find_button(message, wanted):
             if button_label(button.text or "") == wanted:
                 return button
     return None
+
+
+def table_text(rows):
+    """Use a named retail-price column even if stock/SKU columns follow it."""
+    lines = []
+    price_column = None
+    name_columns = None
+    for row in rows:
+        cells = [str(cell).strip() if cell is not None else "" for cell in row]
+        labels = [clean(cell).casefold() for cell in cells]
+        price_candidates = [index for index, cell in enumerate(labels)
+                            if re.fullmatch(r"(?:цена(?: розничная)?|розница|retail(?: price)?|price|от 1 шт)[., ₽$€а-яa-z]*", cell)]
+        names = [index for index, cell in enumerate(labels)
+                 if re.search(r"наименован|название|товар|модель|product|title|name|бренд|brand|цвет|color|память|memory|sim|регион|страна|состояние", cell)]
+        if price_candidates and names:
+            price_column = next((index for index in price_candidates if re.search(r"розни|retail|от 1", labels[index])), price_candidates[0])
+            name_columns = names
+            continue
+        if price_column is not None and price_column < len(cells):
+            title = " ".join(cells[index] for index in name_columns if index < len(cells) and cells[index])
+            if title and cells[price_column]:
+                lines.append(title + " — " + cells[price_column])
+            elif title:
+                lines.append(title)
+        elif any(cells):
+            lines.append(" ".join(cell for cell in cells if cell))
+        if len(lines) > 30000:
+            raise RuntimeError("В таблице больше 30000 строк")
+    return "\n".join(lines)
 
 
 def _username(value):
@@ -239,6 +269,13 @@ class SupplierReader:
                     if message.id > max_id or message.id in baseline:
                         accept(message)
                 if collected and changed_at is not None and time.monotonic() - changed_at >= s.quiet_seconds:
+                    # Fetch the entire fresh range, including replies beyond the
+                    # history window if event delivery lagged behind the supplier.
+                    recent = await self.client.get_messages(self.entity, min_id=max_id, limit=None)
+                    for message in recent:
+                        accept(message)
+                    if time.monotonic() - changed_at < s.quiet_seconds:
+                        continue
                     return [collected[k] for k in sorted(collected)]
                 await asyncio.sleep(s.action_delay)
             if collected:
@@ -259,6 +296,11 @@ class SupplierReader:
             latest = next((m for m in messages if (m.raw_text or "").strip() or m.document), None)
             if latest and self.is_closed_text(latest.raw_text):
                 return [latest]
+            # Static supplier channels may contain more than 300 live price posts.
+            # Unlike the action snapshot, this read must cover the full configured feed.
+            if len(messages) >= self.settings.history_limit:
+                messages = list(await self.client.get_messages(
+                    self.entity, limit=self.settings.feed_history_limit or None))
             return list(reversed(messages))
         if not self.source.request:
             raise ValueError("Для SOURCE_MODE=bot нужен REQUEST_TEXT")
@@ -275,6 +317,51 @@ class SupplierReader:
                 raise RuntimeError(f"Кнопка «{wanted}» не является текстовой или callback-кнопкой")
             messages = await self.collect_action(button.click)
         return messages
+
+    async def expand_catalog(self, messages):
+        """Read linked price posts and read-only category/pagination buttons."""
+        queue = deque(messages)
+        result = []
+        visited = set()
+        resolved = {}
+        while queue:
+            message = queue.popleft()
+            result.append(message)
+            for row in message.buttons or []:
+                for button in row:
+                    raw = button.button
+                    label = button_label(button.text)
+                    url = getattr(raw, "url", "") or ""
+                    link = re.fullmatch(r"https?://(?:t|telegram)\.me/(?:(c)/(\d+)|([A-Za-z0-9_]+))/(\d+)(?:\?[^#]*)?", url)
+                    navigation = (brand_of(label) or ACCESSORY.search(label)
+                                  or re.fullmatch(r"(?:прайс|каталог|весь прайс|актуальный прайс|далее|следующая|впер[её]д|next|\d+)", label)
+                                  or (not label and button.text.strip() in {"→", "➡", "➡️", "▶", "▶️", ">", "»"}))
+                    if re.search(r"купить|заказ|корзин|оплат|удал|брон|резерв|buy|order|cart|pay|reserve", label):
+                        continue
+                    callback = (isinstance(raw, types.KeyboardButtonCallback) and navigation
+                                and self.source.mode == "bot" and len(label) <= 60
+                                and not re.search(r"\d{4,}|[₽$€]", button.text))
+                    if not link and not callback:
+                        continue
+                    pagination = bool(re.fullmatch(r"(?:далее|следующая|впер[её]д|next|\d+)", label) or not label)
+                    key = ("url", url) if link else ("callback", raw.data, signature(message) if pagination else None)
+                    if key in visited:
+                        continue
+                    if len(visited) >= self.settings.catalog_pages:
+                        raise RuntimeError("Каталог больше MAX_CATALOG_PAGES; увеличь лимит. Неполный прайс не опубликован")
+                    visited.add(key)
+                    if link:
+                        target = int("-100" + link[2]) if link[1] else "@" + link[3]
+                        if target not in resolved:
+                            resolved[target] = await resolve_input_peer(self.client, target, label="Раздел прайса", expected="channel")
+                        linked = await self.client.get_messages(resolved[target], ids=int(link[4]))
+                        if not linked or isinstance(linked, types.MessageEmpty):
+                            raise RuntimeError("Поставщик удалил раздел каталога: " + button.text)
+                        queue.append(linked)
+                    else:
+                        queue.extend(await self.collect_action(button.click))
+                    await asyncio.sleep(self.settings.action_delay)
+        return result
 
     async def document_text(self, message):
         document = getattr(message, "document", None)
@@ -296,15 +383,7 @@ class SupplierReader:
                     raise RuntimeError("Распакованный XLSX превышает 50 МБ")
             workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
             try:
-                lines = []
-                for sheet in workbook:
-                    for row in sheet.iter_rows(values_only=True):
-                        cells = [str(value).strip() for value in row if value is not None]
-                        if cells:
-                            lines.append(" ".join(cells))
-                        if len(lines) > 30000:
-                            raise RuntimeError("В XLSX больше 30000 строк")
-                return "\n".join(lines)
+                return "\n".join(table_text(sheet.iter_rows(values_only=True)) for sheet in workbook)
             finally:
                 workbook.close()
         text = None
@@ -319,13 +398,13 @@ class SupplierReader:
             try:
                 dialect = csv.Sniffer().sniff(text[:4096], delimiters=";,\t")
                 rows = csv.reader(io.StringIO(text), dialect)
-                text = "\n".join(" ".join(cell.strip() for cell in row if cell.strip()) for row in rows)
+                text = table_text(rows)
             except csv.Error:
                 pass
         return text
 
     async def fetch(self):
-        messages = await self.messages()
+        messages = await self.expand_catalog(await self.messages())
         documents = []
         for message in messages:
             if message.raw_text:

@@ -92,6 +92,8 @@ class Settings:
     response_timeout: float = 45.0
     quiet_seconds: float = 3.0
     history_limit: int = 300
+    feed_history_limit: int = 0
+    catalog_pages: int = 200
     header: str = "📦 АКТУАЛЬНЫЙ ПРАЙС"
     state_file: str = "state.json"
     markup: Decimal = Decimal("0")
@@ -145,6 +147,8 @@ class Settings:
             response_timeout=env_float("RESPONSE_TIMEOUT", 45),
             quiet_seconds=env_float("PRICE_SETTLE_SECONDS", 3, aliases=("SUPPLIER_QUIET_SECONDS",)),
             history_limit=env_int("HISTORY_LIMIT", 300, 10, 3000),
+            feed_history_limit=env_int("FEED_HISTORY_LIMIT", 0, 0, 1000000),
+            catalog_pages=env_int("MAX_CATALOG_PAGES", 200, 1, 1000),
             header=os.getenv("PRICE_HEADER", "📦 АКТУАЛЬНЫЙ ПРАЙС").strip() or "📦 АКТУАЛЬНЫЙ ПРАЙС",
             state_file=os.getenv("STATE_FILE", str(Path(root) / "state.json") if root else "state.json").strip(),
             markup=decimal_value(os.getenv("MARKUP", "0")),
@@ -177,8 +181,8 @@ class Settings:
             raise ValueError("ADMIN_IDS: нужны положительные ID пользователей, а не ID группы")
         if self.markup_percent <= -100:
             raise ValueError("MARKUP_PERCENT должен быть больше -100")
-        if self.sim_filter not in {"all", "sim", "esim", "dual", "unknown"}:
-            raise ValueError("SIM_FILTER: all, sim, esim, dual или unknown")
+        if self.sim_filter not in {"all", "sim", "esim", "hybrid", "dual", "unknown"}:
+            raise ValueError("SIM_FILTER: all, sim, esim, hybrid, dual или unknown")
         if self.currency not in {"RUB", "USD", "EUR"}:
             raise ValueError("PRICE_CURRENCY: RUB, USD или EUR")
         if self.response_timeout <= self.quiet_seconds:

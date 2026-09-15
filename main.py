@@ -7,8 +7,8 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from config import Settings
-from control_first import FirstMessageController as BotAPIController
-from first_message_publisher import PinnedBotAPIPublisher
+from control_catalog import CatalogController as BotAPIController
+from catalog_publisher import CatalogPublisher as PinnedBotAPIPublisher
 from runtime import SyncService
 from state import StateStore
 
@@ -22,7 +22,11 @@ async def prepare_supplier(service, settings, controller=None):
     checked independently from the place where the finished price is published.
     A bad TARGET_CHANNEL must never make supplier reading appear unavailable.
     """
-    settings.validate()
+    settings.validate(require_sync=False)
+    if not settings.session:
+        raise ValueError("Сессия не подключена; выполни /login в управляющем боте")
+    if not settings.sources:
+        raise ValueError("Укажи SUPPLIER_BOT для чтения прайса")
     try:
         session = StringSession(settings.session)
     except Exception:

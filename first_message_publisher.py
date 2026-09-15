@@ -91,11 +91,6 @@ class PinnedBotAPIPublisher(BotAPIPublisher):
                     pinned = True
                 except RuntimeError as exc:
                     pin_error = str(exc)
-                    if strict_pin:
-                        raise RuntimeError(
-                            "Первое сообщение отправлено, но не закрепилось. "
-                            "Дай управляющему боту право закреплять сообщения. " + pin_error
-                        ) from exc
 
             self.state.set("first_message", {
                 "binding": binding,
@@ -106,6 +101,9 @@ class PinnedBotAPIPublisher(BotAPIPublisher):
                 "pinned": pinned,
                 "pin_error": pin_error,
             })
+            if strict_pin and pin_error:
+                raise RuntimeError("Первое сообщение отправлено, но не закрепилось. "
+                                   "Дай управляющему боту право закреплять сообщения. " + pin_error)
             return changes
 
     async def _clear_managed_price_posts(self):
@@ -116,14 +114,16 @@ class PinnedBotAPIPublisher(BotAPIPublisher):
             stored = self.state.get("published", {}) or {}
             manifest = stored.get("messages", {}) if stored.get("binding") == binding else {}
             deleted = 0
-            for entry in list(manifest.values()):
+            for key, entry in list(manifest.items()):
                 try:
                     await self._delete(entry["id"])
                     deleted += 1
                     await asyncio.sleep(max(0, self.settings.send_delay))
-                except RuntimeError:
-                    pass
-            self.state.set("published", {"binding": binding, "messages": {}})
+                except RuntimeError as exc:
+                    if "message to delete not found" not in str(exc).lower():
+                        raise
+                del manifest[key]
+                self.state.set("published", {"binding": binding, "messages": manifest})
             return deleted
 
     async def set_first_message(self, text):

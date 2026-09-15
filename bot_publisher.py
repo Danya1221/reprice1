@@ -270,10 +270,12 @@ class BotAPIPublisher:
         pages = {}
         for key, entry in manifest.items():
             old = entry.get("content") or html.escape(self.settings.header)
-            sections = old.split("\n\n", 2)
-            heading = "\n\n".join(sections[:2]) if len(sections) >= 2 else html.escape(self.settings.header)
+            heading = old.split("\n\n", 1)[0]
             pages[key] = heading + "\n\nПродажи закрыты"
         return await self.publish(pages)
+
+    def arrange_manifest(self, pages, manifest):
+        return manifest
 
     async def publish(self, pages):
         async with self.lock:
@@ -281,6 +283,8 @@ class BotAPIPublisher:
             binding = self.binding()
             stored = self.state.get("published", {})
             manifest = stored.get("messages", {}) if stored.get("binding") == binding else {}
+            manifest = self.arrange_manifest(pages, manifest)
+            self.state.set("published", {"binding": binding, "messages": manifest})
             changes = 0
 
             for key, content in pages.items():
@@ -343,10 +347,9 @@ class BotAPIPublisher:
                 try:
                     await self._delete(manifest[key]["id"])
                     deleted = True
-                except RuntimeError:
-                    # An already removed message must not break cleanup of the
-                    # publisher manifest.
-                    pass
+                except RuntimeError as exc:
+                    if "message to delete not found" not in str(exc).lower():
+                        raise
                 del manifest[key]
                 self.state.set("published", {"binding": binding, "messages": manifest})
                 changes += 1

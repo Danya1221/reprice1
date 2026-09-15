@@ -16,7 +16,7 @@ UNAVAILABLE = re.compile(r"нет\s+в\s+наличии|нет\s+на\s+скла
 WHOLESALE = re.compile(r"\b(?:от|from)\s*\d+\s*(?:шт|штук|pcs)\b", re.I)
 PRICE = re.compile(
     r"(?P<prefix>[$€₽])?\s*"
-    r"(?P<amount>(?:\d{1,3}(?:[ ,.]\d{3})+|\d{3,7})(?:[.,]\d{1,2})?)"
+    r"(?P<amount>(?:\d{1,3}(?:[ ,.]\d{3})+|\d{1,7})(?:[.,]\d{1,2})?)"
     r"\s*(?P<currency>₽|руб\.?|р\.|RUB|USD|\$|EUR|€)?"
     r"\s*(?P<flags>(?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)[✅🔥‼️!]*$",
     re.I,
@@ -50,6 +50,18 @@ BRANDS = (
     ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b"),
     ("Huawei", r"\bhuawei\b"),
     ("Honor", r"\bhonor\b"),
+    ("Realme", r"\brealme\b|реалми"),
+    ("Tecno", r"\btecno\b|текно"),
+    ("Infinix", r"\binfinix\b"),
+    ("OnePlus", r"\bone\s*plus\b"),
+    ("OPPO", r"\boppo\b"),
+    ("Vivo", r"\bvivo\b|\biqoo\b"),
+    ("Nothing", r"\bnothing\b|\bcmf\b"),
+    ("Nubia", r"\bnubia\b|red\s*magic"),
+    ("Garmin", r"\bgarmin\b"),
+    ("GoPro", r"\bgopro\b"),
+    ("Marshall", r"\bmarshall\b"),
+    ("Anker", r"\banker\b|\bsoundcore\b"),
     ("JBL", r"\bjbl\b"),
     ("Nintendo", r"\bnintendo\b|\bswitch\b"),
     ("PlayStation", r"playstation|\bps5\b"),
@@ -65,7 +77,7 @@ SIM_LABELS = {
 # Unlabelled items precede named SIM sections so they cannot appear under a
 # misleading eSIM / physical SIM heading.
 SIM_ORDER = {"unknown": -1, "hybrid": 0, "dual": 1, "esim": 2, "sim": 3}
-CONDITION_LABELS = {"inactive": "Неактив", "active": "Актив", "unknown": "Статус не указан"}
+CONDITION_LABELS = {"inactive": "Не активированное", "active": "Актив", "unknown": "Не активированное"}
 CONDITION_ORDER = {"inactive": 0, "active": 1, "unknown": 2}
 
 # Apple: iPhone 17-family devices bought in these markets are eSIM-only.
@@ -100,7 +112,7 @@ def amount_value(value):
 
 def split_price(line, default_currency):
     original = strip_decoration(line)
-    if UNAVAILABLE.search(original):
+    if UNAVAILABLE.search(original) or IPHONE.fullmatch(original):
         return None
     wholesale = WHOLESALE.search(original)
     if wholesale:
@@ -187,6 +199,28 @@ def brand_of(text):
     return ""
 
 
+def product_block(title):
+    for label in ("AirPods", "Apple Watch", "iPad", "MacBook", "iMac", "Mac mini", "Mac Studio", "Apple TV", "AirTag"):
+        if re.search(r"\b" + re.escape(label) + r"\b", title, re.I):
+            return label
+    return brand_of(title)
+
+
+def ordered_blocks(blocks, preferred=()):
+    defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook", "Apple", "Ray-Ban Meta",
+                "Samsung", "Honor", "Realme", "Huawei", "Tecno", "Xiaomi", "Google", "Dyson",
+                "CPO", "ASIS", "Аксессуары", "Товары"]
+    def order_key(name):
+        if name in preferred:
+            return (-1, preferred.index(name), (), "")
+        model = iphone_model(name)
+        family = "iPhone" if model else name
+        rank = defaults.index(family) if family in defaults else len(defaults) - 4
+        number = re.search(r"\d+", model)
+        return (rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name.casefold())), name)
+    return sorted(set(blocks), key=order_key)
+
+
 def normal_title(title, context=""):
     title = strip_decoration(title)
     title = re.sub(r"\bSM-[A-Za-z0-9/]+\b", "", title, flags=re.I)
@@ -262,6 +296,34 @@ class ParseResult:
     closed: bool = False
 
 
+def price_lines(documents):
+    """Join product titles with a following retail price, including across messages."""
+    pending = None
+    for document in documents:
+        for raw in document.splitlines():
+            line = strip_decoration(raw)
+            if not line:
+                continue
+            tier = WHOLESALE.search(line)
+            if tier and not FLAGS.sub("", line[:tier.start()]).strip():
+                if not re.search(r"\b(?:от|from)\s*1\s", tier[0], re.I):
+                    continue
+                line = line[:tier.start()] + line[tier.end():]
+            else:
+                line = re.sub(r"\b(?:от|from)\s*1\s*(?:шт|штук|pcs)\b", "", line, flags=re.I)
+            candidate = FLAGS.sub("", line).strip(" —-–=:•")
+            if pending and PRICE.fullmatch(candidate) and not UNAVAILABLE.search(line):
+                flags = " ".join(FLAGS.findall(line))
+                yield pending + (" " + flags if flags and flags not in pending else "") + " — " + candidate
+                pending = None
+            else:
+                if pending is not None:
+                    yield pending
+                pending = line
+    if pending is not None:
+        yield pending
+
+
 def parse_documents(documents, default_currency="RUB"):
     items = OrderedDict()
     rejected = []
@@ -269,53 +331,49 @@ def parse_documents(documents, default_currency="RUB"):
     section = ""
     section_sim = "unknown"
     closed = False
-    for document in documents:
-        for raw_line in document.splitlines():
-            line = strip_decoration(raw_line)
-            if not line:
-                continue
-            if CLOSED.search(line):
-                closed = True
-                continue
-            price = split_price(line, default_currency)
-            if price is None:
-                model = iphone_model(line)
-                brand = brand_of(line)
-                special = special_block(line)
-                is_header = len(line) <= 80 and not re.search(r"https?://|@\w+|[-—=]\s*\d{3}", line)
-                if is_header and (model or brand or ACCESSORY.search(line) or special):
-                    context = model or (brand if brand != "Apple" else line.strip(":"))
-                    if ACCESSORY.search(line):
-                        section = "Аксессуары"
-                    elif special:
-                        section = special
-                    else:
-                        section = model or brand
-                    section_sim = sim_type(line)
-                elif is_header and re.fullmatch(r"(?:2\s*)?(?:e[\s-]?)?sim(?:\s*[+/]\s*(?:e[\s-]?)?sim)?", line, re.I):
-                    section_sim = sim_type(line)
-                elif re.search(r"\d", line) and not re.search(r"https?://|@\w+|^\+?\d[\d ()-]{8,}$", line):
-                    rejected.append(line)
-                continue
-            title, amount, currency = price
-            title = normal_title(title, context)
-            own_brand = brand_of(title)
-            accessory = bool(ACCESSORY.search(title)) or (section == "Аксессуары" and not own_brand)
-            model = iphone_model(title)
-            special = special_block(title)
-            if not special and section in {"ASIS", "CPO"}:
-                special = section
-            block = "Аксессуары" if accessory else (special or model or own_brand or section)
-            if not block:
+    for raw_line in price_lines(documents):
+        line = strip_decoration(raw_line)
+        if not line:
+            continue
+        if CLOSED.search(line):
+            closed = True
+            continue
+        price = split_price(line, default_currency)
+        if price is None:
+            model = iphone_model(line)
+            brand = product_block(line)
+            special = special_block(line)
+            is_header = len(line) <= 80 and not re.search(r"https?://|@\w+|[-—=]\s*\d{3}", line)
+            if is_header and (model or brand or ACCESSORY.search(line) or special):
+                context = model or (brand if brand != "Apple" else line.strip(":"))
+                if ACCESSORY.search(line):
+                    section = "Аксессуары"
+                elif special:
+                    section = special
+                else:
+                    section = model or brand
+                section_sim = sim_type(line)
+            elif is_header and re.fullmatch(r"(?:2\s*)?(?:e[\s-]?)?sim(?:\s*[+/]\s*(?:e[\s-]?)?sim)?", line, re.I):
+                section_sim = sim_type(line)
+            elif re.search(r"\d", line) and not re.search(r"https?://|@\w+|^\+?\d[\d ()-]{8,}$", line):
                 rejected.append(line)
-                continue
-            sim = sim_type(title)
-            if sim == "unknown":
-                sim = section_sim if model else "unknown"
-            if model:
-                sim = infer_iphone17_sim(title, model, sim)
-            item = Item(title, amount, currency, block, sim, accessory)
-            items[item.key] = item
+            continue
+        title, amount, currency = price
+        title = normal_title(title, context)
+        own_brand = product_block(title)
+        accessory = bool(ACCESSORY.search(title)) or (section == "Аксессуары" and not own_brand)
+        model = iphone_model(title)
+        special = special_block(title)
+        if not special and section in {"ASIS", "CPO"}:
+            special = section
+        block = "Аксессуары" if accessory else (special or model or own_brand or section or "Товары")
+        sim = sim_type(title)
+        if sim == "unknown":
+            sim = section_sim if model else "unknown"
+        if model:
+            sim = infer_iphone17_sim(title, model, sim)
+        item = Item(title, amount, currency, block, sim, accessory)
+        items[item.key] = item
     return ParseResult(list(items.values()), rejected, closed and not items)
 
 
@@ -327,19 +385,24 @@ def select_items(items, settings, overrides=None):
     overrides = overrides or {}
     sim_filter = overrides.get("sim_filter", settings.sim_filter)
     disabled = set(overrides.get("disabled_blocks", []))
+    include_blocks = overrides.get("include_blocks", settings.include_blocks)
+    exclude_blocks = overrides.get("exclude_blocks", settings.exclude_blocks)
+    include_items = overrides.get("include_items", settings.include_items)
+    exclude_items = overrides.get("exclude_items", settings.exclude_items)
+    allow_accessories = overrides.get("allow_accessories", settings.allow_accessories)
     result = []
     for item in items:
         if item.block in disabled:
             continue
-        if settings.include_blocks and not matches_any(item.block, settings.include_blocks):
+        if include_blocks and not matches_any(item.block, include_blocks):
             continue
-        if matches_any(item.block, settings.exclude_blocks):
+        if matches_any(item.block, exclude_blocks):
             continue
-        if settings.include_items and not matches_any(item.title, settings.include_items):
+        if include_items and not matches_any(item.title, include_items):
             continue
-        if matches_any(item.title, settings.exclude_items):
+        if matches_any(item.title, exclude_items):
             continue
-        if item.accessory and not settings.allow_accessories:
+        if item.accessory and not allow_accessories:
             continue
         if iphone_model(item.title) and sim_filter != "all":
             if sim_filter == "sim" and item.sim not in {"sim", "dual", "hybrid"}:
@@ -406,7 +469,7 @@ def render_blocks(items, settings, overrides=None, closed=False):
     for item in items:
         groups.setdefault(item.block, []).append(item)
     order = overrides.get("block_order", [])
-    names = sorted(groups, key=lambda x: (order.index(x) if x in order else len(order), x.casefold()))
+    names = ordered_blocks(groups, order)
     pages = OrderedDict()
     for block in names:
         header = "<b>— " + html.escape(block) + " —</b>"
@@ -414,14 +477,17 @@ def render_blocks(items, settings, overrides=None, closed=False):
             chunks = [["Продажи закрыты"]]
         else:
             block_items = groups[block]
-            has_activation = any(activation_state(item.title) != "unknown" for item in block_items)
+            has_activation = any(activation_state(item.title) != "unknown" or iphone_model(item.title) for item in block_items)
+            def condition(item):
+                value = activation_state(item.title)
+                return "inactive" if value == "unknown" else value
             lines = []
             statuses = sorted(
-                {activation_state(item.title) for item in block_items},
+                {condition(item) for item in block_items},
                 key=lambda status: CONDITION_ORDER[status],
             )
             for status in statuses:
-                status_items = [item for item in block_items if activation_state(item.title) == status]
+                status_items = [item for item in block_items if condition(item) == status]
                 if has_activation:
                     lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
                 last_sim = None

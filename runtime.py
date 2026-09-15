@@ -145,7 +145,7 @@ class SyncService:
                 for reader in self.readers:
                     key = self.source_key(reader)
                     try:
-                        budget = self.settings.response_timeout * (len(reader.source.buttons) + 1) * 2 + 120
+                        budget = self.settings.response_timeout * (len(reader.source.buttons) + self.settings.catalog_pages + 1) * 2 + 120
                         result = await asyncio.wait_for(reader.fetch(), timeout=budget)
                         previous = cache.get(key, {})
                         status = "closed" if result.closed else "open"
@@ -258,7 +258,8 @@ class SyncService:
         for reader in self.readers:
             source = cache.get(self.source_key(reader), {})
             status = "ошибка чтения" if source.get("error") else {"open": "открыт", "closed": "закрыт"}.get(source.get("status"), "неизвестно")
-            lines.append(f"{reader.source.label}: {status}; не распознано строк: {source.get('rejected_count', 0)}")
+            lines.append(f"{reader.source.label}: {status}; получено позиций: {len(source.get('items', []))}; не распознано строк: {source.get('rejected_count', 0)}")
+        lines.append(f"Опубликовано позиций: {self.state.get('published_items', 0)}")
         return "\n".join(lines)
 
     async def run(self):

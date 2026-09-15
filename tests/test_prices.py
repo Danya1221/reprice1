@@ -103,11 +103,11 @@ iPhone 17 256 Black 🇮🇳 — 60000""").items
 iPhone 17 256 White Неактив 🇮🇳 — 61000
 iPhone 17 256 Blue 🇮🇳 — 62000""").items
         content = next(iter(render_blocks(items, Settings()).values()))
-        self.assertIn("— Неактив —", content)
+        self.assertIn("— Не активированное —", content)
         self.assertIn("— Актив —", content)
-        self.assertIn("— Статус не указан —", content)
-        self.assertLess(content.index("— Неактив —"), content.index("— Актив —"))
-        self.assertLess(content.index("— Актив —"), content.index("— Статус не указан —"))
+        self.assertNotIn("Статус не указан", content)
+        self.assertLess(content.index("— Не активированное —"), content.index("— Актив —"))
+        self.assertLess(content.index("256 Blue"), content.index("— Актив —"))
 
     def test_accessories_filter(self):
         items = self.parse("Чехол iPhone 17 Black — 500\niPhone 17 256 Black — 60000").items
@@ -125,10 +125,10 @@ iPhone 17 256 Blue 🇮🇳 — 62000""").items
         self.assertEqual(self.parse("Прайс\nАктуальный прайс\nВыберите категорию\nОбновлён 2026").items, [])
         self.assertEqual(self.parse("iPhone 17 256 Black — 60000 ❌").items, [])
 
-    def test_unknown_lines_visible_for_review(self):
+    def test_unclassified_priced_product_is_retained(self):
         result = self.parse("Something 256GB Green — 88000")
-        self.assertFalse(result.items)
-        self.assertEqual(len(result.rejected), 1)
+        self.assertEqual(result.items[0].block, "Товары")
+        self.assertEqual(result.items[0].price, Decimal(88000))
 
     def test_currency_and_decimal_price(self):
         result = self.parse("iPhone 17 256 Black — 799.50 €\niPhone 17 256 White — $ 850")
