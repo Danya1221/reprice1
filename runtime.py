@@ -18,13 +18,37 @@ class LoginRequired(RuntimeError):
 
 
 def is_open(settings, now=None):
+    """Whether the normal 10:00 publishing threshold has been reached today.
+
+    There is deliberately no fixed evening close here: the public price closes
+    when every configured supplier explicitly reports closed. Before OPEN_HOUR,
+    both/all configured suppliers may still open the price early.
+    """
     if not settings.off_hours:
         return True
     now = now or datetime.now(timezone.utc)
     hour = now.astimezone(ZoneInfo(settings.timezone)).hour
-    if settings.open_hour < settings.close_hour:
-        return settings.open_hour <= hour < settings.close_hour
-    return hour >= settings.open_hour or hour < settings.close_hour
+    return hour >= settings.open_hour
+
+
+def publication_state(settings, statuses, now=None):
+    """Return open/closed/unknown from time gate plus supplier states.
+
+    Rules:
+    - all suppliers closed -> closed;
+    - before OPEN_HOUR -> open only when every supplier is confirmed open;
+    - from OPEN_HOUR -> one confirmed open supplier is enough;
+    - after OPEN_HOUR with no open source and at least one error -> unknown,
+      so the last publication is preserved rather than falsely closed.
+    """
+    statuses = tuple(statuses)
+    if not statuses:
+        return "unknown"
+    if all(status == "closed" for status in statuses):
+        return "closed"
+    if is_open(settings, now):
+        return "open" if any(status == "open" for status in statuses) else "unknown"
+    return "open" if all(status == "open" for status in statuses) else "closed"
 
 
 def timestamp():
@@ -88,6 +112,9 @@ class SyncService:
         groups = []
         for reader in self.readers:
             source = cache.get(self.source_key(reader), {})
+            # Never publish stale prices from a source that failed this refresh.
+            if source.get("status") == "error" or source.get("error"):
+                continue
             if source.get("status") == "closed" and not include_closed:
                 continue
             groups.append([Item.from_dict(item) for item in source.get("items", [])])
@@ -96,12 +123,27 @@ class SyncService:
     async def render(self, closed=False):
         options = self.options()
         catalog = self.cached_items(include_closed=closed)
-        if closed and not catalog:
+
+        # Keep one stable message per known block. A temporarily missing brand
+        # becomes "Сейчас нет в наличии" instead of delete -> send -> delete.
+        known_blocks = set(self.state.get("known_blocks", []))
+        known_blocks.update(item.block for item in self.cached_items(include_closed=True))
+        if known_blocks != set(self.state.get("known_blocks", [])):
+            self.state.set("known_blocks", sorted(known_blocks))
+
+        if closed and not catalog and not known_blocks:
             changes = await self.publisher.hide_existing()
             self.state.update({"last_publish": timestamp(), "published_items": 0})
             return 0, changes
+
         items = select_items(catalog, self.settings, options)
-        pages = render_blocks(items, self.settings, options, closed=closed)
+        pages = render_blocks(
+            items,
+            self.settings,
+            options,
+            closed=closed,
+            stable_blocks=sorted(known_blocks),
+        )
         changes = await self.publisher.publish(pages)
         self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(items)})
         return len(items), changes
@@ -120,23 +162,23 @@ class SyncService:
                 await self.connect()
                 self.last_attempt = asyncio.get_running_loop().time()
                 self.state.set("last_check", timestamp())
-                if not is_open(self.settings):
-                    await self.render(closed=True)
-                    self.state.set("last_result", "Продажи закрыты: ночной период")
-                    return "Продажи закрыты: ночной период. Цены скрыты"
+
                 old_cache = self.state.get("sources", {})
                 cache = dict(old_cache)
                 errors_found = []
+                successful = 0
+
                 for reader in self.readers:
                     key = self.source_key(reader)
                     try:
                         budget = self.settings.response_timeout * (len(reader.source.buttons) + 1) * 2 + 120
                         result = await asyncio.wait_for(reader.fetch(), timeout=budget)
+                        successful += 1
                         previous = cache.get(key, {})
                         cache[key] = {
                             "status": "closed" if result.closed else "open",
                             "checked": timestamp(),
-                            # Retain titles on closure; prices are not rendered.
+                            # Retain titles on closure; prices are never rendered while closed.
                             "items": previous.get("items", []) if result.closed else [i.to_dict() for i in result.items],
                             "rejected": result.rejected[:200],
                             "rejected_count": len(result.rejected),
@@ -149,27 +191,47 @@ class SyncService:
                     except Exception as exc:
                         log.warning("Не удалось прочитать %s: %s", reader.source.label, type(exc).__name__)
                         old = cache.get(key, {})
-                        cache[key] = {**old, "error": f"{type(exc).__name__}: {exc}", "checked": timestamp()}
-                        errors_found.append(reader.source.label + ": " + str(exc))
-                if errors_found:
-                    # Never replace a complete publication with half a failed snapshot.
-                    # A successful source stays cached and will be used after recovery.
-                    preserved = {}
-                    for reader in self.readers:
-                        key = self.source_key(reader)
-                        preserved[key] = {
-                            **old_cache.get(key, {}),
-                            "error": cache.get(key, {}).get("error") or "Ожидается другой источник",
+                        cache[key] = {
+                            **old,
+                            "status": "error",
+                            "error": f"{type(exc).__name__}: {exc}",
                             "checked": timestamp(),
                         }
-                    self.state.set("sources", preserved)
-                    message = "Прайс сохранён; " + " | ".join(errors_found)
+                        errors_found.append(reader.source.label + ": " + str(exc))
+
+                # Persist diagnostics/cache even when a source failed.
+                self.state.set("sources", cache)
+
+                if successful == 0:
+                    message = "Прайс сохранён; все источники недоступны"
+                    if errors_found:
+                        message += ": " + " | ".join(errors_found)
                     self.state.set("last_result", message)
                     return message
-                self.state.set("sources", cache)
-                closed = all(cache[self.source_key(r)].get("status") == "closed" for r in self.readers)
+
+                statuses = [cache.get(self.source_key(reader), {}).get("status", "error")
+                            for reader in self.readers]
+                gate = publication_state(self.settings, statuses)
+
+                if gate == "unknown":
+                    # Example: one supplier says closed while the second is offline.
+                    # We cannot honestly close or replace the current publication.
+                    message = "Прайс сохранён: недостаточно данных для открытия/закрытия"
+                    if errors_found:
+                        message += "; " + " | ".join(errors_found)
+                    self.state.set("last_result", message)
+                    return message
+
+                closed = gate == "closed"
                 count, changes = await self.render(closed=closed)
-                message = "Продажи закрыты, цены скрыты" if closed else f"Прайс обновлён: {count} позиций, изменений: {changes}"
+                self.state.set("publication_closed", closed)
+
+                if closed:
+                    message = "Продажи закрыты, цены скрыты"
+                else:
+                    message = f"Прайс обновлён: {count} позиций, изменений: {changes}"
+                if errors_found:
+                    message += "; недоступны: " + " | ".join(errors_found)
                 self.state.set("last_result", message)
                 return message
             except errors.FloodWaitError as exc:
@@ -195,11 +257,16 @@ class SyncService:
         async with self.lock:
             if not self.ready:
                 raise RuntimeError(self.startup_status())
-            # Changes are applied to the last fully parsed cache without supplier commands.
+            # Changes are applied to the last parsed cache without supplier commands.
             await self.connect()
             cache = self.state.get("sources", {})
-            closed = not is_open(self.settings) or all(
-                cache.get(self.source_key(r), {}).get("status") == "closed" for r in self.readers)
+            statuses = [cache.get(self.source_key(reader), {}).get("status", "error")
+                        for reader in self.readers]
+            gate = publication_state(self.settings, statuses)
+            if gate == "unknown":
+                closed = self.state.get("publication_closed", not is_open(self.settings))
+            else:
+                closed = gate == "closed"
             return await self.render(closed=closed)
 
     def status(self):
@@ -226,13 +293,14 @@ class SyncService:
         while not self.stop_event.is_set():
             self.wake.clear()
             now = asyncio.get_running_loop().time()
+            # is_open is only the 10:00 start threshold now. Suppliers are still
+            # polled before it so both of them can open the price early.
             window = is_open(self.settings)
             interval = self.options().get("poll_seconds", self.settings.poll_seconds)
             due = now - self.last_attempt >= interval or self.last_attempt == 0 or window != last_window
             if self.enabled() and due and now >= self.retry_after:
                 await self.sync()
                 last_window = window
-            # A short scheduler tick hides prices at closing time even with a 2h interval.
             try:
                 await asyncio.wait_for(self.wake.wait(), timeout=5)
             except asyncio.TimeoutError:
