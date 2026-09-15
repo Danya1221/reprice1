@@ -4,11 +4,10 @@ import signal
 from contextlib import suppress
 
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 
 from config import Settings
-from control import Controller
+from control_botapi import BotAPIController
 from runtime import SyncService
 from state import StateStore
 
@@ -16,16 +15,18 @@ log = logging.getLogger(__name__)
 
 
 async def prepare_supplier(service, settings, controller=None):
-    """Supplier failures must not prevent the independent control bot from answering."""
+    """Prepare the user Telegram session used only for supplier/channel access.
+
+    The control bot is deliberately NOT a Telethon bot client. It runs through
+    Telegram Bot API in control_botapi.py, so BotFather authorization FloodWaits
+    can never block this supplier session or crash the Railway service.
+    """
     settings.validate()
     try:
         session = StringSession(settings.session)
     except Exception:
         raise ValueError("SESSION_STRING повреждена; выполни /login в управляющем боте") from None
 
-    # Short Telegram flood-waits are normal right after a fresh login/redeploy.
-    # Let Telethon wait them out instead of dropping the supplier runtime and
-    # reconnecting every 30 seconds (which can create an endless GetDialogs loop).
     client = TelegramClient(
         session,
         settings.api_id,
@@ -38,24 +39,21 @@ async def prepare_supplier(service, settings, controller=None):
     )
     service.attach_client(client)
     await service.connect()
+
     me = await client.get_me()
     if me is None or me.bot:
         raise ValueError("Сессия должна принадлежать пользовательскому аккаунту, которому доступны прайсы")
     if controller is not None and not settings.admin_ids:
         controller.admins = {me.id}
 
-    # Persist an env-provided session into durable state too, so /login and
-    # Railway Variables converge on the same PostgreSQL-backed source of truth.
+    # Keep an env-provided session and /login session converged in persistent state.
     saved = client.session.save()
     if saved and service.state.get("session_string") != saved:
         service.state.set("session_string", saved)
         settings.session = saved
 
-    # Do NOT preload the entire dialog list here. get_dialogs(limit=None) was
-    # the source of repeated GetDialogsRequest FloodWait errors on Railway.
-    # Resolve the configured target directly. Numeric channel IDs may need a
-    # small one-time dialog cache warm-up because StringSession does not keep
-    # the full entity cache between fresh containers.
+    # Public @username resolves directly. Numeric channel IDs may need a small
+    # one-time dialog warm-up because StringSession does not persist entity cache.
     try:
         target = await client.get_entity(settings.target)
     except (ValueError, TypeError):
@@ -75,19 +73,20 @@ async def prepare_supplier(service, settings, controller=None):
 
 
 async def run_supplier(service, settings, controller=None, retry_seconds=30):
+    """Run supplier sync forever without taking the independent control bot down."""
     database = getattr(service.state, "database", None)
     if database is not None:
         def waiting():
             service.startup_error = "Жду завершения предыдущего Railway deployment"
             log.warning("Жду PostgreSQL runtime lock перед подключением Telegram-сессии")
+
         await asyncio.to_thread(database.acquire_runtime_lock, waiting)
         log.info("PostgreSQL runtime lock получен")
 
     while not service.stop_event.is_set():
         service.ready = False
         try:
-            # /login writes the latest session to StateStore/PostgreSQL while
-            # this task may be retrying. Reload it before every attempt.
+            # /login may replace the session while this task is retrying.
             stored = service.state.get("session_string", "")
             if stored:
                 settings.session = stored
@@ -99,8 +98,10 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
         except Exception as exc:
             service.startup_error = str(exc) or type(exc).__name__
             service.ready = False
-            log.error("Чтение прайсов недоступно: %s. Управляющий бот остаётся доступен",
-                      service.startup_error)
+            log.error(
+                "Чтение прайсов недоступно: %s. Управляющий бот остаётся доступен",
+                service.startup_error,
+            )
         finally:
             service.ready = False
             async with service.lock:
@@ -108,64 +109,11 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
                     with suppress(Exception):
                         await asyncio.wait_for(service.client.disconnect(), timeout=10)
                     service.attach_client(None)
+
         try:
             await asyncio.wait_for(service.stop_event.wait(), timeout=retry_seconds)
         except asyncio.TimeoutError:
             pass
-
-
-async def start_control_client(settings, state):
-    """Start the BotFather control bot without re-authorizing it on every Railway deploy.
-
-    A fresh Telethon StringSession makes Telegram execute ImportBotAuthorizationRequest.
-    Repeating that on each container restart triggers long FloodWaits. Keep the bot's
-    own MTProto StringSession in StateStore/PostgreSQL and, on the first authorization,
-    wait out Telegram's FloodWait inside the same process instead of crashing Railway.
-    """
-    stored = state.get("control_bot_session_string", "")
-    try:
-        session = StringSession(stored) if stored else StringSession()
-    except Exception:
-        log.warning("Сохранённая сессия управляющего бота повреждена; создаю новую")
-        state.set("control_bot_session_string", "")
-        stored = ""
-        session = StringSession()
-
-    client = TelegramClient(
-        session,
-        settings.api_id,
-        settings.api_hash,
-        auto_reconnect=True,
-        connection_retries=5,
-        retry_delay=2,
-        request_retries=3,
-        flood_sleep_threshold=0,
-    )
-
-    while True:
-        try:
-            await client.start(bot_token=settings.bot_token)
-            break
-        except FloodWaitError as exc:
-            wait_seconds = max(1, int(exc.seconds)) + 2
-            log.warning(
-                "Telegram ограничил авторизацию управляющего бота на %s сек. "
-                "Не перезапускаю контейнер; жду в текущем процессе.",
-                exc.seconds,
-            )
-            print(
-                f"⏳ Telegram FloodWait для управляющего бота: жду {wait_seconds} сек. "
-                "Не делай Redeploy до окончания ожидания.",
-                flush=True,
-            )
-            await asyncio.sleep(wait_seconds)
-
-    saved = client.session.save()
-    if isinstance(saved, str) and saved and saved != stored:
-        state.set("control_bot_session_string", saved)
-        log.info("Сессия управляющего бота сохранена в StateStore")
-
-    return client
 
 
 async def main():
@@ -177,50 +125,82 @@ async def main():
     if stored_session:
         settings.session = stored_session
 
-    control_client = None
     controller = None
+    control_task = None
     service = SyncService(None, settings, state)
+
     try:
+        # The control bot uses Telegram HTTP Bot API. This completely avoids
+        # ImportBotAuthorizationRequest and its long MTProto FloodWait.
         if settings.bot_token:
-            control_client = await start_control_client(settings, state)
-            bot = await control_client.get_me()
-            controller = Controller(control_client, service, settings.admin_ids, username=bot.username)
-            log.info("Управляющий бот @%s готов. Открой его в личных сообщениях и отправь /start",
-                     bot.username)
-            print(f"🤖 Управляющий бот @{bot.username} готов — /start должен отвечать", flush=True)
-            if state.database is not None:
-                print("💾 State, пользовательская и bot-сессии сохраняются в PostgreSQL", flush=True)
-            else:
-                print("⚠️ DATABASE_URL не задан: session хранится только в state.json", flush=True)
-            if not settings.admin_ids:
-                log.warning("ADMIN_IDS не задан: до авторизации сессии /start покажет ID. "
-                            "Для входа через /login заранее укажи ADMIN_IDS/ADMIN_ID")
+            controller = BotAPIController(settings.bot_token, service, settings.admin_ids)
+            try:
+                await controller.start()
+                control_task = asyncio.create_task(controller.run(), name="control-bot-api")
+            except Exception as exc:
+                log.exception("Управляющий бот не запущен через Bot API")
+                print(
+                    f"❌ Управляющий бот временно недоступен: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                with suppress(Exception):
+                    await controller.close()
+                controller = None
         else:
-            log.warning("BOT_TOKEN / CONTROL_BOT_TOKEN не задан: управляющий бот НЕ запущен. "
-                        "Добавь токен своего бота из BotFather в одну из этих переменных")
+            log.warning(
+                "BOT_TOKEN / CONTROL_BOT_TOKEN не задан: управляющий бот НЕ запущен. "
+                "Добавь токен своего бота из BotFather в одну из этих переменных"
+            )
             print("❌ Управляющий бот не запущен: нет BOT_TOKEN / CONTROL_BOT_TOKEN", flush=True)
+
+        if state.database is not None:
+            print("💾 State и пользовательская Telegram-сессия сохраняются в PostgreSQL", flush=True)
+        else:
+            print("⚠️ DATABASE_URL не задан: session хранится только в state.json", flush=True)
+
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError):
                 loop.add_signal_handler(sig, lambda: (service.stop_event.set(), service.wake.set()))
-        log.info("reprice1 запущен; проверка подключения к поставщику")
-        runner = asyncio.create_task(run_supplier(service, settings, controller))
-        stopper = asyncio.create_task(service.stop_event.wait())
-        try:
-            done, _ = await asyncio.wait({runner, stopper}, return_when=asyncio.FIRST_COMPLETED)
-            if runner in done:
-                await runner
-        finally:
-            runner.cancel()
-            stopper.cancel()
-            if controller:
-                await controller.close()
-            await asyncio.gather(runner, stopper, return_exceptions=True)
+
+        log.info("reprice1 запущен; проверка подключения к поставщикам")
+        supplier_task = asyncio.create_task(
+            run_supplier(service, settings, controller), name="supplier-runtime"
+        )
+        stopper = asyncio.create_task(service.stop_event.wait(), name="stopper")
+
+        watched = {supplier_task, stopper}
+        if control_task is not None:
+            watched.add(control_task)
+
+        done, _ = await asyncio.wait(watched, return_when=asyncio.FIRST_COMPLETED)
+
+        # Supplier task normally lives forever. If it exits, surface the error.
+        if supplier_task in done:
+            await supplier_task
+
+        # Bot API polling also normally lives forever. It already retries normal
+        # network/API errors internally; unexpected termination is surfaced here.
+        if control_task is not None and control_task in done:
+            await control_task
+
     finally:
-        if controller:
-            await controller.close()
-        if control_client:
-            await control_client.disconnect()
+        service.stop_event.set()
+        service.wake.set()
+
+        if control_task is not None:
+            control_task.cancel()
+            await asyncio.gather(control_task, return_exceptions=True)
+        if controller is not None:
+            with suppress(Exception):
+                await controller.close()
+
+        # Disconnect the supplier client if shutdown happened outside run_supplier.
+        if service.client is not None:
+            with suppress(Exception):
+                await service.client.disconnect()
+            service.attach_client(None)
+
         state.close()
 
 
