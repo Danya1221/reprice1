@@ -21,7 +21,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Correct migration regression expectation
-        run: python fix_compact_spacing_test.py
+        shell: bash
+        run: |
+          sed -i 's/Samsung A27/A27/g; s/Samsung S25 Ultra/S25 Ultra/g' apply_compact_catalog_spacing.py
       - name: Apply compact catalog and spacing
         run: python apply_compact_catalog_spacing.py
       - name: Install dependencies
