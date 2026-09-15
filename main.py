@@ -5,11 +5,13 @@ from contextlib import suppress
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl import types
 
 from config import Settings
 from control_botapi import BotAPIController
 from runtime import SyncService
 from state import StateStore
+from supplier import resolve_input_peer
 
 log = logging.getLogger(__name__)
 
@@ -52,18 +54,30 @@ async def prepare_supplier(service, settings, controller=None):
         service.state.set("session_string", saved)
         settings.session = saved
 
-    # Public @username resolves directly. Numeric channel IDs may need a small
-    # one-time dialog warm-up because StringSession does not persist entity cache.
-    try:
-        target = await client.get_entity(settings.target)
-    except (ValueError, TypeError):
-        await client.get_dialogs(limit=100)
-        target = await client.get_entity(settings.target)
+    # StringSession does not keep Telethon's entity cache between Railway deploys.
+    # Resolve TARGET_CHANNEL to a full InputPeer with access_hash once and give the
+    # same stable peer to Publisher. This prevents later send/edit calls from trying
+    # to rediscover a bare PeerUser/PeerChannel and failing with "input entity".
+    target_peer = await resolve_input_peer(
+        client,
+        settings.target,
+        label="TARGET_CHANNEL",
+    )
+    target = await client.get_entity(target_peer)
+    if not isinstance(target, (types.Channel, types.Chat)):
+        raise RuntimeError(
+            "TARGET_CHANNEL указывает не на канал/группу. "
+            "Укажи @username канала или его корректный -100... ID"
+        )
 
-    permissions = await client.get_permissions(target, me)
+    permissions = await client.get_permissions(target_peer, me)
     if not (permissions.is_admin or permissions.is_creator):
         raise RuntimeError("Аккаунт сессии должен быть администратором целевого канала")
 
+    service.publisher.target = target_peer
+
+    # Supplier usernames are resolved explicitly through ResolveUsernameRequest,
+    # so their access_hash never depends on a dialog cache from a previous container.
     for reader in service.readers:
         await reader.resolve()
 
@@ -175,12 +189,9 @@ async def main():
 
         done, _ = await asyncio.wait(watched, return_when=asyncio.FIRST_COMPLETED)
 
-        # Supplier task normally lives forever. If it exits, surface the error.
         if supplier_task in done:
             await supplier_task
 
-        # Bot API polling also normally lives forever. It already retries normal
-        # network/API errors internally; unexpected termination is surfaced here.
         if control_task is not None and control_task in done:
             await control_task
 
@@ -195,7 +206,6 @@ async def main():
             with suppress(Exception):
                 await controller.close()
 
-        # Disconnect the supplier client if shutdown happened outside run_supplier.
         if service.client is not None:
             with suppress(Exception):
                 await service.client.disconnect()
