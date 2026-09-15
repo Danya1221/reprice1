@@ -23,6 +23,10 @@ PRICE = re.compile(
 )
 ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|кабел[ья]|кабель|адаптер|зарядк|"
                        r"ремеш|бампер|case\b|charger\b|cable\b", re.I)
+ASIS = re.compile(r"\bAS[\s-]?IS\b|\bASIS\b|асис", re.I)
+CPO = re.compile(r"\bCPO\b", re.I)
+INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activated|не[\s-]*активирован\w*", re.I)
+ACTIVE = re.compile(r"\bактив\w*|\bactive\b|\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
 IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max\b|pro\b|"
                     r"plus\b|mini\b|air\b)?|air\b|se(?:\s*\d)?)", re.I)
 SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini))?)\s+(?=\d{2,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
@@ -47,7 +51,23 @@ BRANDS = (
     ("PlayStation", r"playstation|\bps5\b"),
     ("Xbox", r"\bxbox\b"),
 )
-SIM_LABELS = {"sim": "SIM", "esim": "eSIM", "dual": "2 SIM", "unknown": "SIM не указан"}
+SIM_LABELS = {
+    "sim": "SIM",
+    "hybrid": "SIM + eSIM",
+    "esim": "eSIM",
+    "dual": "2 SIM",
+    "unknown": "SIM не указан",
+}
+SIM_ORDER = {"hybrid": 0, "dual": 1, "esim": 2, "sim": 3, "unknown": 4}
+CONDITION_LABELS = {"inactive": "Неактив", "active": "Актив", "unknown": "Статус не указан"}
+CONDITION_ORDER = {"inactive": 0, "active": 1, "unknown": 2}
+
+# Apple: iPhone 17-family devices bought in these markets are eSIM-only.
+# This fallback is used only when the supplier did not explicitly specify SIM.
+ESIM_ONLY_17_FLAGS = {
+    "🇺🇸", "🇻🇮", "🇬🇺", "🇨🇦", "🇯🇵", "🇦🇪",
+    "🇸🇦", "🇶🇦", "🇰🇼", "🇴🇲", "🇧🇭", "🇲🇽",
+}
 
 
 def clean(text):
@@ -105,7 +125,13 @@ def split_price(line, default_currency):
 def sim_type(text):
     text = clean(text).lower()
     text = re.sub(r"\be[\s-]+sim\b", "esim", text)
-    if re.search(r"\b(?:2|dual)\s*sim\b|две\s*sim", text):
+    if re.search(
+        r"\b(?:nano\s*)?sim\s*(?:\+|/|&|and|и)\s*esim\b|"
+        r"\besim\s*(?:\+|/|&|and|и)\s*(?:nano\s*)?sim\b",
+        text,
+    ):
+        return "hybrid"
+    if re.search(r"\b(?:2|dual)\s*(?:nano\s*)?sim\b|две\s*sim|\b2x\s*sim\b", text):
         return "dual"
     if re.search(r"\besim\b|есим", text):
         return "esim"
@@ -122,6 +148,30 @@ def iphone_model(title):
     suffix = re.sub(r"\s+e\b", "e", suffix, flags=re.I)
     words = [x if re.fullmatch(r"\d+e?", x, re.I) else x.title() for x in suffix.split()]
     return "iPhone " + " ".join(words)
+
+
+def iphone17_family(model):
+    model = clean(model).casefold()
+    return model == "iphone air" or model.startswith("iphone 17")
+
+
+def infer_iphone17_sim(title, model, current="unknown"):
+    """Infer the iPhone 17 SIM layout from Apple regional rules and price flags."""
+    if current != "unknown" or not iphone17_family(model):
+        return current
+    lower_model = clean(model).casefold()
+    if lower_model == "iphone air":
+        return "esim"
+    flags = set(FLAGS.findall(title))
+    if not flags:
+        return current
+    if flags & ESIM_ONLY_17_FLAGS:
+        return "esim"
+    # Mainland-China iPhone 17 / Pro / Pro Max use two physical nano-SIMs.
+    # iPhone 17e is the exception and supports physical nano-SIM/eSIM.
+    if "🇨🇳" in flags and not lower_model.startswith("iphone 17e"):
+        return "dual"
+    return "hybrid"
 
 
 def brand_of(text):
@@ -149,6 +199,22 @@ def normal_title(title, context=""):
         if not re.search(r"ray[\s-]?ban", title, re.I):
             title = "Ray-Ban Meta " + title
     return clean(title)
+
+
+def special_block(text):
+    if ASIS.search(text):
+        return "ASIS"
+    if CPO.search(text):
+        return "CPO"
+    return ""
+
+
+def activation_state(text):
+    if INACTIVE.search(text):
+        return "inactive"
+    if ACTIVE.search(text):
+        return "active"
+    return "unknown"
 
 
 def identity(title, sim, currency):
@@ -207,12 +273,18 @@ def parse_documents(documents, default_currency="RUB"):
             if price is None:
                 model = iphone_model(line)
                 brand = brand_of(line)
+                special = special_block(line)
                 is_header = len(line) <= 80 and not re.search(r"https?://|@\w+|[-—=]\s*\d{3}", line)
-                if is_header and (model or brand or ACCESSORY.search(line)):
+                if is_header and (model or brand or ACCESSORY.search(line) or special):
                     context = model or (brand if brand != "Apple" else line.strip(":"))
-                    section = "Аксессуары" if ACCESSORY.search(line) else (model or brand)
+                    if ACCESSORY.search(line):
+                        section = "Аксессуары"
+                    elif special:
+                        section = special
+                    else:
+                        section = model or brand
                     section_sim = sim_type(line)
-                elif is_header and re.fullmatch(r"(?:2\s*)?(?:e[\s-]?)?sim(?:\s*[+/]\s*esim)?", line, re.I):
+                elif is_header and re.fullmatch(r"(?:2\s*)?(?:e[\s-]?)?sim(?:\s*[+/]\s*(?:e[\s-]?)?sim)?", line, re.I):
                     section_sim = sim_type(line)
                 elif re.search(r"\d", line) and not re.search(r"https?://|@\w+|^\+?\d[\d ()-]{8,}$", line):
                     rejected.append(line)
@@ -222,13 +294,18 @@ def parse_documents(documents, default_currency="RUB"):
             own_brand = brand_of(title)
             accessory = bool(ACCESSORY.search(title)) or (section == "Аксессуары" and not own_brand)
             model = iphone_model(title)
-            block = "Аксессуары" if accessory else (model or own_brand or section)
+            special = special_block(title)
+            if not special and section in {"ASIS", "CPO"}:
+                special = section
+            block = "Аксессуары" if accessory else (special or model or own_brand or section)
             if not block:
                 rejected.append(line)
                 continue
             sim = sim_type(title)
             if sim == "unknown":
                 sim = section_sim if model else "unknown"
+            if model:
+                sim = infer_iphone17_sim(title, model, sim)
             item = Item(title, amount, currency, block, sim, accessory)
             items[item.key] = item
     return ParseResult(list(items.values()), rejected, closed and not items)
@@ -257,9 +334,11 @@ def select_items(items, settings, overrides=None):
         if item.accessory and not settings.allow_accessories:
             continue
         if iphone_model(item.title) and sim_filter != "all":
-            if sim_filter == "sim" and item.sim not in {"sim", "dual"}:
+            if sim_filter == "sim" and item.sim not in {"sim", "dual", "hybrid"}:
                 continue
-            if sim_filter != "sim" and item.sim != sim_filter:
+            if sim_filter == "esim" and item.sim not in {"esim", "hybrid"}:
+                continue
+            if sim_filter not in {"sim", "esim"} and item.sim != sim_filter:
                 continue
         result.append(item)
     return result
@@ -306,7 +385,7 @@ def display_title(item):
     title = item.title
     if iphone_model(item.title):
         explicit = sim_type(item.title)
-        if explicit == "unknown" or item.sim == "unknown":
+        if explicit == "unknown":
             title += " · " + SIM_LABELS[item.sim]
     return title
 
@@ -321,22 +400,31 @@ def render_blocks(items, settings, overrides=None, closed=False):
     names = sorted(groups, key=lambda x: (order.index(x) if x in order else len(order), x.casefold()))
     pages = OrderedDict()
     for block in names:
-        # No generic "АКТУАЛЬНЫЙ ПРАЙС" banner: the message starts with the block itself.
         header = "<b>— " + html.escape(block) + " —</b>"
         if closed:
             chunks = [["Продажи закрыты"]]
         else:
+            block_items = groups[block]
+            has_activation = any(activation_state(item.title) != "unknown" for item in block_items)
             lines = []
-            last_sim = None
-            for item in sorted(groups[block], key=lambda i: (i.sim, item_sort(i))):
-                if iphone_model(item.title) and item.sim != last_sim:
-                    lines.append("<b>— " + SIM_LABELS[item.sim] + " —</b>")
-                    last_sim = item.sim
-                row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
-                line = "<code>" + html.escape(row) + "</code>"
-                if units(line) > 3000:
-                    raise ValueError("Слишком длинное наименование товара")
-                lines.append(line)
+            statuses = sorted(
+                {activation_state(item.title) for item in block_items},
+                key=lambda status: CONDITION_ORDER[status],
+            )
+            for status in statuses:
+                status_items = [item for item in block_items if activation_state(item.title) == status]
+                if has_activation:
+                    lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
+                last_sim = None
+                for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), item_sort(i))):
+                    if iphone_model(item.title) and item.sim != last_sim:
+                        lines.append("<b>— " + SIM_LABELS[item.sim] + " —</b>")
+                        last_sim = item.sim
+                    row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
+                    line = "<code>" + html.escape(row) + "</code>"
+                    if units(line) > 3000:
+                        raise ValueError("Слишком длинное наименование товара")
+                    lines.append(line)
             chunks, chunk, size = [], [], units(header) + 50
             for line in lines:
                 if size + units(line) + 1 > 3800 and chunk:
