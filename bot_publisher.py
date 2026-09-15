@@ -1,10 +1,9 @@
 """Publish managed price messages through Telegram Bot API.
 
-Supplier access is handled separately through the logged-in user account. Publishing
-uses Bot API so it never depends on Telethon access_hash values. If TARGET_CHANNEL is
-misconfigured (for example it contains a supplier-bot/user ID), the finished price
-falls back to the administrator's private control chat instead of failing the whole
-sync after the supplier prices were already fetched.
+Supplier access is handled separately through the logged-in user account. The place
+where the finished price is published is a Telegram group/supergroup/channel, never a
+private control chat. A group can be bound from Telegram with /bind and the binding is
+stored in the persistent state, so Railway redeploys do not lose it.
 """
 import asyncio
 import hashlib
@@ -38,7 +37,6 @@ class BotAPIPublisher:
         self.bot_username = ""
         self.target_kind = ""
         self.target_title = ""
-        self.used_admin_fallback = False
 
     async def api(self, method, **payload):
         if not self.token:
@@ -68,30 +66,24 @@ class BotAPIPublisher:
                 return []
         if isinstance(value, int):
             if value > 0:
-                # A positive value may be either a private user ID or a raw channel
-                # ID pasted without the -100 prefix. Try both without assuming.
+                # A positive raw channel/supergroup ID is sometimes pasted without
+                # the Bot API -100 prefix. Try the channel form first.
                 return [int(f"-100{value}"), value]
             return [value]
         return [value] if value is not None else []
 
-    def _admin_candidates(self):
-        result = []
-        for value in getattr(self.settings, "admin_ids", ()) or ():
-            try:
-                number = int(value)
-            except (TypeError, ValueError):
-                continue
-            if number > 0 and number not in result:
-                result.append(number)
-        return result
+    async def _bot_identity(self):
+        if self.bot_id is None:
+            me = await self.api("getMe")
+            self.bot_id = int(me["id"])
+            self.bot_username = me.get("username") or ""
 
     async def _usable_chat(self, candidate):
-        """Return a usable destination or (None, reason).
+        """Return a writable group/channel or (None, reason).
 
-        Channels/groups require the control bot to be an admin. A private chat is
-        accepted only when it belongs to one of ADMIN_IDS, which makes a bad
-        TARGET_CHANNEL harmless while still avoiding accidental messages to random
-        users or supplier bots.
+        Private users and supplier bots are deliberately rejected. This guarantees
+        that a wrong TARGET_CHANNEL can never make the ready price appear in the
+        administrator's private bot chat again.
         """
         try:
             chat = await self.api("getChat", chat_id=candidate)
@@ -100,96 +92,107 @@ class BotAPIPublisher:
 
         chat_type = chat.get("type")
         chat_id = int(chat["id"])
-
-        if chat_type == "private":
-            if chat_id == self.bot_id:
-                return None, f"{candidate!r}: это ID самого управляющего бота"
-            if chat_id not in self._admin_candidates():
-                return None, f"{candidate!r}: это личный чат не из ADMIN_IDS"
-            return chat, None
-
         if chat_type not in {"channel", "supergroup", "group"}:
-            return None, f"{candidate!r}: неподдерживаемый тип чата {chat_type!r}"
+            return None, f"{candidate!r}: это не группа/канал, а {chat_type or 'неизвестный чат'}"
 
+        await self._bot_identity()
         try:
             member = await self.api("getChatMember", chat_id=chat_id, user_id=self.bot_id)
         except Exception as exc:
             return None, f"{candidate!r}: не удалось проверить права бота: {exc}"
 
         status = member.get("status")
-        can_post = status == "creator" or (
-            status == "administrator" and member.get("can_post_messages", True) is not False
-        )
-        if not can_post:
-            return None, f"{candidate!r}: управляющий бот не администратор/не может публиковать"
+        if chat_type == "channel":
+            can_write = status == "creator" or (
+                status == "administrator" and member.get("can_post_messages", True) is not False
+            )
+        else:
+            can_write = status in {"creator", "administrator", "member"}
+            if status == "restricted":
+                can_write = member.get("is_member", False) and member.get("can_send_messages", False)
+
+        if not can_write:
+            return None, f"{candidate!r}: управляющий бот не может писать в эту группу/канал"
         return chat, None
+
+    async def bind_group(self, chat_id, *, title="", chat_type=""):
+        """Persistently bind publishing to the group where /bind was sent."""
+        chat, reason = await self._usable_chat(int(chat_id))
+        if chat is None:
+            raise RuntimeError(reason or "Не удалось привязать группу")
+
+        resolved_id = int(chat["id"])
+        resolved_type = chat.get("type") or chat_type or ""
+        resolved_title = chat.get("title") or title or str(resolved_id)
+        self.state.set("publish_target", {
+            "chat_id": resolved_id,
+            "type": resolved_type,
+            "title": resolved_title,
+        })
+        self.state.delete("botapi_target")
+        self.target = None
+        self.target_kind = ""
+        self.target_title = ""
+        await self.ensure_target()
+        return resolved_id
 
     async def ensure_target(self):
         if self.target is not None:
             return self.target
 
-        me = await self.api("getMe")
-        self.bot_id = int(me["id"])
-        self.bot_username = me.get("username") or ""
-
-        cached = self.state.get("botapi_target", {})
-        configured_candidates = self._target_candidates()
+        await self._bot_identity()
         candidates = []
+        bound = self.state.get("publish_target", {}) or {}
+        if bound.get("chat_id"):
+            candidates.append(int(bound["chat_id"]))
 
+        cached = self.state.get("botapi_target", {}) or {}
         if cached.get("configured") == str(self.configured_target) and cached.get("chat_id"):
-            candidates.append(int(cached["chat_id"]))
-        for candidate in configured_candidates:
+            cached_id = int(cached["chat_id"])
+            if cached_id not in candidates:
+                candidates.append(cached_id)
+
+        for candidate in self._target_candidates():
             if candidate not in candidates:
                 candidates.append(candidate)
-
-        # Critical fallback: if TARGET_CHANNEL contains a supplier-bot/user ID or a
-        # stale channel value, deliver the ready price to the admin control chat.
-        # The admin has already started the control bot, so this destination is
-        # normally guaranteed to be writable.
-        for admin_id in self._admin_candidates():
-            if admin_id not in candidates:
-                candidates.append(admin_id)
 
         reasons = []
         chosen = None
         for candidate in candidates:
             chat, reason = await self._usable_chat(candidate)
             if chat is not None:
-                chosen = (candidate, chat)
+                chosen = chat
                 break
             if reason:
                 reasons.append(reason)
 
         if chosen is None:
-            details = " | ".join(reasons[-4:]) or "нет доступных адресатов"
+            bot = f"@{self.bot_username}" if self.bot_username else "управляющего бота"
+            details = " | ".join(reasons[-3:])
+            suffix = f" Последняя проверка: {details}" if details else ""
             raise RuntimeError(
-                "Не удалось выбрать место публикации прайса. "
-                "Проверь TARGET_CHANNEL или ADMIN_IDS. " + details
+                "Группа для публикации не привязана. Добавь " + bot +
+                " в нужную группу и отправь в этой группе /bind от аккаунта из ADMIN_IDS." + suffix
             )
 
-        candidate, chat = chosen
-        chat_id = int(chat["id"])
-        chat_type = chat.get("type") or ""
-        title = chat.get("title") or chat.get("username") or chat.get("first_name") or str(chat_id)
-        admin_ids = set(self._admin_candidates())
-        configured_ids = set()
-        for item in configured_candidates:
-            try:
-                configured_ids.add(int(item))
-            except (TypeError, ValueError):
-                pass
-
+        chat_id = int(chosen["id"])
+        chat_type = chosen.get("type") or ""
+        title = chosen.get("title") or chosen.get("username") or str(chat_id)
         self.target = chat_id
         self.target_kind = chat_type
         self.target_title = title
-        self.used_admin_fallback = chat_type == "private" and chat_id in admin_ids and chat_id not in configured_ids
-
         self.state.set("botapi_target", {
             "configured": str(self.configured_target),
             "chat_id": chat_id,
             "type": chat_type,
             "title": title,
-            "fallback_to_admin": self.used_admin_fallback,
+        })
+        # Once a real group/channel was found, remember it as the authoritative
+        # destination even if TARGET_CHANNEL in Railway is stale or points elsewhere.
+        self.state.set("publish_target", {
+            "chat_id": chat_id,
+            "type": chat_type,
+            "title": title,
         })
         return chat_id
 
@@ -199,9 +202,10 @@ class BotAPIPublisher:
 
     def destination_note(self):
         if self.target is None:
-            return "место публикации ещё не определено"
-        if self.used_admin_fallback:
-            return f"прайс отправляется в личный чат администратора ({self.target})"
+            bound = self.state.get("publish_target", {}) or {}
+            if bound.get("chat_id"):
+                return f"группа публикации: {bound.get('title') or bound['chat_id']}"
+            return "группа публикации ещё не привязана"
         return f"прайс публикуется в {self.target_title or self.target}"
 
     async def _send(self, content):
