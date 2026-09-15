@@ -5,60 +5,21 @@ from contextlib import suppress
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl import types
 
+from bot_publisher import BotAPIPublisher
 from config import Settings
 from control_botapi import BotAPIController
 from runtime import SyncService
 from state import StateStore
-from supplier import resolve_input_peer
 
 log = logging.getLogger(__name__)
 
 
-def cached_target_peer(state, target_value):
-    cache = state.get("resolved_target_peer", {})
-    if not isinstance(cache, dict) or cache.get("source") != str(target_value):
-        return None
-    try:
-        if cache.get("kind") == "channel":
-            return types.InputPeerChannel(
-                channel_id=int(cache["id"]),
-                access_hash=int(cache["access_hash"]),
-            )
-        if cache.get("kind") == "chat":
-            return types.InputPeerChat(chat_id=int(cache["id"]))
-    except (KeyError, TypeError, ValueError):
-        return None
-    return None
-
-
-def save_target_peer(state, target_value, input_peer):
-    if isinstance(input_peer, types.InputPeerChannel):
-        payload = {
-            "source": str(target_value),
-            "kind": "channel",
-            "id": input_peer.channel_id,
-            "access_hash": input_peer.access_hash,
-        }
-    elif isinstance(input_peer, types.InputPeerChat):
-        payload = {
-            "source": str(target_value),
-            "kind": "chat",
-            "id": input_peer.chat_id,
-        }
-    else:
-        return
-    if state.get("resolved_target_peer") != payload:
-        state.set("resolved_target_peer", payload)
-
-
 async def prepare_supplier(service, settings, controller=None):
-    """Prepare the user Telegram session used only for supplier/channel access.
+    """Prepare the user Telegram session used only for supplier access.
 
-    The control bot is deliberately NOT a Telethon bot client. It runs through
-    Telegram Bot API in control_botapi.py, so BotFather authorization FloodWaits
-    can never block this supplier session or crash the Railway service.
+    Reading suppliers uses the user's Telethon session. Publishing to TARGET_CHANNEL
+    uses Bot API separately, so TARGET_CHANNEL never needs an MTProto access_hash.
     """
     settings.validate()
     try:
@@ -85,44 +46,20 @@ async def prepare_supplier(service, settings, controller=None):
     if controller is not None and not settings.admin_ids:
         controller.admins = {me.id}
 
+    # Keep an env-provided session and /login session converged in persistent state.
     saved = client.session.save()
     if saved and service.state.get("session_string") != saved:
         service.state.set("session_string", saved)
         settings.session = saved
 
-    # Reuse the full InputPeer after the first successful resolution. PostgreSQL
-    # keeps channel_id + access_hash across Railway redeploys, so StringSession's
-    # empty entity cache no longer matters after initial setup.
-    target_peer = cached_target_peer(service.state, settings.target)
-    target = None
-    if target_peer is not None:
-        try:
-            target = await client.get_entity(target_peer)
-        except Exception:
-            target_peer = None
+    # TARGET_CHANNEL is intentionally resolved through Bot API, not through this
+    # user Telethon session. Bot API accepts channel chat_id directly and does not
+    # require an access_hash, which removes the PeerUser/PeerChannel restart loop.
+    if hasattr(service.publisher, "ensure_target"):
+        await service.publisher.ensure_target()
 
-    if target_peer is None:
-        target_peer = await resolve_input_peer(
-            client,
-            settings.target,
-            label="TARGET_CHANNEL",
-            expected="channel",
-        )
-        target = await client.get_entity(target_peer)
-        save_target_peer(service.state, settings.target, target_peer)
-
-    if not isinstance(target, (types.Channel, types.Chat)):
-        raise RuntimeError(
-            "TARGET_CHANNEL указывает не на канал/группу. "
-            "Поддерживаются @username, -100... ID и raw channel ID"
-        )
-
-    permissions = await client.get_permissions(target_peer, me)
-    if not (permissions.is_admin or permissions.is_creator):
-        raise RuntimeError("Аккаунт сессии должен быть администратором целевого канала")
-
-    service.publisher.target = target_peer
-
+    # Supplier usernames still need full MTProto peers because messages are read
+    # and commands/buttons are sent from the logged-in user account.
     for reader in service.readers:
         await reader.resolve()
 
@@ -145,6 +82,7 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
     while not service.stop_event.is_set():
         service.ready = False
         try:
+            # /login may replace the session while this task is retrying.
             stored = service.state.get("session_string", "")
             if stored:
                 settings.session = stored
@@ -187,7 +125,20 @@ async def main():
     control_task = None
     service = SyncService(None, settings, state)
 
+    # Always publish through Bot API. The control bot must be an administrator of
+    # TARGET_CHANNEL. The supplier user account no longer needs channel admin rights
+    # and TARGET_CHANNEL no longer depends on Telethon's transient entity cache.
+    if settings.bot_token:
+        service.publisher = BotAPIPublisher(
+            settings.bot_token,
+            settings.target,
+            state,
+            settings,
+        )
+
     try:
+        # The control bot uses Telegram HTTP Bot API. This completely avoids
+        # ImportBotAuthorizationRequest and its long MTProto FloodWait.
         if settings.bot_token:
             controller = BotAPIController(settings.bot_token, service, settings.admin_ids)
             try:
@@ -252,6 +203,10 @@ async def main():
             with suppress(Exception):
                 await service.client.disconnect()
             service.attach_client(None)
+
+        if hasattr(service.publisher, "close"):
+            with suppress(Exception):
+                await service.publisher.close()
 
         state.close()
 
