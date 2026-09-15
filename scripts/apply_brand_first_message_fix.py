@@ -39,6 +39,12 @@ s = rep(
     '        family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else ("Samsung" if name.startswith("Samsung") else name))\n',
     "Samsung order family",
 )
+s = rep(
+    s,
+    '        rank = defaults.index(family) if family in defaults else len(defaults) - 4\n        numbered = model if model else (name if family == "Apple Watch" else "")\n        number = re.search(r"\\d+", numbered)\n        return (rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\\d+)", name.casefold())), name)\n',
+    '        rank = defaults.index(family) if family in defaults else len(defaults) - 4\n        samsung_rank = {"Samsung Galaxy A": 0, "Samsung Galaxy S": 1, "Samsung Fold / Flip": 2, "Samsung": 3}.get(name, 0) if family == "Samsung" else 0\n        numbered = model if model else (name if family == "Apple Watch" else "")\n        number = re.search(r"\\d+", numbered)\n        return (rank, samsung_rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\\d+)", name.casefold())), name)\n',
+    "Samsung button order",
+)
 p.write_text(s, encoding="utf-8")
 
 
