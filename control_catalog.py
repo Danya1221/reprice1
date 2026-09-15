@@ -101,7 +101,7 @@ class CatalogController(FirstMessageController):
         if order:
             selected_text = f"\nВыбран: {selected}" if selected else "\nНажми на блок, который хочешь переместить."
             text = (
-                f"↕️ Порядок блоков · {len(order)} шт.\n"
+                f"↕️ Порядок блоков · всего {len(order)}\n"
                 "Все блоки здесь сразу — без страниц."
                 + selected_text
             )
