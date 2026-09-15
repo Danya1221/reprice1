@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/apply-samsung-a-exact.yml
+      - apply_samsung_a_exact.py
   workflow_dispatch:
 
 permissions:
