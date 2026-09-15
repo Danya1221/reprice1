@@ -1,12 +1,13 @@
 """Synchronization lifecycle for two supplier prices."""
 import asyncio
 import logging
+from collections import OrderedDict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from telethon import errors
 
-from prices import Item, merge_sources, render_blocks, select_items
+from prices import Item, render_blocks, select_items
 from publisher import Publisher
 from supplier import SupplierReader
 
@@ -18,10 +19,10 @@ class LoginRequired(RuntimeError):
 
 
 def is_open(settings, now=None):
-    """Compatibility helper: the fixed daily *start* has been reached.
+    """Return whether the fixed daily start hour has been reached.
 
-    There is intentionally no fixed closing hour anymore. Publication closes
-    only when every configured supplier explicitly reports closed.
+    There is intentionally no fixed closing hour. Publication closes only
+    when every configured supplier explicitly reports closed.
     """
     now = now or datetime.now(timezone.utc)
     hour = now.astimezone(ZoneInfo(settings.timezone)).hour
@@ -30,6 +31,17 @@ def is_open(settings, now=None):
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def merge_lowest(sources):
+    """Same full variant across suppliers -> lower purchase price wins."""
+    merged = OrderedDict()
+    for items in sources:
+        for item in items or []:
+            current = merged.get(item.key)
+            if current is None or item.price < current.price:
+                merged[item.key] = item
+    return list(merged.values())
 
 
 class SyncService:
@@ -92,7 +104,7 @@ class SyncService:
             if source.get("status") == "closed" and not include_closed:
                 continue
             groups.append([Item.from_dict(item) for item in source.get("items", [])])
-        return merge_sources(groups)
+        return merge_lowest(groups)
 
     async def render(self, closed=False, items=None):
         options = self.options()
@@ -167,7 +179,7 @@ class SyncService:
 
                 statuses = [fresh_status.get(self.source_key(r), "error") for r in self.readers]
                 if self.readers and all(status == "closed" for status in statuses):
-                    count, changes = await self.render(closed=True)
+                    await self.render(closed=True)
                     message = "Оба поставщика закрыты: цены скрыты"
                     self.state.set("last_result", message)
                     return message
@@ -190,9 +202,9 @@ class SyncService:
                     self.state.set("last_result", message)
                     return message
 
-                # Merge only sources that succeeded and are open in THIS check.
-                # Same full variant chooses the lower purchase price before markup.
-                catalog = merge_sources(fresh_open_groups)
+                # Only freshly successful open sources participate. Identical
+                # variants choose the lower purchase price BEFORE markup.
+                catalog = merge_lowest(fresh_open_groups)
                 count, changes = await self.render(items=catalog)
                 source_note = "/".join(statuses)
                 message = f"Прайс обновлён: {count} позиций, изменений: {changes}; источники: {source_note}"
