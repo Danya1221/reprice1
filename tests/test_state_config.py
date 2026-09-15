@@ -104,12 +104,13 @@ class ConfigTests(unittest.TestCase):
             settings = Settings.from_env(require_sync=False)
         self.assertEqual(settings.sources[0].mode, "feed")
 
-    def test_second_source_without_command_remains_feed(self):
+    def test_second_source_without_command_defaults_to_bot(self):
         with patch.dict(os.environ, {
-            "API_ID": "123", "API_HASH": "test", "SUPPLIER_BOT_2": "@feed",
+            "API_ID": "123", "API_HASH": "test", "SUPPLIER_BOT_2": "@two",
         }, clear=True):
             settings = Settings.from_env(require_sync=False)
-        self.assertEqual(settings.sources[0].mode, "feed")
+        self.assertEqual(settings.sources[0].mode, "bot")
+        self.assertEqual(settings.sources[0].request, "/start")
 
     def test_button_path_also_selects_bot_when_mode_is_not_configured(self):
         with patch.dict(os.environ, {
