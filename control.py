@@ -1,10 +1,15 @@
-"""Optional private control bot; the supplier is read by a separate user session."""
+"""Private control bot; supplier access is authorized separately through /login."""
 import asyncio
 import hashlib
 import logging
+import re
 from contextlib import suppress
 
-from telethon import Button, events
+from telethon import Button, TelegramClient, events
+from telethon.errors import (FloodWaitError, PasswordHashInvalidError,
+                             PhoneCodeExpiredError, PhoneCodeInvalidError,
+                             PhoneNumberInvalidError, SessionPasswordNeededError)
+from telethon.sessions import StringSession
 
 from config import decimal_value
 from prices import marked_price
@@ -20,6 +25,7 @@ class Controller:
         self.username = (username or "").lstrip("@").lower()
         self.task = None
         self.block_choices = {}
+        self.login_flows = {}
         client.add_event_handler(self.message, events.NewMessage(incoming=True))
         client.add_event_handler(self.callback, events.CallbackQuery())
 
@@ -35,8 +41,8 @@ class Controller:
         await self.respond(event,
             "Бот работает, но для этого аккаунта ещё не настроен доступ.\n"
             f"Твой Telegram ID: {event.sender_id}\n"
-            "Владелец сервиса должен добавить этот ID в ADMIN_IDS в Railway и обновить сервис.\n"
-            "Если прайсы читает другой аккаунт, здесь нужен ID аккаунта, с которого ты пишешь боту.")
+            "Добавь этот ID в ADMIN_IDS (или ADMIN_ID) в Railway и сделай Redeploy.\n"
+            "После этого отправь /login, чтобы войти в Telegram-аккаунт, которому доступны прайсы.")
 
     def menu(self):
         return [
@@ -48,6 +54,113 @@ class Controller:
 
     async def respond(self, event, text, buttons=None):
         await event.respond(text, parse_mode=None, buttons=buttons)
+
+    async def _close_login(self, user_id):
+        flow = self.login_flows.pop(user_id, None)
+        client = flow.get("client") if flow else None
+        if client is not None:
+            with suppress(Exception):
+                await client.disconnect()
+
+    async def begin_login(self, event):
+        await self._close_login(event.sender_id)
+        self.login_flows[event.sender_id] = {"stage": "phone", "client": None}
+        await self.respond(
+            event,
+            "🔐 Вход в Telegram-аккаунт поставщиков\n\n"
+            "Отправь номер телефона в международном формате, например:\n"
+            "+79991234567\n\n"
+            "Для отмены: /cancel",
+        )
+
+    async def _finish_login(self, event, flow):
+        client = flow["client"]
+        session_string = client.session.save()
+        # Store the session outside Railway Variables. With STATE_FILE on a
+        # Railway Volume it survives redeploys and can be replaced via /login.
+        self.service.state.set("session_string", session_string)
+        self.service.settings.session = session_string
+        self.service.startup_error = None
+        await self._close_login(event.sender_id)
+        await self.respond(
+            event,
+            "✅ Вход выполнен, сессия сохранена.\n"
+            "Подключение к поставщикам произойдёт автоматически. "
+            "Обычно это занимает до 30 секунд.\n\n"
+            "Проверь /status, затем нажми «🔄 Запросить сейчас».",
+            self.menu(),
+        )
+
+    async def handle_login_input(self, event, text):
+        flow = self.login_flows.get(event.sender_id)
+        if not flow:
+            return False
+        stage = flow["stage"]
+        try:
+            if stage == "phone":
+                phone = re.sub(r"[\s()\-]", "", text)
+                if not re.fullmatch(r"\+\d{7,15}", phone):
+                    await self.respond(event, "Номер нужен в формате +79991234567. Попробуй ещё раз или /cancel")
+                    return True
+                api_id = self.service.settings.api_id
+                api_hash = self.service.settings.api_hash
+                temp = TelegramClient(
+                    StringSession(), api_id, api_hash,
+                    auto_reconnect=False, connection_retries=2,
+                    request_retries=2, flood_sleep_threshold=0,
+                )
+                await temp.connect()
+                sent = await temp.send_code_request(phone)
+                flow.update({
+                    "stage": "code",
+                    "client": temp,
+                    "phone": phone,
+                    "phone_code_hash": sent.phone_code_hash,
+                })
+                await self.respond(event, "📩 Код отправлен Telegram. Пришли код сюда цифрами.\nДля отмены: /cancel")
+                return True
+
+            if stage == "code":
+                code = re.sub(r"\D", "", text)
+                if not code:
+                    await self.respond(event, "Пришли код только цифрами или /cancel")
+                    return True
+                try:
+                    await flow["client"].sign_in(
+                        phone=flow["phone"],
+                        code=code,
+                        phone_code_hash=flow["phone_code_hash"],
+                    )
+                except SessionPasswordNeededError:
+                    flow["stage"] = "password"
+                    await self.respond(event, "🔑 На аккаунте включена 2FA. Отправь облачный пароль.\nДля отмены: /cancel")
+                    return True
+                await self._finish_login(event, flow)
+                return True
+
+            if stage == "password":
+                await flow["client"].sign_in(password=text)
+                await self._finish_login(event, flow)
+                return True
+
+        except PhoneNumberInvalidError:
+            await self._close_login(event.sender_id)
+            await self.respond(event, "❌ Telegram не принял номер. Отправь /login и введи номер заново.")
+        except PhoneCodeInvalidError:
+            await self.respond(event, "❌ Неверный код. Пришли правильный код ещё раз или /cancel")
+        except PhoneCodeExpiredError:
+            await self._close_login(event.sender_id)
+            await self.respond(event, "❌ Код истёк. Отправь /login, чтобы получить новый.")
+        except PasswordHashInvalidError:
+            await self.respond(event, "❌ Неверный пароль 2FA. Попробуй ещё раз или /cancel")
+        except FloodWaitError as exc:
+            await self._close_login(event.sender_id)
+            await self.respond(event, f"⏳ Telegram просит подождать {exc.seconds} сек. Потом повтори /login")
+        except Exception as exc:
+            log.exception("Ошибка входа через управляющего бота")
+            await self._close_login(event.sender_id)
+            await self.respond(event, f"❌ Вход не завершён: {type(exc).__name__}: {exc}\nПовтори /login")
+        return True
 
     async def background_sync(self, event):
         try:
@@ -147,14 +260,25 @@ class Controller:
             await self.respond(event, "Не удалось применить: " + str(exc))
 
     async def message(self, event):
-        words = (event.raw_text or "").strip().split(maxsplit=1)
-        if not words:
+        raw = (event.raw_text or "").strip()
+        if not raw:
             return
+        words = raw.split(maxsplit=1)
         command, _, recipient = words[0].lower().partition("@")
         if recipient and self.username and recipient != self.username:
             return
+
+        # Login codes and 2FA passwords are ordinary messages, not commands.
+        if event.sender_id in self.login_flows and not command.startswith("/"):
+            if not self.allowed(event):
+                await self.explain_access(event)
+                return
+            await self.handle_login_input(event, raw)
+            return
+
         if command not in {"/start", "/help", "/id", "/status", "/sync", "/stop", "/resume",
-                           "/markup", "/percent", "/interval", "/order", "/rejected"}:
+                           "/markup", "/percent", "/interval", "/order", "/rejected",
+                           "/login", "/cancel"}:
             return
         if command == "/id" and event.is_private:
             await self.respond(event, f"Твой Telegram ID: {event.sender_id}")
@@ -166,12 +290,22 @@ class Controller:
         try:
             if command in {"/start", "/help"}:
                 await self.respond(event,
-                    "Управление прайсом\n/markup 500 — наценка\n/percent 5 — процент\n"
+                    "🛠 Управление прайсом\n\n"
+                    "/login — войти в Telegram-аккаунт поставщиков\n"
+                    "/markup 500 — наценка\n/percent 5 — процент\n"
                     "/interval 15 — интервал в минутах\n/order iPhone 17, Samsung, Dyson — порядок блоков\n"
                     "/rejected — строки, которые нужно проверить\n/id — твой Telegram ID\n"
                     "/status /sync /stop /resume"
                     + ("\n\n⚠️ " + self.service.startup_status() if not self.service.ready else ""),
                     self.menu())
+            elif command == "/login":
+                await self.begin_login(event)
+            elif command == "/cancel":
+                if event.sender_id in self.login_flows:
+                    await self._close_login(event.sender_id)
+                    await self.respond(event, "Вход отменён", self.menu())
+                else:
+                    await self.respond(event, "Сейчас нет активного входа", self.menu())
             elif command == "/status":
                 await self.respond(event, self.service.status(), self.menu())
             elif command == "/sync":
@@ -220,3 +354,5 @@ class Controller:
             self.task.cancel()
             with suppress(asyncio.CancelledError):
                 await self.task
+        for user_id in list(self.login_flows):
+            await self._close_login(user_id)
