@@ -1,8 +1,10 @@
 """Publish managed price messages through Telegram Bot API.
 
-The supplier account still uses Telethon to read supplier bots/channels. Publishing is
-kept separate on purpose: Bot API chat IDs do not require MTProto access_hash values,
-so Railway restarts cannot break TARGET_CHANNEL entity resolution.
+Supplier access is handled separately through the logged-in user account. Publishing
+uses Bot API so it never depends on Telethon access_hash values. If TARGET_CHANNEL is
+misconfigured (for example it contains a supplier-bot/user ID), the finished price
+falls back to the administrator's private control chat instead of failing the whole
+sync after the supplier prices were already fetched.
 """
 import asyncio
 import hashlib
@@ -34,10 +36,13 @@ class BotAPIPublisher:
         self.lock = asyncio.Lock()
         self.bot_id = None
         self.bot_username = ""
+        self.target_kind = ""
+        self.target_title = ""
+        self.used_admin_fallback = False
 
     async def api(self, method, **payload):
         if not self.token:
-            raise RuntimeError("BOT_TOKEN не задан: без него нельзя публиковать прайс в канал")
+            raise RuntimeError("BOT_TOKEN не задан: без него нельзя публиковать прайс")
         if self.http is None or self.http.closed:
             self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=40))
         async with self.http.post(f"{self.base}/{method}", json=payload) as response:
@@ -57,15 +62,67 @@ class BotAPIPublisher:
                 return [text]
             if re.fullmatch(r"-?\d+", text):
                 value = int(text)
-            else:
+            elif text:
                 return [text]
+            else:
+                return []
         if isinstance(value, int):
             if value > 0:
-                # Telegram exposes channel/supergroup IDs through Bot API as
-                # -100<raw_channel_id>. Users often paste only the raw ID.
+                # A positive value may be either a private user ID or a raw channel
+                # ID pasted without the -100 prefix. Try both without assuming.
                 return [int(f"-100{value}"), value]
             return [value]
-        return [value]
+        return [value] if value is not None else []
+
+    def _admin_candidates(self):
+        result = []
+        for value in getattr(self.settings, "admin_ids", ()) or ():
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0 and number not in result:
+                result.append(number)
+        return result
+
+    async def _usable_chat(self, candidate):
+        """Return a usable destination or (None, reason).
+
+        Channels/groups require the control bot to be an admin. A private chat is
+        accepted only when it belongs to one of ADMIN_IDS, which makes a bad
+        TARGET_CHANNEL harmless while still avoiding accidental messages to random
+        users or supplier bots.
+        """
+        try:
+            chat = await self.api("getChat", chat_id=candidate)
+        except Exception as exc:
+            return None, f"{candidate!r}: {exc}"
+
+        chat_type = chat.get("type")
+        chat_id = int(chat["id"])
+
+        if chat_type == "private":
+            if chat_id == self.bot_id:
+                return None, f"{candidate!r}: это ID самого управляющего бота"
+            if chat_id not in self._admin_candidates():
+                return None, f"{candidate!r}: это личный чат не из ADMIN_IDS"
+            return chat, None
+
+        if chat_type not in {"channel", "supergroup", "group"}:
+            return None, f"{candidate!r}: неподдерживаемый тип чата {chat_type!r}"
+
+        try:
+            member = await self.api("getChatMember", chat_id=chat_id, user_id=self.bot_id)
+        except Exception as exc:
+            return None, f"{candidate!r}: не удалось проверить права бота: {exc}"
+
+        status = member.get("status")
+        can_post = status == "creator" or (
+            status == "administrator" and member.get("can_post_messages", True) is not False
+        )
+        if not can_post:
+            return None, f"{candidate!r}: управляющий бот не администратор/не может публиковать"
+        return chat, None
 
     async def ensure_target(self):
         if self.target is not None:
@@ -76,57 +133,76 @@ class BotAPIPublisher:
         self.bot_username = me.get("username") or ""
 
         cached = self.state.get("botapi_target", {})
+        configured_candidates = self._target_candidates()
         candidates = []
+
         if cached.get("configured") == str(self.configured_target) and cached.get("chat_id"):
-            candidates.append(cached["chat_id"])
-        for candidate in self._target_candidates():
+            candidates.append(int(cached["chat_id"]))
+        for candidate in configured_candidates:
             if candidate not in candidates:
                 candidates.append(candidate)
 
-        last_error = None
-        chat = None
+        # Critical fallback: if TARGET_CHANNEL contains a supplier-bot/user ID or a
+        # stale channel value, deliver the ready price to the admin control chat.
+        # The admin has already started the control bot, so this destination is
+        # normally guaranteed to be writable.
+        for admin_id in self._admin_candidates():
+            if admin_id not in candidates:
+                candidates.append(admin_id)
+
+        reasons = []
+        chosen = None
         for candidate in candidates:
-            try:
-                chat = await self.api("getChat", chat_id=candidate)
+            chat, reason = await self._usable_chat(candidate)
+            if chat is not None:
+                chosen = (candidate, chat)
                 break
-            except Exception as exc:
-                last_error = exc
+            if reason:
+                reasons.append(reason)
 
-        if chat is None:
-            bot = f"@{self.bot_username}" if self.bot_username else "управляющего бота"
+        if chosen is None:
+            details = " | ".join(reasons[-4:]) or "нет доступных адресатов"
             raise RuntimeError(
-                f"TARGET_CHANNEL {self.configured_target!r} не найден через Bot API. "
-                f"Добавь {bot} в целевой канал администратором и оставь TARGET_CHANNEL как "
-                f"@username, -100... или raw ID. Последняя ошибка: {last_error}"
+                "Не удалось выбрать место публикации прайса. "
+                "Проверь TARGET_CHANNEL или ADMIN_IDS. " + details
             )
 
-        if chat.get("type") not in {"channel", "supergroup", "group"}:
-            raise RuntimeError("TARGET_CHANNEL должен указывать на канал или группу, а не на пользователя")
-
+        candidate, chat = chosen
         chat_id = int(chat["id"])
-        member = await self.api("getChatMember", chat_id=chat_id, user_id=self.bot_id)
-        status = member.get("status")
-        can_post = status == "creator" or (
-            status == "administrator" and member.get("can_post_messages", True) is not False
-        )
-        if not can_post:
-            bot = f"@{self.bot_username}" if self.bot_username else "Управляющий бот"
-            raise RuntimeError(
-                f"{bot} должен быть администратором TARGET_CHANNEL с правом публикации сообщений"
-            )
+        chat_type = chat.get("type") or ""
+        title = chat.get("title") or chat.get("username") or chat.get("first_name") or str(chat_id)
+        admin_ids = set(self._admin_candidates())
+        configured_ids = set()
+        for item in configured_candidates:
+            try:
+                configured_ids.add(int(item))
+            except (TypeError, ValueError):
+                pass
 
         self.target = chat_id
+        self.target_kind = chat_type
+        self.target_title = title
+        self.used_admin_fallback = chat_type == "private" and chat_id in admin_ids and chat_id not in configured_ids
+
         self.state.set("botapi_target", {
             "configured": str(self.configured_target),
             "chat_id": chat_id,
-            "type": chat.get("type"),
-            "title": chat.get("title", ""),
+            "type": chat_type,
+            "title": title,
+            "fallback_to_admin": self.used_admin_fallback,
         })
         return chat_id
 
     def binding(self):
         value = self.target if self.target is not None else self.configured_target
         return f"botapi:{value}"
+
+    def destination_note(self):
+        if self.target is None:
+            return "место публикации ещё не определено"
+        if self.used_admin_fallback:
+            return f"прайс отправляется в личный чат администратора ({self.target})"
+        return f"прайс публикуется в {self.target_title or self.target}"
 
     async def _send(self, content):
         target = await self.ensure_target()
