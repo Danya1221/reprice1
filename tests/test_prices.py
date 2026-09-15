@@ -60,7 +60,7 @@ eSIM
 
     def test_google_plus_and_samsung_sm_code(self):
         result = self.parse("Samsung Galaxy S26+ SM-S947B 12/256 Cobalt Violet 🇦🇪 — 68300")
-        self.assertEqual(result.items[0].block, "Samsung Galaxy S")
+        self.assertEqual(result.items[0].block, "Samsung S26")
         self.assertIn("S26+", result.items[0].title)
         self.assertNotIn("SM-", result.items[0].title)
         self.assertIn("🇦🇪", result.items[0].title)
@@ -110,15 +110,53 @@ Galaxy Z
 Z Fold 7 12/256 Black 🇦🇪 — 120000
 Z Flip 7 12/256 Mint 🇦🇪 — 78000""").items
         self.assertEqual([item.block for item in items], [
-            "Samsung Galaxy A", "Samsung Galaxy A", "Samsung Galaxy A",
-            "Samsung Galaxy S", "Samsung Galaxy S", "Samsung Galaxy S",
+            "Samsung A + S25", "Samsung A + S25", "Samsung A + S25",
+            "Samsung S26", "Samsung S26", "Samsung S26",
             "Samsung Fold / Flip", "Samsung Fold / Flip",
         ])
         pages = render_blocks(items, Settings())
         headers = [content.split("\n", 1)[0] for content in pages.values()]
-        self.assertIn("<b>Samsung Galaxy A</b>", headers)
-        self.assertIn("<b>Samsung Galaxy S</b>", headers)
+        self.assertIn("<b>Samsung A + S25</b>", headers)
+        self.assertIn("<b>Samsung S26</b>", headers)
         self.assertIn("<b>Samsung Fold / Flip</b>", headers)
+
+    def test_coros_does_not_inherit_xiaomi_context(self):
+        items = self.parse("""Xiaomi
+Coros Pace 4 Black Nylon 🇨🇳 — 21000
+Coros Pace 4 Black Silicone 🇨🇳 — 22000
+Coros Pace 4 Ice Crystal Black Silicone 🇨🇳 — 22700
+Coros Pace 4 Jacob&Co collaboration fabric strap version 🇨🇳 — 25300""").items
+        self.assertEqual([item.block for item in items], ["COROS"] * 4)
+        self.assertTrue(all(item.title.startswith("Coros ") for item in items))
+        self.assertTrue(all(not item.title.startswith("Xiaomi ") for item in items))
+
+    def test_requested_samsung_phone_split_and_tab_tablets(self):
+        items = self.parse("""Samsung
+Galaxy A
+A56 8/256 Black — 35000
+A57 12/256 Blue — 42000
+Galaxy S25
+S25 12/256 Black — 65000
+S25 Ultra 12/512 Titanium — 90000
+Galaxy S26
+S26 12/256 Black — 68000
+S26+ 12/256 Cobalt Violet — 71000
+S26 Ultra 12/512 Titanium Black — 99000
+Galaxy Tab S
+Tab S10 12/256 Grey — 65000
+Tab S11 Ultra 12/512 Silver — 98000""").items
+        self.assertEqual([item.block for item in items], [
+            "Samsung A + S25", "Samsung A + S25",
+            "Samsung A + S25", "Samsung A + S25",
+            "Samsung S26", "Samsung S26", "Samsung S26",
+            "Samsung Tab S", "Samsung Tab S",
+        ])
+        self.assertTrue(all(not item.title.startswith("Samsung A +") for item in items))
+        pages = render_blocks(items, Settings())
+        headers = [content.split("\n", 1)[0] for content in pages.values()]
+        self.assertIn("<b>Samsung A + S25</b>", headers)
+        self.assertIn("<b>Samsung S26</b>", headers)
+        self.assertIn("<b>Samsung Tab S</b>", headers)
 
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]

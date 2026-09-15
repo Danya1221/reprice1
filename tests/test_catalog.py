@@ -174,7 +174,7 @@ Z Fold 7 12/256 Black — 120000"""]).items
         buttons = [button for row in edit["reply_markup"]["inline_keyboard"] for button in row]
         samsung = [button for button in buttons if button["text"].startswith("Samsung")]
         self.assertEqual([button["text"] for button in samsung], [
-            "Samsung Galaxy A", "Samsung Galaxy S", "Samsung Fold / Flip"
+            "Samsung A + S25", "Samsung S26", "Samsung Fold / Flip"
         ])
         self.assertTrue(all(button.get("url") for button in samsung))
 

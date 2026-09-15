@@ -41,6 +41,7 @@ BRANDS = (
     ("Dyson", r"\bdyson\b|дайсон"),
     ("Canon", r"\bcanon\b|кэнон|канон"),
     ("Rode", r"\br(?:o|ø)de\b"),
+    ("COROS", r"\bcoros\b"),
     ("DJI / Insta360", r"\bdji\b|\binsta\s*360\b"),
     ("Kodak / Fujifilm", r"\bkodak\b|\bfujifilm\b"),
     ("Bowers & Wilkins", r"bowers|b&w|\bpx[78]\b"),
@@ -192,16 +193,33 @@ def apple_watch_block(title):
 def samsung_block(title):
     if not re.search(r"\bsamsung\b|\bgalaxy\b|самсунг", title, re.I):
         return ""
+
+    # Galaxy Tab S is a tablet family, never a Galaxy S phone.
+    if re.search(r"\b(?:galaxy\s*)?tab\s*s\s*\d*", title, re.I):
+        return "Samsung Tab S"
+
+    # Keep foldables separate when they are present.
     if re.search(r"\b(?:galaxy\s*)?(?:z\s*)?(?:fold|flip)\b", title, re.I):
         return "Samsung Fold / Flip"
+
+    # The requested phone layout is deliberately balanced into two messages:
+    # A-series together with S25, then the complete S26 family.
     if re.search(r"\b(?:galaxy\s*)?a\s*\d{1,3}[a-z]*\b|\bsamsung\s+a\s*\d{1,3}[a-z]*\b", title, re.I):
-        return "Samsung Galaxy A"
-    if re.search(r"\b(?:galaxy\s*)?s\s*\d{1,3}(?:\s*(?:\+|plus|ultra|fe))?\b|\bsamsung\s+s\s*\d{1,3}", title, re.I):
-        return "Samsung Galaxy S"
+        return "Samsung A + S25"
+    if re.search(r"\b(?:galaxy\s*)?s\s*25(?:\s*(?:\+|plus|ultra|fe))?\b|\bsamsung\s+s\s*25", title, re.I):
+        return "Samsung A + S25"
+    if re.search(r"\b(?:galaxy\s*)?s\s*26(?:\s*(?:\+|plus|ultra|fe))?\b|\bsamsung\s+s\s*26", title, re.I):
+        return "Samsung S26"
+
+    # Header-only sections from supplier menus.
     if re.search(r"\bgalaxy\s+a\b|\bsamsung\s+galaxy\s+a\b", title, re.I):
-        return "Samsung Galaxy A"
-    if re.search(r"\bgalaxy\s+s\b|\bsamsung\s+galaxy\s+s\b", title, re.I):
-        return "Samsung Galaxy S"
+        return "Samsung A + S25"
+    if re.search(r"\bgalaxy\s+s\s*25\b", title, re.I):
+        return "Samsung A + S25"
+    if re.search(r"\bgalaxy\s+s\s*26\b", title, re.I):
+        return "Samsung S26"
+    if re.search(r"\b(?:galaxy\s*)?tab\s*s\b", title, re.I):
+        return "Samsung Tab S"
     return "Samsung"
 
 
@@ -222,7 +240,7 @@ def product_block(title):
 
 def ordered_blocks(blocks, preferred=()):
     defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook / iMac", "Apple", "Ray-Ban Meta",
-                "Samsung", "Honor", "Realme", "Huawei", "Tecno", "Xiaomi", "Google", "Rode", "Dyson",
+                "Samsung", "Honor", "Realme", "Huawei", "Tecno", "Xiaomi", "Google", "COROS", "Rode", "Dyson",
                 "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
     def order_key(name):
         if name in preferred:
@@ -230,7 +248,7 @@ def ordered_blocks(blocks, preferred=()):
         model = iphone_model(name)
         family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else ("Samsung" if name.startswith("Samsung") else name))
         rank = defaults.index(family) if family in defaults else len(defaults) - 4
-        samsung_rank = {"Samsung Galaxy A": 0, "Samsung Galaxy S": 1, "Samsung Fold / Flip": 2, "Samsung": 3}.get(name, 0) if family == "Samsung" else 0
+        samsung_rank = {"Samsung A + S25": 0, "Samsung S26": 1, "Samsung Tab S": 2, "Samsung Fold / Flip": 3, "Samsung": 4}.get(name, 0) if family == "Samsung" else 0
         numbered = model if model else (name if family == "Apple Watch" else "")
         number = re.search(r"\d+", numbered)
         return (rank, samsung_rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name.casefold())), name)
@@ -248,7 +266,11 @@ def normal_title(title, context=""):
         pos = re.search(r"\d", title).start()
         title = title[:pos] + "iPhone " + title[pos:]
     elif context and not brand_of(title):
-        title = context + " " + title
+        # Samsung block labels are navigation names, not product-name prefixes.
+        # Prefix bare A/S/Tab rows with the brand only, otherwise rows become e.g.
+        # "Samsung A + S25 S25 ...".
+        prefix = "Samsung" if context.startswith("Samsung") else context
+        title = prefix + " " + title
     title = re.sub(r"\b(\d+)\s*(?:GB|ГБ)\b", r"\1GB", title, flags=re.I)
     title = re.sub(r"\b(\d+)\s*(?:TB|ТБ)\b", r"\1TB", title, flags=re.I)
     if re.search(r"ray[\s-]?ban|wayfarer|skyler", title, re.I):
