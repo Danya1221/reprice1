@@ -33,9 +33,10 @@ INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activate
 ACTIVE = re.compile(r"\bактив\w*|\bactive\b|\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
 IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max\b|pro\b|"
                     r"plus\b|mini\b|air\b)?|air\b|se(?:\s*\d)?)", re.I)
-SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini))?)\s+(?=\d{2,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
+SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini|air))?)\s+(?=\d{1,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
 BRANDS = (
     ("Ray-Ban Meta", r"ray[\s-]?ban|wayfarer|skyler"),
+    ("Oura Ring", r"\boura(?:\s+ring)?\b"),
     ("LEGO", r"\blego\b|лего"),
     ("Dyson", r"\bdyson\b|дайсон"),
     ("Canon", r"\bcanon\b|кэнон|канон"),
@@ -47,7 +48,7 @@ BRANDS = (
     ("Samsung", r"\bsamsung\b|\bgalaxy\b|самсунг"),
     ("Apple", r"\bapple\b|\biphone\b|айфон|\bipad\b|\bmacbook\b|\bairpods\b|\bimac\b|apple\s*watch"),
     ("Sony", r"\bsony\b"),
-    ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b"),
+    ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b|^\s*(?:redmi\s+)?note\s+\d{1,2}\b"),
     ("Huawei", r"\bhuawei\b"),
     ("Honor", r"\bhonor\b"),
     ("Realme", r"\brealme\b|реалми"),
@@ -79,13 +80,6 @@ SIM_LABELS = {
 SIM_ORDER = {"unknown": -1, "hybrid": 0, "dual": 1, "esim": 2, "sim": 3}
 CONDITION_LABELS = {"inactive": "Не активированное", "active": "Актив", "unknown": "Не активированное"}
 CONDITION_ORDER = {"inactive": 0, "active": 1, "unknown": 2}
-
-# Apple: iPhone 17-family devices bought in these markets are eSIM-only.
-# This fallback is used only when the supplier did not explicitly specify SIM.
-ESIM_ONLY_17_FLAGS = {
-    "🇺🇸", "🇻🇮", "🇬🇺", "🇨🇦", "🇯🇵", "🇦🇪",
-    "🇸🇦", "🇶🇦", "🇰🇼", "🇴🇲", "🇧🇭", "🇲🇽",
-}
 
 
 def clean(text):
@@ -144,8 +138,8 @@ def sim_type(text):
     text = clean(text).lower()
     text = re.sub(r"\be[\s-]+sim\b", "esim", text)
     if re.search(
-        r"\b(?:nano\s*)?sim\s*(?:\+|/|&|and|и)\s*esim\b|"
-        r"\besim\s*(?:\+|/|&|and|и)\s*(?:nano\s*)?sim\b",
+        r"\b(?:1\s*)?(?:nano\s*)?sim\s*(?:\+|/|&|and|и)\s*esim\b|"
+        r"\besim\s*(?:\+|/|&|and|и)\s*(?:1\s*)?(?:nano\s*)?sim\b",
         text,
     ):
         return "hybrid"
@@ -165,31 +159,11 @@ def iphone_model(title):
     suffix = clean(match[1])
     suffix = re.sub(r"\s+e\b", "e", suffix, flags=re.I)
     words = [x if re.fullmatch(r"\d+e?", x, re.I) else x.title() for x in suffix.split()]
-    return "iPhone " + " ".join(words)
+    model = " ".join(words)
+    if model.casefold() == "17 air":
+        return "iPhone Air"
+    return "iPhone " + model
 
-
-def iphone17_family(model):
-    model = clean(model).casefold()
-    return model == "iphone air" or model.startswith("iphone 17")
-
-
-def infer_iphone17_sim(title, model, current="unknown"):
-    """Infer the iPhone 17 SIM layout from Apple regional rules and price flags."""
-    if current != "unknown" or not iphone17_family(model):
-        return current
-    lower_model = clean(model).casefold()
-    if lower_model == "iphone air":
-        return "esim"
-    flags = set(FLAGS.findall(title))
-    if not flags:
-        return current
-    if flags & ESIM_ONLY_17_FLAGS:
-        return "esim"
-    # Mainland-China iPhone 17 / Pro / Pro Max use two physical nano-SIMs.
-    # iPhone 17e is the exception and supports physical nano-SIM/eSIM.
-    if "🇨🇳" in flags and not lower_model.startswith("iphone 17e"):
-        return "dual"
-    return "hybrid"
 
 
 def brand_of(text):
@@ -199,24 +173,45 @@ def brand_of(text):
     return ""
 
 
+def apple_watch_block(title):
+    if not re.search(r"\b(?:apple\s*)?watch\b", title, re.I):
+        return ""
+    ultra = re.search(r"\bultra(?:\s*(\d{1,2}))?\b", title, re.I)
+    if ultra:
+        return "Apple Watch Ultra" + (" " + ultra.group(1) if ultra.group(1) else "")
+    series = re.search(r"\b(?:series|s)\s*(\d{1,2})\b", title, re.I)
+    if series:
+        return "Apple Watch Series " + series.group(1)
+    se = re.search(r"\bse(?:\s*(\d{1,2}))?\b", title, re.I)
+    if se:
+        return "Apple Watch SE" + (" " + se.group(1) if se.group(1) else "")
+    return "Apple Watch"
+
+
 def product_block(title):
-    for label in ("AirPods", "Apple Watch", "iPad", "MacBook", "iMac", "Mac mini", "Mac Studio", "Apple TV", "AirTag"):
+    watch = apple_watch_block(title)
+    if watch:
+        return watch
+    if re.search(r"\b(?:MacBook|iMac)\b", title, re.I):
+        return "MacBook / iMac"
+    for label in ("AirPods", "iPad", "Mac mini", "Mac Studio", "Apple TV", "AirTag"):
         if re.search(r"\b" + re.escape(label) + r"\b", title, re.I):
             return label
     return brand_of(title)
 
 
 def ordered_blocks(blocks, preferred=()):
-    defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook", "Apple", "Ray-Ban Meta",
+    defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook / iMac", "Apple", "Ray-Ban Meta",
                 "Samsung", "Honor", "Realme", "Huawei", "Tecno", "Xiaomi", "Google", "Dyson",
-                "CPO", "ASIS", "Аксессуары", "Товары"]
+                "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
     def order_key(name):
         if name in preferred:
             return (-1, preferred.index(name), (), "")
         model = iphone_model(name)
-        family = "iPhone" if model else name
+        family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else name)
         rank = defaults.index(family) if family in defaults else len(defaults) - 4
-        number = re.search(r"\d+", model)
+        numbered = model if model else (name if family == "Apple Watch" else "")
+        number = re.search(r"\d+", numbered)
         return (rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name.casefold())), name)
     return sorted(set(blocks), key=order_key)
 
@@ -286,7 +281,13 @@ class Item:
 
     @classmethod
     def from_dict(cls, value):
-        return cls(**{**value, "price": Decimal(value["price"])})
+        data = {**value, "price": Decimal(value["price"])}
+        data["title"] = normal_title(data["title"])
+        if data.get("block") not in {"ASIS", "CPO", "Аксессуары"}:
+            known = iphone_model(data["title"]) or product_block(data["title"])
+            if known:
+                data["block"] = known
+        return cls(**data)
 
 
 @dataclass
@@ -353,7 +354,7 @@ def parse_documents(documents, default_currency="RUB"):
                 else:
                     section = model or brand
                 section_sim = sim_type(line)
-            elif is_header and re.fullmatch(r"(?:2\s*)?(?:e[\s-]?)?sim(?:\s*[+/]\s*(?:e[\s-]?)?sim)?", line, re.I):
+            elif is_header and re.fullmatch(r"(?:[12]\s*)?(?:e[\s-]?)?sim(?:\s*[+/&]\s*(?:[12]\s*)?(?:e[\s-]?)?sim)?", line, re.I):
                 section_sim = sim_type(line)
             elif re.search(r"\d", line) and not re.search(r"https?://|@\w+|^\+?\d[\d ()-]{8,}$", line):
                 rejected.append(line)
@@ -370,8 +371,6 @@ def parse_documents(documents, default_currency="RUB"):
         sim = sim_type(title)
         if sim == "unknown":
             sim = section_sim if model else "unknown"
-        if model:
-            sim = infer_iphone17_sim(title, model, sim)
         item = Item(title, amount, currency, block, sim, accessory)
         items[item.key] = item
     return ParseResult(list(items.values()), rejected, closed and not items)
@@ -472,7 +471,7 @@ def render_blocks(items, settings, overrides=None, closed=False):
     names = ordered_blocks(groups, order)
     pages = OrderedDict()
     for block in names:
-        header = "<b>— " + html.escape(block) + " —</b>"
+        header = "<b>" + html.escape(block) + "</b>"
         if closed:
             chunks = [["Продажи закрыты"]]
         else:

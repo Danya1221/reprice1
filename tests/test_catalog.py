@@ -48,7 +48,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         manifest = self.state.get("published")["messages"]
         self.assertEqual(before, {entry["id"] for entry in manifest.values()})
         ordered = sorted(manifest.values(), key=lambda e: e["id"])
-        self.assertTrue(ordered[0]["content"].startswith("<b>— Dyson —</b>"))
+        self.assertTrue(ordered[0]["content"].startswith("<b>Dyson</b>"))
         buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
         self.assertEqual([b["text"] for b in buttons], ["Dyson", "AirPods", "iPhone 17"])
         self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{ordered[0]['id']}")

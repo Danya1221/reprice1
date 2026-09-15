@@ -39,24 +39,22 @@ SIM
         self.assertEqual(len(select_items(items, Settings(sim_filter="sim"))), 2)
         self.assertEqual(len(select_items(items, Settings(sim_filter="esim"))), 1)
 
-    def test_country_flag_infers_iphone17_sim(self):
+    def test_country_flag_does_not_infer_iphone17_sim(self):
         item = self.parse("🇺🇸 iPhone 17 256GB Black — 58800").items[0]
-        self.assertEqual(item.sim, "esim")
-        self.assertEqual(len(select_items([item], Settings(sim_filter="esim"))), 1)
+        self.assertEqual(item.sim, "unknown")
+        self.assertEqual(len(select_items([item], Settings(sim_filter="esim"))), 0)
 
-    def test_iphone17_region_sim_matrix(self):
-        items = self.parse("""🇺🇸 iPhone 17 256 Black — 60000
-🇯🇵 iPhone 17 Pro 256 Black — 70000
-🇦🇪 iPhone 17 Pro Max 256 Black — 80000
-🇨🇳 iPhone 17 256 Black — 61000
-🇮🇳 iPhone 17 256 Black — 62000
-🇭🇰 iPhone 17 Pro 256 Black — 71000
-🇨🇳 iPhone 17e 256 Black — 50000""").items
-        self.assertEqual([item.sim for item in items], [
-            "esim", "esim", "esim", "dual", "hybrid", "hybrid", "hybrid"
-        ])
+    def test_supplier_sim_markers_drive_iphone17_variants(self):
+        items = self.parse("""iPhone 17
+SIM + eSIM
+17 256 Black 🇮🇳 — 62000
+eSIM
+17 Pro 256 Black 🇺🇸 — 70000
+2 SIM
+17 Pro Max 256 Black 🇨🇳 — 80000""").items
+        self.assertEqual([item.sim for item in items], ["hybrid", "esim", "dual"])
 
-    def test_explicit_sim_beats_region_fallback(self):
+    def test_explicit_sim_marker_is_used(self):
         item = self.parse("🇺🇸 iPhone 17 256 Black SIM + eSIM — 60000").items[0]
         self.assertEqual(item.sim, "hybrid")
 
@@ -95,8 +93,8 @@ iPhone 17 256 Black 🇮🇳 — 60000""").items
         self.assertEqual(items[1].block, "ASIS")
         pages = render_blocks(items, Settings())
         contents = list(pages.values())
-        self.assertTrue(any("— CPO —" in page for page in contents))
-        self.assertTrue(any("— ASIS —" in page for page in contents))
+        self.assertTrue(any("<b>CPO</b>" in page for page in contents))
+        self.assertTrue(any("<b>ASIS</b>" in page for page in contents))
 
     def test_active_and_inactive_are_sorted_inside_message(self):
         items = self.parse("""iPhone 17 256 Black Актив 🇮🇳 — 60000

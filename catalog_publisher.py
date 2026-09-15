@@ -21,7 +21,7 @@ def message_link(chat_id, message_id, username=""):
 
 
 def page_title(content):
-    match = re.match(r"<b>— (.*?) —</b>", content)
+    match = re.match(r"<b>\s*(?:—\s*)?(.*?)(?:\s*—)?\s*</b>", content)
     return html.unescape(match[1]) if match else "Прайс"
 
 
