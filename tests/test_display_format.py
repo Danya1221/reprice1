@@ -20,10 +20,16 @@ class DisplayFormatTests(unittest.TestCase):
         self.assertIn("<code>iPhone 17 256 Black · eSIM — 60 000</code>", content)
         self.assertNotIn("₽", content)
 
-    def test_unknown_sim_is_visible_in_iphone_row(self):
-        items = parse_documents(["iPhone 17 256 Black — 60000"]).items
+    def test_unknown_sim_keeps_copyable_row_without_placeholder(self):
+        items = parse_documents(["iPhone 17 256 Black — 60000\niPhone 17 256 White eSIM — 61000"]).items
         content = next(iter(render_blocks(items, Settings()).values()))
-        self.assertIn("SIM не указан", content)
+        row = "<code>iPhone 17 256 Black — 60 000</code>"
+        self.assertIn(row, content)
+        self.assertNotIn("SIM не указан", content)
+        self.assertNotIn("SIM-карта не определена", content)
+        self.assertNotIn("<b>—  —</b>", content)
+        self.assertIn("<code>iPhone 17 256 White eSIM — 61 000</code>", content)
+        self.assertLess(content.index(row), content.index("<b>— eSIM —</b>"))
 
 
 if __name__ == "__main__":

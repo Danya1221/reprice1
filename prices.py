@@ -56,9 +56,11 @@ SIM_LABELS = {
     "hybrid": "SIM + eSIM",
     "esim": "eSIM",
     "dual": "2 SIM",
-    "unknown": "SIM не указан",
+    "unknown": "",
 }
-SIM_ORDER = {"hybrid": 0, "dual": 1, "esim": 2, "sim": 3, "unknown": 4}
+# Unlabelled items precede named SIM sections so they cannot appear under a
+# misleading eSIM / physical SIM heading.
+SIM_ORDER = {"unknown": -1, "hybrid": 0, "dual": 1, "esim": 2, "sim": 3}
 CONDITION_LABELS = {"inactive": "Неактив", "active": "Актив", "unknown": "Статус не указан"}
 CONDITION_ORDER = {"inactive": 0, "active": 1, "unknown": 2}
 
@@ -381,11 +383,11 @@ def item_sort(item):
 
 
 def display_title(item):
-    """Self-contained copy text: model attributes plus SIM kind for every iPhone."""
+    """Copyable model attributes, with the SIM kind only when it is known."""
     title = item.title
     if iphone_model(item.title):
         explicit = sim_type(item.title)
-        if explicit == "unknown":
+        if explicit == "unknown" and SIM_LABELS.get(item.sim):
             title += " · " + SIM_LABELS[item.sim]
     return title
 
@@ -418,7 +420,9 @@ def render_blocks(items, settings, overrides=None, closed=False):
                 last_sim = None
                 for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), item_sort(i))):
                     if iphone_model(item.title) and item.sim != last_sim:
-                        lines.append("<b>— " + SIM_LABELS[item.sim] + " —</b>")
+                        label = SIM_LABELS.get(item.sim)
+                        if label:
+                            lines.append("<b>— " + label + " —</b>")
                         last_sim = item.sim
                     row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
                     line = "<code>" + html.escape(row) + "</code>"
