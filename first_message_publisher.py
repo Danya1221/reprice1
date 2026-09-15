@@ -48,6 +48,13 @@ class PinnedBotAPIPublisher(BotAPIPublisher):
             disable_notification=True,
         )
 
+    async def _before_recreate_first(self):
+        """Make room for a recreated intro so it is physically before price posts.
+
+        CatalogPublisher extends this hook to remove its navigation message too.
+        """
+        return await self._clear_managed_price_posts()
+
     async def _ensure_first_message(self, *, strict_pin=False):
         text = str(self.state.get("first_message_text", "") or "").strip()
         if not text:
@@ -63,21 +70,33 @@ class PinnedBotAPIPublisher(BotAPIPublisher):
             message_id = record.get("id")
             content_hash = digest(text)
             changes = 0
-            if message_id and record.get("hash") != content_hash:
+
+            # Always verify the stored Telegram message, even when the text/hash did
+            # not change. Older versions trusted a saved ID forever, so a deleted
+            # intro could remain "present" in state while no message existed at all.
+            if message_id:
                 try:
                     await self._edit_first(message_id, text)
-                    changes += 1
+                    if record.get("hash") != content_hash:
+                        changes += 1
                 except RuntimeError as exc:
                     lowered = str(exc).lower()
-                    if "message is not modified" not in lowered:
-                        if ("message to edit not found" in lowered
-                                or "message can't be edited" in lowered
-                                or "message cannot be edited" in lowered):
-                            message_id = None
-                        else:
-                            raise
+                    if "message is not modified" in lowered:
+                        # This is the normal existence check for unchanged text.
+                        pass
+                    elif (
+                        "message to edit not found" in lowered
+                        or "message can't be edited" in lowered
+                        or "message cannot be edited" in lowered
+                    ):
+                        message_id = None
+                    else:
+                        raise
 
             if not message_id:
+                # A missing/stale intro must be recreated before all managed content,
+                # not merely appended after the current price posts.
+                await self._before_recreate_first()
                 message = await self._send_first(text)
                 message_id = int(message["message_id"])
                 changes += 1
