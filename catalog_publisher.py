@@ -46,6 +46,25 @@ class CatalogPublisher(PinnedBotAPIPublisher):
     def save_catalog(self, records):
         self.state.set("catalog", {"binding": self.binding(), "messages": records})
 
+    async def _before_recreate_first(self):
+        """Remove navigation first, then prices, before recreating the intro.
+
+        That guarantees the physical Telegram order remains:
+        first message -> price blocks -> catalog.
+        """
+        records = self.catalog_records()
+        for record in list(records):
+            if not record.get("id"):
+                continue
+            try:
+                await self._delete(record["id"])
+            except RuntimeError as exc:
+                if "message to delete not found" not in str(exc).lower():
+                    raise
+        if records:
+            self.save_catalog([])
+        return await super()._before_recreate_first()
+
     async def _catalog_entry(self, records, index, text, keyboard):
         record = records[index] if index < len(records) else {}
         payload = {"chat_id": self.target, "text": text,
