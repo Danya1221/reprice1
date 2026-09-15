@@ -1,0 +1,37 @@
+name: Apply final price layout
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-price-layout-finish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply layout fixes
+        run: python apply_price_layout_finish2.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prices.py tests/test_prices.py tests/test_parser_regressions.py tests/test_complete_prices.py
+          git diff --cached --check
+          git commit -m "Merge Apple Watch and organize Samsung price blocks"
+          git push origin HEAD:main
