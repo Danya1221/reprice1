@@ -20,7 +20,7 @@ async def prepare_supplier(service, settings, controller=None):
     try:
         session = StringSession(settings.session)
     except Exception:
-        raise ValueError("SESSION_STRING повреждена; скопируй всю строку из SETUP_MODE") from None
+        raise ValueError("SESSION_STRING повреждена; выполни /login в управляющем боте") from None
     client = TelegramClient(session, settings.api_id, settings.api_hash,
                             auto_reconnect=True, connection_retries=5, retry_delay=2,
                             request_retries=3, flood_sleep_threshold=0)
@@ -28,7 +28,7 @@ async def prepare_supplier(service, settings, controller=None):
     await service.connect()
     me = await client.get_me()
     if me is None or me.bot:
-        raise ValueError("SESSION_STRING должна принадлежать пользовательскому аккаунту, которому доступны прайсы")
+        raise ValueError("Сессия должна принадлежать пользовательскому аккаунту, которому доступны прайсы")
     if controller is not None and not settings.admin_ids:
         # Keep the original owner fallback, but only after Telegram verifies that identity.
         controller.admins = {me.id}
@@ -36,7 +36,7 @@ async def prepare_supplier(service, settings, controller=None):
     target = await client.get_entity(settings.target)
     permissions = await client.get_permissions(target, me)
     if not (permissions.is_admin or permissions.is_creator):
-        raise RuntimeError("Аккаунт SESSION_STRING должен быть администратором целевого канала")
+        raise RuntimeError("Аккаунт сессии должен быть администратором целевого канала")
     for reader in service.readers:
         await reader.resolve()
     service.startup_error = None
@@ -78,6 +78,13 @@ async def main():
     settings = Settings.from_env(require_sync=False)
     state = StateStore(settings.state_file)
     state.acquire()
+
+    # /login stores the user StringSession in durable state. Prefer it over the
+    # Railway variable so a revoked session can be replaced without editing Variables.
+    stored_session = state.get("session_string", "")
+    if stored_session:
+        settings.session = stored_session
+
     control_client = None
     controller = None
     service = SyncService(None, settings, state)
@@ -85,17 +92,19 @@ async def main():
         if settings.bot_token:
             control_client = TelegramClient(StringSession(), settings.api_id, settings.api_hash,
                                              flood_sleep_threshold=0)
-            await control_client.start(bot_token=settings.bot_token)
+            await asyncio.wait_for(control_client.start(bot_token=settings.bot_token), timeout=30)
             bot = await control_client.get_me()
             controller = Controller(control_client, service, settings.admin_ids, username=bot.username)
             log.info("Управляющий бот @%s готов. Открой его в личных сообщениях и отправь /start",
                      bot.username)
+            print(f"🤖 Управляющий бот @{bot.username} готов — /start должен отвечать", flush=True)
             if not settings.admin_ids:
-                log.warning("ADMIN_IDS не задан: доступ получит владелец SESSION_STRING после авторизации. "
-                            "Для другого аккаунта укажи его ID в ADMIN_IDS")
+                log.warning("ADMIN_IDS не задан: до авторизации сессии /start покажет ID. "
+                            "Для входа через /login заранее укажи ADMIN_IDS/ADMIN_ID")
         else:
             log.warning("BOT_TOKEN / CONTROL_BOT_TOKEN не задан: управляющий бот НЕ запущен. "
                         "Добавь токен своего бота из BotFather в одну из этих переменных")
+            print("❌ Управляющий бот не запущен: нет BOT_TOKEN / CONTROL_BOT_TOKEN", flush=True)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError):
