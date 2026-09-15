@@ -8,7 +8,7 @@ from bot_publisher import digest
 from first_message_publisher import PinnedBotAPIPublisher
 
 
-CATALOG_TEXT = "🗂 КАТАЛОГ — выбери раздел\nНажми на нужный раздел — перейдёшь к прайсу.\nСкопируй позицию вместе с ценой и пришли её менеджеру."
+CATALOG_TEXT = "🗂 КАТАЛОГ — выбери категорию\nНажми на категорию — перейдёшь к началу нужной части прайса.\nСкопируй позицию вместе с ценой и пришли её менеджеру."
 
 
 def message_link(chat_id, message_id, username=""):
@@ -23,6 +23,26 @@ def message_link(chat_id, message_id, username=""):
 def page_title(content):
     match = re.match(r"<b>\s*(?:—\s*)?(.*?)(?:\s*—)?\s*</b>", content)
     return html.unescape(match[1]) if match else "Прайс"
+
+
+def catalog_group(title):
+    """Collapse many physical price blocks into a small customer-facing catalog."""
+    name = title.casefold().strip()
+    if name.startswith(("iphone", "apple watch", "airpods", "ipad", "macbook", "mac mini", "mac studio", "apple tv", "apple", "cpo", "asis")):
+        return "Apple"
+    if name.startswith("samsung"):
+        return "Samsung"
+    if name.startswith(("honor", "realme", "huawei", "tecno", "xiaomi", "google", "oneplus", "oppo", "vivo", "nothing", "nubia", "infinix")):
+        return "Смартфоны"
+    if name.startswith(("oura", "coros", "garmin", "ray-ban")):
+        return "Часы / носимое"
+    if name.startswith(("bowers", "harman", "bose", "marshall", "jbl", "anker", "rode")):
+        return "Аудио"
+    if name.startswith(("dji", "insta360", "gopro", "kodak", "fujifilm", "canon", "sony")):
+        return "Фото / видео"
+    if name.startswith(("nintendo", "playstation", "xbox")):
+        return "Игры"
+    return "Другое"
 
 
 class CatalogPublisher(PinnedBotAPIPublisher):
@@ -128,15 +148,20 @@ class CatalogPublisher(PinnedBotAPIPublisher):
     async def _update_catalog(self, pages, records):
         manifest = self.state.get("published", {}).get("messages", {})
         buttons = []
-        seen = set()
+        seen_blocks = set()
+        seen_groups = set()
         for key, content in pages.items():
             block_key = key.rsplit(":", 1)[0]
-            if block_key in seen or key not in manifest:
+            if block_key in seen_blocks or key not in manifest:
                 continue
-            seen.add(block_key)
+            seen_blocks.add(block_key)
+            group = catalog_group(page_title(content))
+            if group in seen_groups:
+                continue
             link = message_link(self.target, manifest[key]["id"])
             if link:
-                buttons.append({"text": page_title(content), "url": link})
+                seen_groups.add(group)
+                buttons.append({"text": group, "url": link})
         batches = [buttons[start:start + 80] for start in range(0, len(buttons), 80)] or [[]]
         changes = 0
         for index, batch in enumerate(batches):
@@ -191,7 +216,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # First publish/reorder every price page. Only then create or move the
             # navigation catalog, otherwise Telegram places it before later posts.
             changes = await super().publish(pages)
-            count = max(1, (len({key.rsplit(":", 1)[0] for key in pages}) + 79) // 80)
+            count = 1
             records = await self._prepare_catalog(count)
             changes += await self._update_catalog(pages, records)
             return changes

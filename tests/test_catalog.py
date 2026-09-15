@@ -50,7 +50,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         ordered = sorted(manifest.values(), key=lambda e: e["id"])
         self.assertTrue(ordered[0]["content"].startswith("<b>Dyson</b>"))
         buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
-        self.assertEqual([b["text"] for b in buttons], ["Dyson", "AirPods", "iPhone 17"])
+        self.assertEqual([b["text"] for b in buttons], ["Другое", "Apple"])
         self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{ordered[0]['id']}")
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
         self.publisher.calls.clear()
@@ -69,15 +69,15 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(21, price_ids)
         self.assertGreater(self.state.get("catalog")["messages"][0]["id"], max(price_ids))
 
-    async def test_pagination_keeps_all_catalog_sections(self):
-        pages = {f"block{i}:0": f"<b>— Device {i} —</b>\n\n<code>Device {i} — 1000</code>" for i in range(91)}
+    async def test_catalog_stays_compact_even_with_many_price_blocks(self):
+        pages = {f"block{i}:0": f"<b>Device {i}</b>\n\n<code>Device {i} — 1000</code>" for i in range(91)}
         await self.publisher.publish(pages)
         records = self.state.get("catalog")["messages"]
-        self.assertEqual(len(records), 2)
-        edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
-        buttons = [b for edit in edits for row in edit["reply_markup"]["inline_keyboard"] for b in row]
-        self.assertEqual(sum(b["text"].startswith("Device") for b in buttons), 91)
-        self.assertTrue(all(len(row) <= 2 for edit in edits for row in edit["reply_markup"]["inline_keyboard"]))
+        self.assertEqual(len(records), 1)
+        edit = self.catalog_edit()
+        buttons = [b for row in edit["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertEqual([b["text"] for b in buttons], ["Другое"])
+        self.assertTrue(all(len(row) <= 2 for row in edit["reply_markup"]["inline_keyboard"]))
 
     async def test_catalog_is_never_pinned(self):
         await self.publisher.publish(self.pages())
@@ -163,7 +163,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(method == "pinChatMessage" and payload.get("message_id") == first
                             for method, payload in self.publisher.calls))
 
-    async def test_samsung_series_get_separate_working_catalog_buttons(self):
+    async def test_samsung_series_share_one_compact_catalog_button(self):
         items = parse_documents(["""Samsung
 A56 8/256 Black — 35000
 S26 12/256 Black — 65000
@@ -172,11 +172,26 @@ Z Fold 7 12/256 Black — 120000"""]).items
         await self.publisher.publish(pages)
         edit = self.catalog_edit()
         buttons = [button for row in edit["reply_markup"]["inline_keyboard"] for button in row]
-        samsung = [button for button in buttons if button["text"].startswith("Samsung")]
-        self.assertEqual([button["text"] for button in samsung], [
-            "Samsung A + S25", "Samsung S26", "Samsung Fold / Flip"
-        ])
-        self.assertTrue(all(button.get("url") for button in samsung))
+        samsung = [button for button in buttons if button["text"] == "Samsung"]
+        self.assertEqual(len(samsung), 1)
+        self.assertTrue(samsung[0].get("url"))
+
+    async def test_catalog_has_at_most_eight_customer_categories(self):
+        items = parse_documents(["""iPhone 17 256 Black — 60000
+Apple Watch Ultra 3 49mm Black — 70000
+Samsung A57 8/256 Blue — 32000
+Xiaomi 15 12/256 White — 48000
+Oura Ring 4 Silver — 35000
+Bose Onyx 9 Black — 30000
+DJI Osmo Pocket 4 — 45000
+PlayStation 5 Pro — 70000
+Dyson HS08 — 40000"""]).items
+        await self.publisher.publish(render_blocks(items, Settings()))
+        buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        self.assertLessEqual(len(buttons), 8)
+        self.assertEqual({button["text"] for button in buttons}, {
+            "Apple", "Samsung", "Смартфоны", "Часы / носимое", "Аудио", "Фото / видео", "Игры", "Другое"
+        })
 
     async def test_closed_catalog_keeps_buttons_and_removes_prices(self):
         await self.publisher.publish(self.pages())

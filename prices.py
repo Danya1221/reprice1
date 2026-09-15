@@ -513,6 +513,64 @@ def samsung_a_s25_sort(item):
     return 9, 0, 0, plain.casefold()
 
 
+def model_group_key(item):
+    """A stable model family key used only for visual spacing in rendered price lists."""
+    plain = FLAGS.sub("", normal_title(item.title)).strip()
+
+    model = iphone_model(plain)
+    if model:
+        return model.casefold()
+
+    watch = re.search(r"\b(?:Series\s*\d{1,2}|SE(?:\s*\d{1,2})?|Ultra(?:\s*\d{1,2})?)\b", plain, re.I)
+    if watch and re.search(r"\bWatch\b", plain, re.I):
+        return ("apple watch " + watch.group(0)).casefold()
+
+    # Most phone/tablet price rows put RAM/storage immediately after the model.
+    storage = re.search(r"\b(?:\d{1,2}/\d{2,4}(?:GB|TB)?|\d{2,4}(?:GB|TB))\b", plain, re.I)
+    if storage:
+        prefix = plain[:storage.start()].strip(" -—–/·")
+        if prefix:
+            return clean(prefix).casefold()
+
+    known = [
+        r"\b(?:Samsung\s+)?Buds\s*\d+(?:\s*FE)?\b",
+        r"\b(?:Samsung\s+)?A\s*\d{2,3}[A-Za-z]*\b",
+        r"\b(?:Samsung\s+)?S\s*\d{2}(?:\s*(?:FE|Edge|Ultra|\+|Plus))?\b",
+        r"\b(?:Samsung\s+)?Tab\s*S\s*\d+(?:\s*Ultra)?\b",
+        r"\b(?:Z\s*)?(?:Fold|Flip)\s*\d+\b",
+        r"\b(?:Oura\s+Ring|Oura)\s*\d+\b",
+        r"\bCoros\s+Pace\s*\d+\b",
+        r"\bDJI\s+Osmo\s+(?:Pocket|Action)\s*\d+\b",
+        r"\bInsta\s*360\s*[A-Z]*\d+\b|\bInsta360\s*[A-Z]*\d+\b",
+        r"\b(?:Ray-Ban\s+Meta\s+)?(?:Wayfarer|Skyler)\b",
+        r"\bR(?:O|Ø)DE\s+Wireless\s+(?:Me|Pro|Micro|GO(?:\s*\d+)?)\b",
+        r"\b(?:AirPods|iPad)\s+[A-Za-z]*\s*\d+\b",
+    ]
+    for pattern in known:
+        match = re.search(pattern, plain, re.I)
+        if match:
+            return clean(match.group(0)).casefold()
+
+    # Generic numbered product families: keep through the first real model number,
+    # plus a short modifier such as Pro/Ultra/FE/Edge/S3 when present.
+    tokens = plain.split()
+    for index, token in enumerate(tokens):
+        if not re.search(r"\d", token):
+            continue
+        if index == 0 and re.fullmatch(r"Insta360", token, re.I):
+            continue
+        end = index + 1
+        while end < len(tokens) and end <= index + 2 and re.fullmatch(
+            r"(?:Pro|Max|Ultra|Plus|FE|Edge|Mini|Air|S\d+[A-Za-z]*|Gen\d+)", tokens[end], re.I
+        ):
+            end += 1
+        return clean(" ".join(tokens[:end])).casefold()
+
+    # If there is no reliable model signal, keep rows together rather than
+    # inserting random gaps based on colour/accessory wording.
+    return item.block.casefold()
+
+
 def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
     # Apply at render time so previously saved prices lose the note as well.
@@ -554,11 +612,14 @@ def render_blocks(items, settings, overrides=None, closed=False):
                     lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
                 last_sim = None
                 last_samsung_section = None
+                last_model_key = None
                 sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
                 for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), sorter(i))):
                     if block == "Samsung A + S25":
                         samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
                         if samsung_section != last_samsung_section:
+                            if last_samsung_section is not None and lines and lines[-1] != "":
+                                lines.append("")
                             lines.append("<b>— " + samsung_section + " —</b>")
                             last_samsung_section = samsung_section
                     if iphone_model(item.title) and item.sim != last_sim:
@@ -566,6 +627,11 @@ def render_blocks(items, settings, overrides=None, closed=False):
                         if label:
                             lines.append("<b>— " + label + " —</b>")
                         last_sim = item.sim
+                    model_key = model_group_key(item)
+                    if (last_model_key is not None and model_key != last_model_key
+                            and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+                        lines.append("")
+                    last_model_key = model_key
                     row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
                     line = "<code>" + html.escape(row) + "</code>"
                     if units(line) > 3000:

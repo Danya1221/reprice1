@@ -196,6 +196,28 @@ Ultra 3 49mm Black — 70000""").items
         self.assertEqual(len(pages), 1)
         self.assertTrue(next(iter(pages.values())).startswith("<b>Apple Watch</b>"))
 
+    def test_blank_line_is_added_when_model_changes(self):
+        items = self.parse("""A17 6/128GB Gray — 15000
+A17 8/256GB Blue — 17800
+A27 6/128GB Black — 20800
+A27 8/256GB Blue — 23800
+S25 12/256 Navy — 50500
+S25 Ultra 12/256 Black — 65000""").items
+        page = next(value for value in render_blocks(items, Settings()).values() if value.startswith("<b>Samsung A + S25</b>"))
+        self.assertIn("A17 8/256GB Blue — 17 800</code>\n\n<code>A27", page)
+        self.assertIn("<b>— Galaxy S25 —</b>", page)
+        self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>S25 Ultra", page)
+
+    def test_iphone_combined_block_has_model_gaps(self):
+        items = self.parse("""iPhone: 13-14-15
+13 128GB Midnight — 45100
+13 256GB Blue — 50000
+14 128GB Midnight — 46400
+15 128GB Black — 55400""").items
+        page = next(iter(render_blocks(items, Settings()).values()))
+        self.assertIn("iPhone 13 256GB Blue — 50 000</code>\n\n<code>iPhone 14", page)
+        self.assertIn("iPhone 14 128GB Midnight — 46 400</code>\n\n<code>iPhone 15", page)
+
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]
         self.assertIn("Актив (Ориг. Упаковка)", item.title)
