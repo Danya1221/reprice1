@@ -59,12 +59,52 @@ def _resolved_entity(result):
     return None
 
 
-async def resolve_input_peer(client, value, *, label="Telegram peer", dialog_limit=400):
-    """Resolve a configured peer without depending on Telethon's transient entity cache.
+def _numeric_value(value):
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+        return int(value.strip())
+    return None
 
-    Public usernames are resolved explicitly with ResolveUsernameRequest, which returns
-    the access_hash required for bots/users/channels. Numeric/private peers fall back to
-    the current dialog list only when the direct lookup cannot work from StringSession.
+
+def _entity_allowed(entity, expected):
+    if expected == "channel":
+        return isinstance(entity, (types.Channel, types.Chat))
+    if expected == "user":
+        return isinstance(entity, types.User)
+    return isinstance(entity, (types.User, types.Channel, types.Chat))
+
+
+def _matches_numeric(entity, numeric):
+    """Match both Bot API marked IDs and raw Telegram object IDs.
+
+    A raw channel id like 6781674751 is positive, while Telethon normally marks
+    the same channel as -1006781674751. Treat both forms as the same target.
+    """
+    if isinstance(entity, types.Channel):
+        marked = utils.get_peer_id(entity)
+        return numeric in {entity.id, marked}
+    if isinstance(entity, types.Chat):
+        marked = utils.get_peer_id(entity)
+        return numeric in {entity.id, marked, -entity.id}
+    if isinstance(entity, types.User):
+        return numeric in {entity.id, utils.get_peer_id(entity)}
+    return False
+
+
+async def resolve_input_peer(
+    client,
+    value,
+    *,
+    label="Telegram peer",
+    dialog_limit=1000,
+    expected="any",
+):
+    """Resolve a configured peer without relying on StringSession entity cache.
+
+    Public usernames are resolved directly and include access_hash. Numeric values
+    are also matched against current dialogs by both raw id and Telethon/Bot API
+    marked id, so a positive raw channel id is never misread as PeerUser.
     """
     username = _username(value)
     if username:
@@ -73,37 +113,70 @@ async def resolve_input_peer(client, value, *, label="Telegram peer", dialog_lim
             entity = _resolved_entity(result)
             if entity is None:
                 raise RuntimeError("Telegram вернул username без полной entity")
+            if not _entity_allowed(entity, expected):
+                raise RuntimeError(
+                    "это не канал/группа" if expected == "channel" else "неподходящий тип Telegram-чата"
+                )
             return utils.get_input_peer(entity)
         except Exception as exc:
             raise RuntimeError(
                 f"{label}: не удалось открыть @{username}: {type(exc).__name__}: {exc}"
             ) from exc
 
+    numeric = _numeric_value(value)
+    direct_error = None
+
+    # For TARGET_CHANNEL a positive raw channel id must be searched as a channel
+    # before Telethon gets a chance to interpret the same positive number as a user.
+    if not (expected == "channel" and numeric is not None):
+        try:
+            direct = await client.get_input_entity(value)
+            if expected == "channel" and not isinstance(direct, (types.InputPeerChannel, types.InputPeerChat)):
+                raise ValueError("получена entity пользователя вместо канала")
+            if expected == "user" and not isinstance(direct, types.InputPeerUser):
+                raise ValueError("получена entity канала вместо пользователя")
+            return direct
+        except Exception as exc:
+            direct_error = exc
+
     try:
-        return await client.get_input_entity(value)
-    except Exception as direct_error:
-        wanted_id = None
-        try:
-            wanted_id = utils.get_peer_id(value)
-        except Exception:
-            pass
-
-        try:
-            async for dialog in client.iter_dialogs(limit=dialog_limit):
-                entity = dialog.entity
-                if wanted_id is not None and utils.get_peer_id(entity) == wanted_id:
-                    return utils.get_input_peer(entity)
-        except Exception as dialog_error:
-            raise RuntimeError(
-                f"{label}: не удалось найти {value!r} в Telegram: "
-                f"{type(dialog_error).__name__}: {dialog_error}"
-            ) from dialog_error
-
+        async for dialog in client.iter_dialogs(limit=dialog_limit):
+            entity = dialog.entity
+            if not _entity_allowed(entity, expected):
+                continue
+            if numeric is not None and _matches_numeric(entity, numeric):
+                return utils.get_input_peer(entity)
+            if numeric is None:
+                try:
+                    if utils.get_peer_id(entity) == utils.get_peer_id(value):
+                        return utils.get_input_peer(entity)
+                except Exception:
+                    pass
+    except Exception as dialog_error:
         raise RuntimeError(
-            f"{label}: Telegram знает ID {value!r}, но не дал access_hash. "
-            "Укажи публичный @username или открой этот чат на аккаунте поставщиков. "
-            f"Исходная ошибка: {type(direct_error).__name__}: {direct_error}"
-        ) from direct_error
+            f"{label}: не удалось найти {value!r} в Telegram: "
+            f"{type(dialog_error).__name__}: {dialog_error}"
+        ) from dialog_error
+
+    # One last direct attempt is useful for negative marked IDs already known by
+    # Telethon, but never accept a user for TARGET_CHANNEL.
+    if direct_error is None:
+        try:
+            direct = await client.get_input_entity(value)
+            if expected == "channel" and not isinstance(direct, (types.InputPeerChannel, types.InputPeerChat)):
+                raise ValueError("получена entity пользователя вместо канала")
+            if expected == "user" and not isinstance(direct, types.InputPeerUser):
+                raise ValueError("получена entity канала вместо пользователя")
+            return direct
+        except Exception as exc:
+            direct_error = exc
+
+    kind_hint = "канал/группу" if expected == "channel" else "чат"
+    raise RuntimeError(
+        f"{label}: не удалось получить access_hash для {value!r}. "
+        f"Аккаунт должен видеть этот {kind_hint}; поддерживаются @username, -100... и raw channel ID. "
+        f"Исходная ошибка: {type(direct_error).__name__}: {direct_error}"
+    ) from direct_error
 
 
 class SupplierReader:
@@ -158,7 +231,6 @@ class SupplierReader:
             try:
                 await asyncio.wait_for(action(), timeout=s.response_timeout)
             except BotResponseTimeoutError:
-                # A callback may deliver a new message but omit answerCallbackQuery.
                 pass
             deadline = time.monotonic() + s.response_timeout
             while time.monotonic() < deadline:
