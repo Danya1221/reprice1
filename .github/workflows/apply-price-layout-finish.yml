@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply layout fixes
-        run: python apply_price_layout_finish2.py
+        run: python run_price_layout_finish.py
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
