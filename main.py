@@ -6,9 +6,9 @@ from contextlib import suppress
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from bot_publisher import BotAPIPublisher
 from config import Settings
-from control_group import GroupBindingController as BotAPIController
+from control_first import FirstMessageController as BotAPIController
+from first_message_publisher import PinnedBotAPIPublisher
 from runtime import SyncService
 from state import StateStore
 
@@ -124,7 +124,7 @@ async def main():
     # Publishing is separate from supplier-bot reading. TARGET_CHANNEL is checked
     # only when the bot actually needs to publish/edit the finished price.
     if settings.bot_token:
-        service.publisher = BotAPIPublisher(
+        service.publisher = PinnedBotAPIPublisher(
             settings.bot_token,
             settings.target,
             state,
