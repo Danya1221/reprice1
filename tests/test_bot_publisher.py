@@ -159,6 +159,39 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(1 for method, _ in publisher.calls if method == "sendMessage"), 2)
 
 
+    async def test_failed_rebuild_keeps_old_live_posts_until_new_set_is_complete(self):
+        settings = Settings(send_delay=0, admin_ids=(42,))
+        group_id = -100777
+        chats = {group_id: {"id": group_id, "type": "supergroup", "title": "Розница"}}
+        publisher = FakeBotPublisher(group_id, self.state, settings, chats)
+        pages = {"one:0": "Первый блок", "two:0": "Второй блок"}
+
+        await publisher.publish(pages)
+        old_manifest = self.state.get("published")["messages"]
+        old_ids = [old_manifest[key]["id"] for key in pages]
+        publisher.missing_ids.add(old_ids[0])
+        original_api = publisher.api
+
+        async def fail_replacement_send(method, **payload):
+            if method == "sendMessage":
+                publisher.calls.append((method, payload))
+                raise RuntimeError("Bot API sendMessage: временный сбой соединения: ServerDisconnectedError")
+            return await original_api(method, **payload)
+
+        publisher.api = fail_replacement_send
+        publisher.calls.clear()
+        with self.assertRaisesRegex(RuntimeError, "ServerDisconnectedError"):
+            await publisher.publish(pages)
+
+        # The surviving old block must still be live; destructive deletion is delayed
+        # until a complete new set has been sent successfully.
+        self.assertFalse(any(method == "deleteMessage" and payload["message_id"] == old_ids[1]
+                             for method, payload in publisher.calls))
+        staged = self.state.get("rebuild_old_manifest", {})
+        self.assertEqual(staged.get("binding"), publisher.binding())
+        self.assertEqual(len(staged.get("messages", {})), 2)
+
+
 
 if __name__ == "__main__":
     unittest.main()

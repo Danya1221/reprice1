@@ -115,6 +115,13 @@ class SyncService:
             return 0, changes
         selected = select_items(catalog, self.settings, options)
         pages = render_blocks(selected, self.settings, options, closed=closed)
+        if not closed:
+            rendered_rows = sum(content.count("<code>") for content in pages.values())
+            if rendered_rows != len(selected):
+                raise RuntimeError(
+                    f"Защита публикации: рендер потерял позиции ({rendered_rows} из {len(selected)}). "
+                    "Текущий прайс оставлен без изменений."
+                )
         changes = await self.publisher.publish(pages)
         self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(selected)})
         return len(selected), changes

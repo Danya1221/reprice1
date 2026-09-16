@@ -125,6 +125,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.readers[0].fetch.assert_not_awaited()
         self.client.is_user_authorized.assert_not_awaited()
 
+
+    async def test_render_guard_never_publishes_a_partial_price(self):
+        with patch("runtime.render_blocks", return_value={"bad:0": "<b>Пусто</b>"}):
+            with self.assertRaisesRegex(RuntimeError, "рендер потерял позиции"):
+                await self.service.render(items=[self.item])
+        self.service.publisher.publish.assert_not_awaited()
+
+
     async def test_format_change_during_initialization_is_reported(self):
         self.service.ready = False
         self.service.startup_error = "SESSION_STRING недействительна"

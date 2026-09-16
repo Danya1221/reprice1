@@ -359,22 +359,18 @@ class BotAPIPublisher:
         if not missing:
             return 0
 
-        deleted = 0
-        for entry in list(manifest.values()):
-            message_id = entry.get("id")
-            if not message_id:
-                continue
-            try:
-                await self._delete(message_id)
-                deleted += 1
-                await asyncio.sleep(max(0, self.settings.send_delay))
-            except RuntimeError as exc:
-                if not is_missing_message_error(exc):
-                    raise
-
+        # Availability-safe rebuild: never erase the last complete price before a
+        # replacement exists. Keep the old manifest as a staging snapshot, publish
+        # a complete fresh set under new IDs, and delete the old live posts only
+        # after every replacement page has been checkpointed successfully.
+        snapshot = {key: dict(entry) for key, entry in manifest.items()}
+        self.state.set("rebuild_old_manifest", {
+            "binding": binding,
+            "messages": snapshot,
+        })
         manifest.clear()
         self.state.set("published", {"binding": binding, "messages": manifest})
-        return deleted
+        return 0
 
     async def publish(self, pages):
         async with self.lock:
@@ -382,9 +378,19 @@ class BotAPIPublisher:
             binding = self.binding()
             stored = self.state.get("published", {})
             manifest = stored.get("messages", {}) if stored.get("binding") == binding else {}
-            manifest = self.arrange_manifest(pages, manifest)
+            rebuild_state = self.state.get("rebuild_old_manifest", {}) or {}
+            rebuilding = (
+                rebuild_state.get("binding") == binding
+                and bool(rebuild_state.get("messages"))
+            )
+            # During a staged rebuild, the current manifest is the partial/new set.
+            # Do not remap those checkpointed new IDs onto different page keys.
+            if not rebuilding:
+                manifest = self.arrange_manifest(pages, manifest)
             self.state.set("published", {"binding": binding, "messages": manifest})
-            changes = await self._verify_or_rebuild_manifest(pages, manifest, binding)
+            changes = 0
+            if not rebuilding:
+                changes = await self._verify_or_rebuild_manifest(pages, manifest, binding)
 
             for key, content in pages.items():
                 entry = manifest.get(key)
@@ -452,6 +458,28 @@ class BotAPIPublisher:
                 changes += 1
                 if deleted:
                     await asyncio.sleep(max(0, self.settings.send_delay))
+
+            # Commit a staged rebuild only after the complete new page set exists.
+            # If any send/edit above raises, execution never reaches this block and
+            # the previous live price remains untouched for the next retry.
+            rebuild_state = self.state.get("rebuild_old_manifest", {}) or {}
+            if rebuild_state.get("binding") == binding and rebuild_state.get("messages"):
+                new_ids = {int(entry["id"]) for entry in manifest.values() if entry.get("id")}
+                for entry in rebuild_state.get("messages", {}).values():
+                    old_id = entry.get("id")
+                    if not old_id or int(old_id) in new_ids:
+                        continue
+                    deleted = False
+                    try:
+                        await self._delete(old_id)
+                        deleted = True
+                    except RuntimeError as exc:
+                        if not is_missing_message_error(exc):
+                            raise
+                    changes += 1
+                    if deleted:
+                        await asyncio.sleep(max(0, self.settings.send_delay))
+                self.state.set("rebuild_old_manifest", {})
 
             return changes
 
