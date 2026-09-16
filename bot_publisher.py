@@ -55,36 +55,70 @@ class BotAPIPublisher:
         # intentionally disabled; finished prices must go to a bound group/channel.
         self.used_admin_fallback = False
 
-    async def api(self, method, **payload):
-        """Call Bot API and transparently obey Telegram retry_after on 429.
+    def _new_http(self):
+        return aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=40))
 
-        A large price can require several message edits. Telegram may temporarily
-        throttle those edits even with a delay between them. Do not fail the whole
-        synchronization: wait exactly as requested by Telegram and resume.
+    async def _reset_http(self):
+        old = self.http
+        self.http = None
+        if old is not None and not old.closed:
+            with suppress(Exception):
+                await old.close()
+
+    @staticmethod
+    def _transport_retry_safe(method, exc):
+        # Repeating sendMessage after a dropped response can create a duplicate:
+        # Telegram may have accepted the message even though aiohttp never saw the
+        # response. Connector failures happen before a request is sent and are safe.
+        if isinstance(exc, aiohttp.ClientConnectorError):
+            return True
+        return method not in {"sendMessage", "copyMessage", "forwardMessage"}
+
+    async def api(self, method, **payload):
+        """Call Bot API with 429, HTTP 5xx and transient transport retries.
+
+        Telegram occasionally closes an idle keep-alive connection and aiohttp raises
+        ServerDisconnectedError. For idempotent Bot API calls we discard that stale
+        ClientSession, reconnect and retry instead of failing the whole price sync.
         """
         if not self.token:
             raise RuntimeError("BOT_TOKEN не задан: без него нельзя публиковать прайс")
-        if self.http is None or self.http.closed:
-            self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=40))
 
         max_attempts = 5
         for attempt in range(max_attempts):
-            async with self.http.post(f"{self.base}/{method}", json=payload) as response:
-                data = await response.json(content_type=None)
+            if self.http is None or self.http.closed:
+                self.http = self._new_http()
+            try:
+                async with self.http.post(f"{self.base}/{method}", json=payload) as response:
+                    data = await response.json(content_type=None)
+                    status = response.status
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                retry_safe = self._transport_retry_safe(method, exc)
+                await self._reset_http()
+                if retry_safe and attempt < max_attempts - 1:
+                    await asyncio.sleep(min(1 + attempt, 3))
+                    continue
+                raise RuntimeError(
+                    f"Bot API {method}: временный сбой соединения: {type(exc).__name__}: {exc}"
+                ) from exc
+
             if data.get("ok"):
                 return data.get("result")
 
             parameters = data.get("parameters") or {}
             retry_after = parameters.get("retry_after")
-            throttled = response.status == 429 or retry_after is not None
+            throttled = status == 429 or retry_after is not None
             if throttled and attempt < max_attempts - 1:
                 try:
                     wait_seconds = max(1, int(retry_after or 1))
                 except (TypeError, ValueError):
                     wait_seconds = 1
-                # Small safety margin prevents an immediate second 429 on the edge
-                # of Telegram's window.
                 await asyncio.sleep(wait_seconds + 1)
+                continue
+
+            if status in {500, 502, 503, 504} and method not in {"sendMessage", "copyMessage", "forwardMessage"} and attempt < max_attempts - 1:
+                await self._reset_http()
+                await asyncio.sleep(min(1 + attempt, 3))
                 continue
 
             raise RuntimeError(f"Bot API {method}: {data.get('description', data)}")
