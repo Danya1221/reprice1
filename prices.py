@@ -800,6 +800,13 @@ def build_physical_message(sections, bundle=""):
         return ""
     if len(sections) == 1 and not bundle:
         section = sections[0]
+        heading = physical_brand_label(section["title"])
+        if heading != section["title"]:
+            return (
+                "<b>" + html.escape(heading) + "</b>\n\n"
+                + "<b>— " + html.escape(section["title"]) + " —</b>\n\n"
+                + section["body"]
+            )
         return "<b>" + html.escape(section["title"]) + "</b>\n\n" + section["body"]
 
     titles = []

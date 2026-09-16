@@ -197,7 +197,9 @@ Ultra 3 49mm Black — 70000""").items
         self.assertEqual([item.block for item in items], ["Apple Watch"] * 3)
         pages = render_blocks(items, Settings())
         self.assertEqual(len(pages), 1)
-        self.assertTrue(next(iter(pages.values())).startswith("<b>Apple Watch</b>"))
+        watch_page = next(iter(pages.values()))
+        self.assertTrue(watch_page.startswith("<b>Apple</b>"))
+        self.assertIn("<b>— Apple Watch —</b>", watch_page)
 
     def test_only_requested_galaxy_a_models_are_auto_detected(self):
         items = self.parse("""A17 6/128GB Gray — 15000
@@ -277,6 +279,23 @@ Apple TV 4K 64GB — 20200""").items
         for foreign in ["Kodak", "Marshall", "Oura Ring"]:
             self.assertNotIn("— " + foreign, apple)
 
+    def test_single_apple_section_still_has_apple_as_top_heading(self):
+        for source, section in [
+            ("Mac mini M4 16/256 Silver — 68800", "Mac mini"),
+            ("Apple TV 4K 64GB — 20200", "Apple TV"),
+            ("MacBook Air M4 16/256 Silver — 90000", "MacBook / iMac"),
+        ]:
+            items = self.parse(source).items
+            content = next(iter(render_blocks(items, Settings()).values()))
+            self.assertTrue(content.startswith("<b>Apple</b>\n\n"), content)
+            self.assertIn(f"<b>— {section} —</b>", content)
+
+    def test_single_samsung_section_still_has_samsung_as_top_heading(self):
+        items = self.parse("S26 12/256 Black — 64300").items
+        content = next(iter(render_blocks(items, Settings()).values()))
+        self.assertTrue(content.startswith("<b>Samsung</b>\n\n"), content)
+        self.assertIn("<b>— Samsung S26 —</b>", content)
+
     def test_samsung_sections_stay_together_and_do_not_mix_with_honor(self):
         items = self.parse("""Buds 4 Black — 9000
 A27 8/256 Blue — 23800
@@ -297,7 +316,8 @@ A27 6/128GB Black — 20800
 A27 8/256GB Blue — 23800
 S25 12/256 Navy — 50500
 S25 Ultra 12/256 Black — 65000""").items
-        page = next(value for value in render_blocks(items, Settings()).values() if value.startswith("<b>Samsung A + S25</b>"))
+        page = next(value for value in render_blocks(items, Settings()).values() if value.startswith("<b>Samsung</b>"))
+        self.assertIn("<b>— Samsung A + S25 —</b>", page)
         self.assertIn("A17 8/256GB Blue — 17 800</code>\n\n<code>A27", page)
         self.assertIn("<b>— Galaxy S25 —</b>", page)
         self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>S25 Ultra", page)

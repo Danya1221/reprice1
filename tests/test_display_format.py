@@ -11,7 +11,8 @@ class DisplayFormatTests(unittest.TestCase):
         self.assertIn("<code>AirPods 4 — 9 800</code>", content)
         self.assertNotIn("₽", content)
         self.assertNotIn("АКТУАЛЬНЫЙ ПРАЙС", content)
-        self.assertTrue(content.startswith("<b>AirPods</b>"))
+        self.assertTrue(content.startswith("<b>Apple</b>"))
+        self.assertIn("<b>— AirPods —</b>", content)
 
     def test_section_sim_is_written_into_copyable_iphone_row(self):
         items = parse_documents(["iPhone 17\neSIM\n17 256 Black — 60000"]).items
