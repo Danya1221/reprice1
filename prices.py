@@ -193,7 +193,19 @@ def brand_of(text):
 
 
 def apple_watch_block(title):
-    if re.search(r"\b(?:apple\s*)?watch\b", title, re.I):
+    plain = FLAGS.sub("", clean(title)).strip()
+    if not re.search(r"\bwatch\b", plain, re.I):
+        return ""
+    # Never classify another manufacturer's watch as Apple just because the
+    # product name contains the generic word "Watch".
+    if re.search(
+        r"\b(?:galaxy|samsung|one\s*plus|oneplus|xiaomi|redmi|huawei|honor|"
+        r"garmin|coros|pixel|fitbit|amazfit|oppo|vivo|realme|nothing)\b",
+        plain,
+        re.I,
+    ):
+        return ""
+    if re.search(r"\bapple\s*watch\b|^watch\b", plain, re.I):
         return "Apple Watch"
     return ""
 

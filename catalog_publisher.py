@@ -40,24 +40,13 @@ def iphone_catalog_group(title):
 
 
 def catalog_labels(content):
-    """Buttons represented by one physical Telegram price message."""
-    # Navigation follows physical Telegram posts, not every logical model inside
-    # them.  This is what keeps the catalog compact after iPhone bundling.
-    title = page_title(content)
-    iphone_group = iphone_catalog_group(title)
-    if iphone_group:
-        return [iphone_group]
-    if title.casefold().strip() == "apple":
-        return ["Apple"]
-    if title.casefold().strip() == "samsung":
-        return ["Samsung"]
-
-    labels = []
-    for part in [piece.strip() for piece in title.split("•") if piece.strip()]:
-        group = catalog_group(part)
-        if group not in labels:
-            labels.append(group)
-    return labels or [catalog_group(title)]
+    """Use exactly the visible physical Telegram post heading for navigation."""
+    title = re.sub(r"\s+", " ", page_title(content)).strip() or "Прайс"
+    # Telegram inline button text is bounded; keep the beginning intact because
+    # it is the same text the customer sees at the top of the price message.
+    if len(title) > 64:
+        title = title[:61].rstrip() + "…"
+    return [title]
 
 
 def iphone_model_label(raw):
@@ -200,38 +189,31 @@ class CatalogPublisher(PinnedBotAPIPublisher):
     async def _update_catalog(self, pages, records):
         manifest = self.state.get("published", {}).get("messages", {})
         buttons = []
-        seen_blocks = set()
-        seen_groups = set()
+        seen_titles = set()
         for key, content in pages.items():
-            block_key = key.rsplit(":", 1)[0]
-            if block_key in seen_blocks or key not in manifest:
+            if key not in manifest:
                 continue
-            seen_blocks.add(block_key)
-            labels = catalog_labels(content)
             link = message_link(self.target, manifest[key]["id"])
             if not link:
                 continue
-            for group in labels:
-                if group in seen_groups:
+            for title in catalog_labels(content):
+                if title in seen_titles:
                     continue
-                seen_groups.add(group)
-                buttons.append({"text": group, "url": link})
-        priority = {
-            "iPhone 11–15": 0,
-            "iPhone 16": 1,
-            "iPhone 17": 2,
-            "Apple": 3,
-            "Samsung": 4,
-            "Смартфоны": 5,
-            "Часы / носимое": 6,
-            "Аудио": 7,
-            "Фото / видео": 8,
-            "Игры": 9,
-            "Другое": 10,
-        }
-        buttons.sort(key=lambda button: (priority.get(button["text"], 100), button["text"].casefold()))
+                seen_titles.add(title)
+                buttons.append({"text": title, "url": link})
+
+        # Preserve the exact physical post order. The catalog is navigation to
+        # those posts, so it must not reorder or rename them independently.
         batches = [buttons[start:start + 80] for start in range(0, len(buttons), 80)] or [[]]
         changes = 0
+
+        # Create any extra catalog pages before adding inter-page links so every
+        # referenced message id already exists.
+        while len(records) < len(batches):
+            changes += await self._catalog_entry(
+                records, len(records), CATALOG_TEXT + "\n\nОбновляю разделы…", []
+            )
+
         for index, batch in enumerate(batches):
             rows = [batch[start:start + 2] for start in range(0, len(batch), 2)]
             text = CATALOG_TEXT + (f"\nСтраница {index + 1} из {len(batches)}" if len(batches) > 1 else "")
@@ -290,7 +272,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 4
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 5
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -298,7 +280,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 4)
+                self.state.set("catalog_layout_version", 5)
             return changes
 
     async def set_first_message(self, text):
