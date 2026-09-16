@@ -85,6 +85,7 @@ class Settings:
     api_id: int = 0
     api_hash: str = ""
     session: str = ""
+    session_2: str = ""
     target: object = ""
     sources: tuple = ()
     poll_seconds: int = 600
@@ -140,6 +141,7 @@ class Settings:
             api_id=env_int("API_ID", 0, maximum=2**31-1),
             api_hash=os.getenv("API_HASH", "").strip(),
             session=os.getenv("SESSION_STRING", "").strip(),
+            session_2=os.getenv("SESSION_STRING_2", "").strip(),
             target=peer(os.getenv("TARGET_CHANNEL", "")),
             sources=tuple(sources),
             poll_seconds=env_int("POLL_SECONDS", 600, 30, 86400),

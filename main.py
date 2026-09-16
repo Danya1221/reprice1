@@ -16,60 +16,86 @@ log = logging.getLogger(__name__)
 
 
 async def prepare_supplier(service, settings, controller=None):
-    """Prepare the Telegram user session used to talk to supplier bots.
-
-    SUPPLIER_BOT / SUPPLIER_BOT_2 are Telegram bots. Their availability must be
-    checked independently from the place where the finished price is published.
-    A bad TARGET_CHANNEL must never make supplier reading appear unavailable.
-    """
+    """Prepare one or two Telegram user accounts used to read supplier prices."""
     settings.validate(require_sync=False)
     if not settings.session:
-        raise ValueError("Сессия не подключена; выполни /login в управляющем боте")
+        raise ValueError("Сессия аккаунта 1 не подключена; выполни /login 1 в управляющем боте")
     if not settings.sources:
         raise ValueError("Укажи SUPPLIER_BOT для чтения прайса")
-    try:
-        session = StringSession(settings.session)
-    except Exception:
-        raise ValueError("SESSION_STRING повреждена; выполни /login в управляющем боте") from None
 
-    client = TelegramClient(
-        session,
-        settings.api_id,
-        settings.api_hash,
-        auto_reconnect=True,
-        connection_retries=5,
-        retry_delay=2,
-        request_retries=3,
-        flood_sleep_threshold=60,
-    )
-    service.attach_client(client)
-    await service.connect()
+    sessions = [(1, settings.session), (2, getattr(settings, "session_2", ""))]
+    primary_ready = False
+    for slot, session_string in sessions:
+        if not session_string:
+            continue
+        try:
+            try:
+                session = StringSession(session_string)
+            except Exception:
+                raise ValueError(f"Сессия аккаунта {slot} повреждена; выполни /login {slot}") from None
 
-    me = await client.get_me()
-    if me is None or me.bot:
-        raise ValueError("Сессия должна принадлежать пользовательскому аккаунту, которому доступны боты-поставщики")
-    if controller is not None and not settings.admin_ids:
-        controller.admins = {me.id}
+            client = TelegramClient(
+                session,
+                settings.api_id,
+                settings.api_hash,
+                auto_reconnect=True,
+                connection_retries=5,
+                retry_delay=2,
+                request_retries=3,
+                flood_sleep_threshold=60,
+            )
+            service.attach_client(client, slot)
+            ok = await service.connect_account(slot)
+            if not ok:
+                raise ValueError(service.account_errors.get(slot, f"Аккаунт {slot} не подключился"))
 
-    # Keep an env-provided session and /login session converged in persistent state.
-    saved = client.session.save()
-    if saved and service.state.get("session_string") != saved:
-        service.state.set("session_string", saved)
-        settings.session = saved
+            me = await client.get_me()
+            if me is None or me.bot:
+                raise ValueError(f"Сессия аккаунта {slot} должна принадлежать пользовательскому Telegram-аккаунту")
+            if controller is not None and slot == 1 and not settings.admin_ids:
+                controller.admins = {me.id}
 
-    # Resolve the supplier BOTS first. Publishing is a separate subsystem and is
-    # intentionally not validated here. This prevents a TARGET_CHANNEL mistake from
-    # blocking both supplier bots and leaving their statuses as "неизвестно".
-    for reader in service.readers:
-        await reader.resolve()
+            saved = client.session.save()
+            state_key = "session_string" if slot == 1 else "session_string_2"
+            attr = "session" if slot == 1 else "session_2"
+            if saved and service.state.get(state_key) != saved:
+                service.state.set(state_key, saved)
+            setattr(settings, attr, saved or session_string)
 
+            for reader in service.readers_for_slot(slot):
+                try:
+                    await reader.resolve()
+                except Exception as exc:
+                    if slot == 1:
+                        raise
+                    log.warning(
+                        "Аккаунт 2 не видит %s: %s: %s",
+                        reader.source.label, type(exc).__name__, exc,
+                    )
+                    reader.entity = None
+
+            if slot == 1:
+                primary_ready = True
+            log.info("Telegram-аккаунт %s подключён; источников: %s", slot, len(service.readers_for_slot(slot)))
+        except Exception as exc:
+            if slot == 1:
+                raise
+            service.account_errors[slot] = str(exc) or type(exc).__name__
+            client = service.clients.get(slot)
+            if client is not None:
+                with suppress(Exception):
+                    await client.disconnect()
+            service.attach_client(None, slot)
+            log.warning("Второй Telegram-аккаунт не подключён: %s", service.account_errors[slot])
+
+    if not primary_ready:
+        raise ValueError("Аккаунт 1 не подключён; выполни /login 1")
     service.startup_error = None
     service.ready = True
-    log.info("Боты-поставщики подключены; источников: %s", len(service.readers))
 
 
 async def run_supplier(service, settings, controller=None, retry_seconds=30):
-    """Run supplier sync forever without taking the independent control bot down."""
+    """Run supplier sync forever and hot-reload either saved Telegram session."""
     database = getattr(service.state, "database", None)
     if database is not None:
         def waiting():
@@ -81,13 +107,22 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
 
     while not service.stop_event.is_set():
         service.ready = False
+        service.reload_requested = False
         try:
-            # /login may replace the session while this task is retrying.
             stored = service.state.get("session_string", "")
+            stored_2 = service.state.get("session_string_2", "")
             if stored:
                 settings.session = stored
-            await asyncio.wait_for(prepare_supplier(service, settings, controller), timeout=120)
+            if stored_2:
+                settings.session_2 = stored_2
+            await asyncio.wait_for(prepare_supplier(service, settings, controller), timeout=180)
             await service.run()
+            if service.stop_event.is_set():
+                return
+            if service.reload_requested:
+                continue
+            if service.startup_error:
+                raise RuntimeError(service.startup_error)
             return
         except asyncio.CancelledError:
             raise
@@ -99,17 +134,29 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
                 service.startup_error,
             )
         finally:
-            service.ready = False
-            async with service.lock:
-                if service.client is not None:
-                    with suppress(Exception):
-                        await asyncio.wait_for(service.client.disconnect(), timeout=10)
-                    service.attach_client(None)
+            await service.disconnect_clients()
 
+        if service.reload_requested:
+            continue
+        service.wake.clear()
+        wake_task = asyncio.create_task(service.wake.wait())
+        stop_task = asyncio.create_task(service.stop_event.wait())
         try:
-            await asyncio.wait_for(service.stop_event.wait(), timeout=retry_seconds)
-        except asyncio.TimeoutError:
-            pass
+            done, pending = await asyncio.wait(
+                {wake_task, stop_task}, timeout=retry_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            if stop_task in done and service.stop_event.is_set():
+                return
+        finally:
+            for task in (wake_task, stop_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(wake_task, stop_task, return_exceptions=True)
 
 
 async def main():
@@ -118,8 +165,11 @@ async def main():
     state.acquire()
 
     stored_session = state.get("session_string", "")
+    stored_session_2 = state.get("session_string_2", "")
     if stored_session:
         settings.session = stored_session
+    if stored_session_2:
+        settings.session_2 = stored_session_2
 
     controller = None
     control_task = None
@@ -198,10 +248,8 @@ async def main():
             with suppress(Exception):
                 await controller.close()
 
-        if service.client is not None:
-            with suppress(Exception):
-                await service.client.disconnect()
-            service.attach_client(None)
+        with suppress(Exception):
+            await service.disconnect_clients()
 
         if hasattr(service.publisher, "close"):
             with suppress(Exception):

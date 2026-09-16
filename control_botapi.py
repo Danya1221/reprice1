@@ -64,6 +64,7 @@ class BotAPIController:
         return {"inline_keyboard": [
             [{"text": "▶️ Запустить", "callback_data": "resume"}, {"text": "⏸ Остановить", "callback_data": "pause"}],
             [{"text": "🔄 Запросить сейчас", "callback_data": "sync"}, {"text": "📊 Статус", "callback_data": "status"}],
+            [{"text": "👥 Telegram-аккаунты", "callback_data": "accounts"}],
             [{"text": "⏱ Интервал", "callback_data": "interval"}, {"text": "💰 Наценка", "callback_data": "markup"}],
             [{"text": "📦 Блоки", "callback_data": "blocks:0"}, {"text": "📱 SIM / eSIM", "callback_data": "sim"}],
         ]}
@@ -106,18 +107,45 @@ class BotAPIController:
             with suppress(Exception):
                 await client.disconnect()
 
-    async def begin_login(self, chat_id, user_id):
+    async def accounts_menu(self, chat_id):
+        connected_1 = bool(1 in getattr(self.service, "clients", {}) and self.service.ready)
+        connected_2 = bool(2 in getattr(self.service, "clients", {}))
+        saved_1 = bool(self.service.state.get("session_string", "") or self.service.settings.session)
+        saved_2 = bool(self.service.state.get("session_string_2", "") or getattr(self.service.settings, "session_2", ""))
+        text = (
+            "👥 Telegram-аккаунты поставщиков\n\n"
+            f"1. {'🟢 подключён' if connected_1 else ('🟡 сохранён' if saved_1 else '⚪ не подключён')}\n"
+            f"2. {'🟢 подключён' if connected_2 else ('🟡 сохранён' if saved_2 else '⚪ не подключён')}\n\n"
+            "Один и тот же бот поставщика читается с обоих аккаунтов. "
+            "Если цены отличаются, в итоговый прайс попадёт меньшая закупочная цена."
+        )
+        await self.send(chat_id, text, {"inline_keyboard": [
+            [{"text": "🔑 Войти в аккаунт 1", "callback_data": "account:login:1"}],
+            [{"text": "🔑 Войти в аккаунт 2", "callback_data": "account:login:2"}],
+        ]})
+
+    async def begin_login(self, chat_id, user_id, slot=1):
+        slot = int(slot)
+        if slot not in {1, 2}:
+            raise ValueError("Аккаунт может быть только 1 или 2")
         await self._close_login(user_id)
-        self.login_flows[user_id] = {"stage": "phone", "client": None, "chat_id": chat_id}
-        await self.send(chat_id, "🔐 Вход в Telegram-аккаунт поставщиков\n\nОтправь номер телефона в международном формате, например:\n+79991234567\n\nДля отмены: /cancel")
+        self.login_flows[user_id] = {"stage": "phone", "client": None, "chat_id": chat_id, "slot": slot}
+        await self.send(chat_id, f"🔐 Вход в Telegram-аккаунт {slot}\n\nОтправь номер телефона в международном формате, например:\n+79991234567\n\nДля отмены: /cancel")
 
     async def finish_login(self, chat_id, user_id, flow):
+        slot = int(flow.get("slot", 1))
         session_string = flow["client"].session.save()
-        self.service.state.set("session_string", session_string)
-        self.service.settings.session = session_string
+        state_key = "session_string" if slot == 1 else "session_string_2"
+        attr = "session" if slot == 1 else "session_2"
+        self.service.state.set(state_key, session_string)
+        setattr(self.service.settings, attr, session_string)
         self.service.startup_error = None
+        if hasattr(self.service, "account_errors"):
+            self.service.account_errors.pop(slot, None)
+        if hasattr(self.service, "request_reconnect"):
+            self.service.request_reconnect()
         await self._close_login(user_id)
-        await self.send(chat_id, "✅ Вход выполнен, сессия сохранена в базе.\nПодключение к поставщикам произойдёт автоматически.\n\nПроверь /status, затем нажми «🔄 Запросить сейчас».", self.menu())
+        await self.send(chat_id, f"✅ Аккаунт {slot} подключён, сессия сохранена в базе.\nПереподключаю чтение поставщиков автоматически.\n\nПосле подключения нажми «🔄 Запросить сейчас».", self.menu())
 
     async def handle_login_input(self, chat_id, user_id, text):
         flow = self.login_flows.get(user_id)
@@ -233,6 +261,10 @@ class BotAPIController:
                 await self.request_sync(chat_id)
             elif data == "status":
                 await self.send(chat_id, self.service.status(), self.menu())
+            elif data == "accounts":
+                await self.accounts_menu(chat_id)
+            elif data.startswith("account:login:"):
+                await self.begin_login(chat_id, user_id, int(data.rsplit(":", 1)[1]))
             elif data == "markup":
                 await self.send(chat_id, "Отправь /markup 500 — фиксированная наценка.\n/percent 5 — наценка 5%.\nМожно применять вместе.")
             elif data == "interval":
@@ -297,7 +329,7 @@ class BotAPIController:
             return
 
         commands = {"/start", "/help", "/id", "/status", "/sync", "/stop", "/resume", "/markup",
-                    "/percent", "/interval", "/order", "/rejected", "/login", "/cancel"}
+                    "/percent", "/interval", "/order", "/rejected", "/login", "/login2", "/accounts", "/cancel"}
         if command not in commands:
             return
         if command == "/id" and chat_type == "private":
@@ -309,15 +341,20 @@ class BotAPIController:
         value = words[1] if len(words) > 1 else ""
         try:
             if command in {"/start", "/help"}:
-                text_out = ("🛠 Управление прайсом\n\n/login — войти в Telegram-аккаунт поставщиков\n"
+                text_out = ("🛠 Управление прайсом\n\n/login 1 — подключить аккаунт 1\n/login 2 — подключить аккаунт 2\n/accounts — состояние аккаунтов\n"
                             "/markup 500 — наценка\n/percent 5 — процент\n/interval 15 — интервал в минутах\n"
                             "/order iPhone 17, Samsung, Dyson — порядок блоков\n/rejected — нераспознанные строки\n"
                             "/id — твой Telegram ID\n/status /sync /stop /resume")
                 if not self.service.ready:
                     text_out += "\n\n⚠️ " + self.service.startup_status()
                 await self.send(chat_id, text_out, self.menu())
-            elif command == "/login":
-                await self.begin_login(chat_id, user_id)
+            elif command in {"/login", "/login2"}:
+                requested = "2" if command == "/login2" else (value.strip() or "1")
+                if requested not in {"1", "2"}:
+                    raise ValueError("Используй /login 1 или /login 2")
+                await self.begin_login(chat_id, user_id, int(requested))
+            elif command == "/accounts":
+                await self.accounts_menu(chat_id)
             elif command == "/cancel":
                 if user_id in self.login_flows:
                     await self._close_login(user_id)
