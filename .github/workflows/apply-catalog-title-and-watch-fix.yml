@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/apply-catalog-title-and-watch-fix.yml
       - apply_catalog_title_and_watch_fix.py
+      - apply_catalog_title_and_watch_fix_v2.py
   workflow_dispatch:
 
 permissions:
@@ -22,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply fixes
-        run: python apply_catalog_title_and_watch_fix.py
+        run: python apply_catalog_title_and_watch_fix_v2.py
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
