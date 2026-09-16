@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/apply-compact-iphone-catalog.yml
       - apply_compact_iphone_catalog.py
+      - apply_compact_iphone_catalog_v2.py
   workflow_dispatch:
 
 permissions:
@@ -22,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply compact catalog fix
-        run: python apply_compact_iphone_catalog.py
+        run: python apply_compact_iphone_catalog_v2.py
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
