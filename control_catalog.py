@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 
 from control_first import FirstMessageController
+from bot_publisher import is_missing_message_error
 from prices import Item, ordered_blocks
 
 
@@ -56,6 +57,8 @@ class CatalogController(FirstMessageController):
         except RuntimeError as exc:
             if "message is not modified" in str(exc).lower():
                 return None
+            if is_missing_message_error(exc):
+                return await self.send(chat_id, text, reply_markup)
             raise
 
     def _draft_order(self, user_id):

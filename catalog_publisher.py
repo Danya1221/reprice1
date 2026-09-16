@@ -4,7 +4,7 @@ import html
 import json
 import re
 
-from bot_publisher import digest
+from bot_publisher import digest, is_missing_message_error
 from first_message_publisher import PinnedBotAPIPublisher
 
 
@@ -120,7 +120,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             try:
                 await self._delete(record["id"])
             except RuntimeError as exc:
-                if "message to delete not found" not in str(exc).lower():
+                if not is_missing_message_error(exc):
                     raise
         if records:
             self.save_catalog([])
@@ -138,7 +138,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
                 changed = 1
             except RuntimeError as exc:
                 error = str(exc).lower()
-                if "message to edit not found" in error:
+                if is_missing_message_error(exc):
                     record = {}
                 elif "message is not modified" not in error:
                     raise
@@ -176,7 +176,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
                 try:
                     await self._delete(record["id"])
                 except RuntimeError as exc:
-                    if "message to delete not found" not in str(exc).lower():
+                    if not is_missing_message_error(exc):
                         raise
             records = []
             self.save_catalog(records)
@@ -223,7 +223,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             try:
                 await self._delete(records[index]["id"])
             except RuntimeError as exc:
-                if "message to delete not found" not in str(exc).lower():
+                if not is_missing_message_error(exc):
                     raise
             records.pop(index)
             self.save_catalog(records)
@@ -244,7 +244,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             try:
                 await self._delete(message_id)
             except RuntimeError as exc:
-                if "message to delete not found" not in str(exc).lower():
+                if not is_missing_message_error(exc):
                     raise
         self.save_catalog([])
         self.state.set("first_message", {})

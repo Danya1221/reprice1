@@ -23,6 +23,20 @@ def plain(text):
     return telegram_html.parse(text)[0]
 
 
+def is_missing_message_error(error):
+    """Telegram uses several texts for a stale/deleted stored message ID."""
+    text = str(error).lower().replace("-", "_")
+    return any(marker in text for marker in (
+        "message to edit not found",
+        "message to delete not found",
+        "message_id_invalid",
+        "message id invalid",
+        "message identifier is not specified",
+        "message can't be edited",
+        "message cannot be edited",
+    ))
+
+
 class BotAPIPublisher:
     def __init__(self, token, target, state, settings):
         self.token = (token or "").strip()
@@ -277,6 +291,57 @@ class BotAPIPublisher:
     def arrange_manifest(self, pages, manifest):
         return manifest
 
+    async def _verify_or_rebuild_manifest(self, pages, manifest, binding):
+        """Keep stored IDs while they exist; rebuild all managed price posts if one was deleted.
+
+        Bot API has no getMessage method. Editing a message with its current stored
+        content is therefore the safest existence probe: a live unchanged message
+        returns `message is not modified`, while a deleted/stale ID returns one of
+        Telegram's invalid-message errors. Rebuilding the whole managed price set
+        preserves the requested physical order instead of appending one recovered
+        block at the bottom.
+        """
+        if not manifest:
+            return 0
+
+        missing = False
+        for key, entry in list(manifest.items()):
+            if key not in pages or not entry.get("id"):
+                continue
+            probe_content = entry.get("content")
+            if not probe_content:
+                continue
+            try:
+                await self._edit(entry["id"], probe_content)
+            except RuntimeError as exc:
+                text = str(exc).lower()
+                if "message is not modified" in text:
+                    continue
+                if is_missing_message_error(exc):
+                    missing = True
+                    break
+                raise
+
+        if not missing:
+            return 0
+
+        deleted = 0
+        for entry in list(manifest.values()):
+            message_id = entry.get("id")
+            if not message_id:
+                continue
+            try:
+                await self._delete(message_id)
+                deleted += 1
+                await asyncio.sleep(max(0, self.settings.send_delay))
+            except RuntimeError as exc:
+                if not is_missing_message_error(exc):
+                    raise
+
+        manifest.clear()
+        self.state.set("published", {"binding": binding, "messages": manifest})
+        return deleted
+
     async def publish(self, pages):
         async with self.lock:
             await self.ensure_target()
@@ -285,7 +350,7 @@ class BotAPIPublisher:
             manifest = stored.get("messages", {}) if stored.get("binding") == binding else {}
             manifest = self.arrange_manifest(pages, manifest)
             self.state.set("published", {"binding": binding, "messages": manifest})
-            changes = 0
+            changes = await self._verify_or_rebuild_manifest(pages, manifest, binding)
 
             for key, content in pages.items():
                 entry = manifest.get(key)
@@ -310,9 +375,7 @@ class BotAPIPublisher:
                         text = str(exc).lower()
                         if "message is not modified" in text:
                             pass
-                        elif ("message to edit not found" in text
-                              or "message can't be edited" in text
-                              or "message cannot be edited" in text):
+                        elif is_missing_message_error(exc):
                             message_id = None
                         else:
                             raise
@@ -348,7 +411,7 @@ class BotAPIPublisher:
                     await self._delete(manifest[key]["id"])
                     deleted = True
                 except RuntimeError as exc:
-                    if "message to delete not found" not in str(exc).lower():
+                    if not is_missing_message_error(exc):
                         raise
                 del manifest[key]
                 self.state.set("published", {"binding": binding, "messages": manifest})

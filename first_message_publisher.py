@@ -2,7 +2,7 @@
 import asyncio
 from contextlib import suppress
 
-from bot_publisher import BotAPIPublisher, digest
+from bot_publisher import BotAPIPublisher, digest, is_missing_message_error
 
 
 class PinnedBotAPIPublisher(BotAPIPublisher):
@@ -84,11 +84,7 @@ class PinnedBotAPIPublisher(BotAPIPublisher):
                     if "message is not modified" in lowered:
                         # This is the normal existence check for unchanged text.
                         pass
-                    elif (
-                        "message to edit not found" in lowered
-                        or "message can't be edited" in lowered
-                        or "message cannot be edited" in lowered
-                    ):
+                    elif is_missing_message_error(exc):
                         message_id = None
                     else:
                         raise
@@ -139,7 +135,7 @@ class PinnedBotAPIPublisher(BotAPIPublisher):
                     deleted += 1
                     await asyncio.sleep(max(0, self.settings.send_delay))
                 except RuntimeError as exc:
-                    if "message to delete not found" not in str(exc).lower():
+                    if not is_missing_message_error(exc):
                         raise
                 del manifest[key]
                 self.state.set("published", {"binding": binding, "messages": manifest})

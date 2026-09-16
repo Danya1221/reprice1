@@ -13,6 +13,8 @@ class FakeBotPublisher(BotAPIPublisher):
         self.chats = chats
         self.members = members or {}
         self.calls = []
+        self.next_message_id = 123
+        self.missing_ids = set()
 
     async def api(self, method, **payload):
         self.calls.append((method, payload))
@@ -27,8 +29,16 @@ class FakeBotPublisher(BotAPIPublisher):
             chat_id = payload["chat_id"]
             return dict(self.members.get(chat_id, {"status": "administrator", "can_post_messages": True}))
         if method == "sendMessage":
-            return {"message_id": 123}
-        if method in {"editMessageText", "deleteMessage"}:
+            message_id = self.next_message_id
+            self.next_message_id += 1
+            return {"message_id": message_id}
+        if method == "editMessageText":
+            if int(payload["message_id"]) in self.missing_ids:
+                raise RuntimeError("Bot API editMessageText: Bad Request: MESSAGE_ID_INVALID")
+            raise RuntimeError("Bot API editMessageText: Bad Request: message is not modified")
+        if method == "deleteMessage":
+            if int(payload["message_id"]) in self.missing_ids:
+                raise RuntimeError("Bot API deleteMessage: Bad Request: MESSAGE_ID_INVALID")
             return True
         raise AssertionError(method)
 
@@ -84,7 +94,7 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(method == "sendMessage" and payload["chat_id"] == group_id
                             for method, payload in publisher.calls))
 
-    async def test_unchanged_page_is_not_edited_again(self):
+    async def test_unchanged_page_keeps_same_id_after_existence_probe(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
         group_id = -100777
         chats = {
@@ -99,7 +109,8 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         second_changes = await publisher.publish({"iphone:0": "Одинаковый прайс"})
 
         self.assertEqual(second_changes, 0)
-        self.assertFalse(any(method == "editMessageText" for method, _ in publisher.calls))
+        self.assertTrue(any(method == "editMessageText" for method, _ in publisher.calls))
+        self.assertFalse(any(method == "sendMessage" for method, _ in publisher.calls))
 
     async def test_changed_page_is_still_edited(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
@@ -110,11 +121,43 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         publisher = FakeBotPublisher(group_id, self.state, settings, chats)
         await publisher.publish({"iphone:0": "Старый прайс"})
 
+        original_api = publisher.api
+        async def changed_api(method, **payload):
+            if method == "editMessageText" and payload.get("text") == "Новый прайс":
+                publisher.calls.append((method, payload))
+                return True
+            return await original_api(method, **payload)
+        publisher.api = changed_api
         publisher.calls.clear()
         changes = await publisher.publish({"iphone:0": "Новый прайс"})
 
         self.assertEqual(changes, 1)
-        self.assertTrue(any(method == "editMessageText" for method, _ in publisher.calls))
+        self.assertTrue(any(method == "editMessageText" and payload.get("text") == "Новый прайс"
+                            for method, payload in publisher.calls))
+
+    async def test_deleted_saved_id_rebuilds_all_managed_price_posts(self):
+        settings = Settings(send_delay=0, admin_ids=(42,))
+        group_id = -100777
+        chats = {group_id: {"id": group_id, "type": "supergroup", "title": "Розница"}}
+        publisher = FakeBotPublisher(group_id, self.state, settings, chats)
+        pages = {"one:0": "Первый блок", "two:0": "Второй блок"}
+
+        await publisher.publish(pages)
+        old_manifest = self.state.get("published")["messages"]
+        old_ids = [old_manifest[key]["id"] for key in pages]
+        publisher.missing_ids.add(old_ids[0])
+        publisher.calls.clear()
+
+        changes = await publisher.publish(pages)
+        new_manifest = self.state.get("published")["messages"]
+        new_ids = [new_manifest[key]["id"] for key in pages]
+
+        self.assertNotEqual(old_ids, new_ids)
+        self.assertGreater(changes, 1)
+        self.assertTrue(any(method == "deleteMessage" and payload["message_id"] == old_ids[1]
+                            for method, payload in publisher.calls))
+        self.assertEqual(sum(1 for method, _ in publisher.calls if method == "sendMessage"), 2)
+
 
 
 if __name__ == "__main__":
