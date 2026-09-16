@@ -290,6 +290,43 @@ Apple TV 4K 64GB — 20200""").items
             self.assertTrue(content.startswith("<b>Apple</b>\n\n"), content)
             self.assertIn(f"<b>— {section} —</b>", content)
 
+    def test_supplier_ipad_shorthand_and_pencil_are_read_as_apple(self):
+        items = self.parse("""Apple Pencil TYPE-C 🇪🇺 - 6400
+iPad 11 128 Blue Wi-Fi 🇺🇸 - 38600
+MINI 7 128 Blue Wi-Fi 🇺🇸 - 43400
+MINI 7 256 Gray Wi-Fi 🇺🇸 - 51300
+AIR 13 M3 256 Starlight Wi-Fi 🇺🇸 - 75800
+AIR 11 M4 128 Gray Wi-Fi 🇺🇸 - 60600
+PRO 12.9 M2 128 Gray LTE 🇺🇸 - 71500
+PRO 11 M4 1TB Black Wi-Fi (Nano Texture) 🇺🇸 - 99000
+PRO 13 M4 256 Black LTE 🇺🇸 - 100500
+PRO 11 M5 256 Black Wi-Fi 🇺🇸 - 96000""").items
+        ipad = [item for item in items if item.block == "iPad"]
+        pencil = [item for item in items if item.block == "Apple Accessories"]
+        self.assertEqual(len(ipad), 9)
+        self.assertEqual(len(pencil), 1)
+        pages = list(render_blocks(items, Settings()).values())
+        self.assertTrue(all(page.startswith("<b>Apple</b>") for page in pages), pages)
+
+    def test_saved_order_cannot_strand_apple_tv_away_from_apple(self):
+        items = self.parse("""AirPods Pro 3 Black — 20000
+Honor 400 12/256 Black — 33000
+Apple TV 4K 64GB (2022) — 20200
+Oura Ring 5 Size 8 Black — 35000
+Mac Mini (MU9D3) M4/16/256 Silver — 68500""").items
+        pages = list(render_blocks(items, Settings(), {
+            "block_order": ["AirPods", "Honor", "Apple TV", "Oura Ring", "Mac mini"]
+        }).values())
+        apple_pages = [page for page in pages if page.startswith("<b>Apple</b>")]
+        self.assertEqual(len(apple_pages), 1, pages)
+        apple = apple_pages[0]
+        self.assertIn("— AirPods —", apple)
+        self.assertIn("— Apple TV —", apple)
+        self.assertIn("— Mac mini —", apple)
+        self.assertNotIn("Honor", apple)
+        self.assertNotIn("Oura", apple)
+
+
     def test_supplier_macbook_shorthand_and_apple_adapters_are_read(self):
         items = self.parse("""Mac Mini (MU9D3) M4/16/256 Silver - 68500
 Neo 13 MHFD4 Citrus (A18 Pro 8/256) - 61100

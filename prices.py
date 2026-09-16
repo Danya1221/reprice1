@@ -255,6 +255,25 @@ def samsung_block(title):
     return "Samsung"
 
 
+def apple_ipad_block(title):
+    """Recognize supplier iPad rows that omit the word iPad."""
+    plain = FLAGS.sub("", clean(title)).strip()
+    if re.search(r"\bApple\s+Pencil\b", plain, re.I):
+        return "Apple Accessories"
+    if re.search(r"\biPad\b", plain, re.I):
+        return "iPad"
+    # Supplier examples:
+    # MINI 7 128 ... Wi-Fi
+    # AIR 11/13 M3/M4 128/256 ... Wi-Fi
+    # PRO 11/13 M4/M5 256/1TB ... Wi-Fi/LTE
+    # PRO 12.9 M2 128 ... LTE
+    if re.search(r"^MINI\s+\d+\s+(?:\d{2,4}|\d+TB)\b.*\b(?:Wi[ -]?Fi|LTE|Cellular)\b", plain, re.I):
+        return "iPad"
+    if re.search(r"^(?:AIR|PRO)\s+(?:11|12\.9|13)\s+M\d+\s+(?:\d{2,4}|\d+TB)\b.*\b(?:Wi[ -]?Fi|LTE|Cellular)\b", plain, re.I):
+        return "iPad"
+    return ""
+
+
 def apple_computer_block(title):
     """Recognize supplier MacBook rows even when the word MacBook is omitted."""
     plain = FLAGS.sub("", clean(title)).strip()
@@ -292,6 +311,9 @@ def product_block(title):
     samsung = samsung_block(title)
     if samsung:
         return samsung
+    ipad = apple_ipad_block(title)
+    if ipad:
+        return ipad
     apple_accessory = apple_accessory_block(title)
     if apple_accessory:
         return apple_accessory
@@ -331,7 +353,7 @@ def normal_title(title, context=""):
         # Insert before the model, never at find()'s -1 position near the end.
         pos = re.search(r"\d", title).start()
         title = title[:pos] + "iPhone " + title[pos:]
-    elif context and not brand_of(title) and not apple_computer_block(title) and not apple_accessory_block(title):
+    elif context and not brand_of(title) and not apple_ipad_block(title) and not apple_computer_block(title) and not apple_accessory_block(title):
         # Samsung block labels are navigation names, not product-name prefixes.
         # Prefix bare A/S/Tab rows with the brand only, otherwise rows become e.g.
         # "Samsung A + S25 S25 ...".
@@ -918,6 +940,28 @@ def physical_section_family(title):
 
 def pack_physical_sections(sections, limit=3950):
     """Pack by ecosystem: Apple together, Samsung together, other small brands separately."""
+    # Saved custom block order may interleave Apple/Samsung with unrelated brands.
+    # Compact these ecosystems at their first occurrence before packing so a tiny
+    # Apple TV/Mac mini section can never be stranded behind Honor/Oura/etc.
+    compacted = []
+    emitted_families = set()
+    for section in sections:
+        if iphone_bundle_key(section["title"]):
+            compacted.append(section)
+            continue
+        family = physical_section_family(section["title"])
+        if family in {"apple", "samsung"}:
+            if family in emitted_families:
+                continue
+            emitted_families.add(family)
+            compacted.extend([
+                entry for entry in sections
+                if not iphone_bundle_key(entry["title"]) and physical_section_family(entry["title"]) == family
+            ])
+        else:
+            compacted.append(section)
+    sections = compacted
+
     physical = []
     pending = []
     pending_family = ""
