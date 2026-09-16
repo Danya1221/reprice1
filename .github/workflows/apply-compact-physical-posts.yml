@@ -7,6 +7,7 @@ on:
       - .github/workflows/apply-compact-physical-posts.yml
       - apply_compact_physical_posts.py
       - fix_compact_physical_posts.py
+      - finalize_compact_physical_posts.py
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,7 @@ jobs:
         run: |
           python apply_compact_physical_posts.py
           python fix_compact_physical_posts.py
+          python finalize_compact_physical_posts.py
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
