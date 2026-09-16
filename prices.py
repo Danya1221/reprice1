@@ -168,12 +168,8 @@ def iphone_model(title):
 
 
 def iphone_publish_block(model):
-    if not model:
-        return ""
-    match = re.match(r"iPhone\s+(\d{1,2})\b", model, re.I)
-    if match and 11 <= int(match.group(1)) <= 15:
-        return "iPhone 11–15"
-    return model
+    """Publish every iPhone model/variant as its own Telegram block."""
+    return model or ""
 
 
 def brand_of(text):

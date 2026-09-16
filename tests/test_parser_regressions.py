@@ -33,7 +33,7 @@ class ParserRegressionTests(unittest.TestCase):
         self.assertIn("<b>MacBook / iMac</b>", pages)
         self.assertNotIn("<b>— MacBook / iMac —</b>", pages)
 
-    def test_iphone_11_to_15_are_one_publication_block(self):
+    def test_iphone_11_to_15_publish_as_individual_models(self):
         items = self.parse("""iPhone: 13-14-15
 🇮🇳 13 128GB Midnight - 45100
 🇺🇸 14 128GB Midnight - 46400
@@ -42,10 +42,15 @@ class ParserRegressionTests(unittest.TestCase):
 🇦🇪 15 Pro 128GB Blue - 83600
 iPhone 12 128 Black — 40000
 iPhone 11 Pro Max 256 Green — 39000""").items
-        self.assertEqual({item.block for item in items}, {"iPhone 11–15"})
-        self.assertTrue(any("iPhone 15 Pro" in item.title for item in items))
+        self.assertEqual({item.block for item in items}, {
+            "iPhone 11 Pro Max", "iPhone 12", "iPhone 13", "iPhone 14",
+            "iPhone 15", "iPhone 15 Plus", "iPhone 15 Pro",
+        })
         pages = render_blocks(items, Settings())
-        self.assertTrue(all(page.startswith("<b>iPhone 11–15</b>") for page in pages.values()))
+        headers = {page.split("\n", 1)[0] for page in pages.values()}
+        self.assertIn("<b>iPhone 13</b>", headers)
+        self.assertIn("<b>iPhone 15 Plus</b>", headers)
+        self.assertIn("<b>iPhone 15 Pro</b>", headers)
 
 
     def test_saved_wrong_block_is_reclassified(self):

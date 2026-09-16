@@ -221,15 +221,21 @@ S25 Ultra 12/256 Black — 65000""").items
         self.assertIn("<b>— Galaxy S25 —</b>", page)
         self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>S25 Ultra", page)
 
-    def test_iphone_combined_block_has_model_gaps(self):
-        items = self.parse("""iPhone: 13-14-15
-13 128GB Midnight — 45100
-13 256GB Blue — 50000
-14 128GB Midnight — 46400
-15 128GB Black — 55400""").items
-        page = next(iter(render_blocks(items, Settings()).values()))
-        self.assertIn("iPhone 13 256GB Blue — 50 000</code>\n\n<code>iPhone 14", page)
-        self.assertIn("iPhone 14 128GB Midnight — 46 400</code>\n\n<code>iPhone 15", page)
+    def test_iphone_models_are_separate_and_keep_activation_sections(self):
+        items = self.parse("""iPhone 16
+16 128GB Black 🇮🇳 — 63700
+16 128GB Black 🇮🇳 Актив — 60800
+16 Plus 128GB Black 🇮🇳 — 73700
+16 Plus 128GB Pink 🇮🇳 Актив — 72000
+16 Pro 256GB Natural 🇦🇪 — 83600""").items
+        self.assertEqual({item.block for item in items}, {"iPhone 16", "iPhone 16 Plus", "iPhone 16 Pro"})
+        pages = render_blocks(items, Settings())
+        iphone16 = next(page for page in pages.values() if page.startswith("<b>iPhone 16</b>"))
+        iphone16plus = next(page for page in pages.values() if page.startswith("<b>iPhone 16 Plus</b>"))
+        self.assertIn("— Не активированное —", iphone16)
+        self.assertIn("— Актив —", iphone16)
+        self.assertIn("— Не активированное —", iphone16plus)
+        self.assertIn("— Актив —", iphone16plus)
 
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]

@@ -8,7 +8,7 @@ from bot_publisher import digest
 from first_message_publisher import PinnedBotAPIPublisher
 
 
-CATALOG_TEXT = "🗂 КАТАЛОГ — выбери категорию\nНажми на категорию — перейдёшь к началу нужной части прайса.\nСкопируй позицию вместе с ценой и пришли её менеджеру."
+CATALOG_TEXT = "🗂 КАТАЛОГ — выбери модель или категорию\nНажми на кнопку — перейдёшь к нужной части прайса.\nСкопируй позицию вместе с ценой и пришли её менеджеру."
 
 
 def message_link(chat_id, message_id, username=""):
@@ -26,9 +26,11 @@ def page_title(content):
 
 
 def catalog_group(title):
-    """Collapse many physical price blocks into a small customer-facing catalog."""
+    """Keep iPhone models directly navigable while grouping the rest compactly."""
     name = title.casefold().strip()
-    if name.startswith(("iphone", "apple watch", "airpods", "ipad", "macbook", "mac mini", "mac studio", "apple tv", "apple", "cpo", "asis")):
+    if name.startswith("iphone"):
+        return title.strip()
+    if name.startswith(("apple watch", "airpods", "ipad", "macbook", "mac mini", "mac studio", "apple tv", "apple", "cpo", "asis")):
         return "Apple"
     if name.startswith("samsung"):
         return "Samsung"

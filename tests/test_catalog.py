@@ -50,7 +50,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         ordered = sorted(manifest.values(), key=lambda e: e["id"])
         self.assertTrue(ordered[0]["content"].startswith("<b>Dyson</b>"))
         buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
-        self.assertEqual([b["text"] for b in buttons], ["Другое", "Apple"])
+        self.assertEqual([b["text"] for b in buttons], ["Другое", "Apple", "iPhone 17"])
         self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{ordered[0]['id']}")
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
         self.publisher.calls.clear()
@@ -176,8 +176,10 @@ Z Fold 7 12/256 Black — 120000"""]).items
         self.assertEqual(len(samsung), 1)
         self.assertTrue(samsung[0].get("url"))
 
-    async def test_catalog_has_at_most_eight_customer_categories(self):
-        items = parse_documents(["""iPhone 17 256 Black — 60000
+    async def test_catalog_keeps_base_groups_compact_and_iphone_models_direct(self):
+        items = parse_documents(["""iPhone 16 128 Black — 60000
+iPhone 16 Plus 128 Black — 70000
+iPhone 16 Pro 256 Black — 80000
 Apple Watch Ultra 3 49mm Black — 70000
 Samsung A57 8/256 Blue — 32000
 Xiaomi 15 12/256 White — 48000
@@ -188,10 +190,10 @@ PlayStation 5 Pro — 70000
 Dyson HS08 — 40000"""]).items
         await self.publisher.publish(render_blocks(items, Settings()))
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
-        self.assertLessEqual(len(buttons), 8)
-        self.assertEqual({button["text"] for button in buttons}, {
-            "Apple", "Samsung", "Смартфоны", "Часы / носимое", "Аудио", "Фото / видео", "Игры", "Другое"
-        })
+        labels = [button["text"] for button in buttons]
+        for model in ["iPhone 16", "iPhone 16 Plus", "iPhone 16 Pro"]:
+            self.assertIn(model, labels)
+        self.assertTrue({"Apple", "Samsung", "Смартфоны", "Часы / носимое", "Аудио", "Фото / видео", "Игры", "Другое"}.issubset(set(labels)))
 
     async def test_closed_catalog_keeps_buttons_and_removes_prices(self):
         await self.publisher.publish(self.pages())
