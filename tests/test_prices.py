@@ -290,6 +290,46 @@ Apple TV 4K 64GB — 20200""").items
             self.assertTrue(content.startswith("<b>Apple</b>\n\n"), content)
             self.assertIn(f"<b>— {section} —</b>", content)
 
+    def test_supplier_macbook_shorthand_and_apple_adapters_are_read(self):
+        items = self.parse("""Mac Mini (MU9D3) M4/16/256 Silver - 68500
+Neo 13 MHFD4 Citrus (A18 Pro 8/256) - 61100
+Air 13 MDHE4 Midnight (M5 16/512) - 127100
+Air 15 MDVE4 Starlight (M5 16/1TB) - 154200
+Pro 14 Z1KH1 Space Black (M5 24/512GB) 🇺🇸 - 183500
+Pro 16 MX2Y3 Space Black (M4 Pro 48/512GB) - 249000
+ Adapter 20W 🇪🇺 - 900
+(От 20 шт) - 850
+Аdapter universal - 100
+Переходник для MacBook - 100
+ Аdapter USB-C to USB - 1300
+Apple TV 4K 64GB (2022) 🇺🇸 - 20200""").items
+        blocks = [item.block for item in items]
+        self.assertIn("Mac mini", blocks)
+        self.assertGreaterEqual(blocks.count("MacBook / iMac"), 5)
+        self.assertGreaterEqual(blocks.count("Apple Accessories"), 4)
+        self.assertIn("Apple TV", blocks)
+        self.assertFalse(any(item.title.startswith("От 20") for item in items))
+
+    def test_small_apple_sections_are_not_orphaned_into_single_model_posts(self):
+        source = "\n".join([
+            *[f"AirPods Pro 3 Variant {i} — {20000 + i}" for i in range(45)],
+            "Mac Mini (MU9D3) M4/16/256 Silver — 68500",
+            "Apple TV 4K 64GB (2022) — 20200",
+            " Adapter 20W — 900",
+            "Переходник для MacBook — 100",
+            *[f"Air 13 MDH{i:02d} Midnight (M5 16/512) — {127000 + i}" for i in range(35)],
+        ])
+        items = self.parse(source).items
+        pages = list(render_blocks(items, Settings()).values())
+        apple_pages = [page for page in pages if page.startswith("<b>Apple</b>")]
+        self.assertGreaterEqual(len(apple_pages), 2)
+        mini_page = next(page for page in apple_pages if "— Mac mini —" in page)
+        tv_page = next(page for page in apple_pages if "— Apple TV —" in page)
+        self.assertIs(mini_page, tv_page)
+        self.assertIn("— Apple Accessories —", mini_page)
+        self.assertTrue(all(units(page) <= 4096 for page in pages))
+
+
     def test_single_samsung_section_still_has_samsung_as_top_heading(self):
         items = self.parse("S26 12/256 Black — 64300").items
         content = next(iter(render_blocks(items, Settings()).values()))

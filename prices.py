@@ -21,7 +21,7 @@ PRICE = re.compile(
     r"\s*(?P<flags>(?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)[✅🔥‼️!]*$",
     re.I,
 )
-ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|кабел[ья]|кабель|адаптер|зарядк|"
+ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|кабел[ья]|кабель|адаптер|[АA]dapter|переходник|зарядк|"
                        r"ремеш|бампер|case\b|charger\b|cable\b", re.I)
 ASIS = re.compile(r"\bAS[\s-]?IS\b|\bASIS\b|асис", re.I)
 CPO = re.compile(r"\bCPO\b", re.I)
@@ -255,6 +255,36 @@ def samsung_block(title):
     return "Samsung"
 
 
+def apple_computer_block(title):
+    """Recognize supplier MacBook rows even when the word MacBook is omitted."""
+    plain = FLAGS.sub("", clean(title)).strip()
+    if re.search(r"\b(?:MacBook|iMac)\b", plain, re.I):
+        return "MacBook / iMac"
+
+    # Supplier examples: Neo 13 MHFD4 ... (A18 Pro 8/256),
+    # Air 13/15 MDH... (M5 ...), Pro 14/16 ... (M4/M5 Pro ...).
+    sku = r"[A-Z0-9]{4,}"
+    chip = r"(?:A18\s*Pro|M\d+(?:\s*(?:Pro|Max))?)"
+    if re.search(r"^(?:Neo|Air)\s+(?:13|15)\s+" + sku + r"\b.*\(" + chip + r"\b", plain, re.I):
+        return "MacBook / iMac"
+    if re.search(r"^Pro\s+(?:14|16)\s+" + sku + r"\b.*\(" + chip + r"\b", plain, re.I):
+        return "MacBook / iMac"
+    return ""
+
+
+def apple_accessory_block(title):
+    """Apple power adapters / MacBook transitions belong to the common Apple post."""
+    plain = FLAGS.sub("", clean(title)).strip()
+    mixed_adapter = r"(?:Adapter|Аdapter|адаптер)"
+    if "" in title and re.search(mixed_adapter, plain, re.I):
+        return "Apple Accessories"
+    if re.search(r"\bпереходник\s+для\s+MacBook\b", plain, re.I):
+        return "Apple Accessories"
+    if re.search(r"^" + mixed_adapter + r"\s+(?:universal|20W|USB[ -]?C\s+to\s+USB)\b", plain, re.I):
+        return "Apple Accessories"
+    return ""
+
+
 def product_block(title):
     watch = apple_watch_block(title)
     if watch:
@@ -262,8 +292,12 @@ def product_block(title):
     samsung = samsung_block(title)
     if samsung:
         return samsung
-    if re.search(r"\b(?:MacBook|iMac)\b", title, re.I):
-        return "MacBook / iMac"
+    apple_accessory = apple_accessory_block(title)
+    if apple_accessory:
+        return apple_accessory
+    computer = apple_computer_block(title)
+    if computer:
+        return computer
     for label in ("AirPods", "iPad", "Mac mini", "Mac Studio", "Apple TV", "AirTag"):
         if re.search(r"\b" + re.escape(label) + r"\b", title, re.I):
             return label
@@ -271,8 +305,8 @@ def product_block(title):
 
 
 def ordered_blocks(blocks, preferred=()):
-    defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook / iMac", "Mac mini", "Mac Studio",
-                "Apple TV", "AirTag", "Apple", "Ray-Ban Meta", "Samsung", "Honor", "Realme", "Huawei", "Tecno",
+    defaults = ["iPhone", "AirPods", "Apple Accessories", "Mac mini", "Apple TV", "AirTag",
+                "Apple Watch", "iPad", "MacBook / iMac", "Mac Studio", "Apple", "Ray-Ban Meta", "Samsung", "Honor", "Realme", "Huawei", "Tecno",
                 "Xiaomi", "Google", "COROS", "Rode", "Dyson", "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
     def order_key(name):
         if name in preferred:
@@ -297,7 +331,7 @@ def normal_title(title, context=""):
         # Insert before the model, never at find()'s -1 position near the end.
         pos = re.search(r"\d", title).start()
         title = title[:pos] + "iPhone " + title[pos:]
-    elif context and not brand_of(title):
+    elif context and not brand_of(title) and not apple_computer_block(title) and not apple_accessory_block(title):
         # Samsung block labels are navigation names, not product-name prefixes.
         # Prefix bare A/S/Tab rows with the brand only, otherwise rows become e.g.
         # "Samsung A + S25 S25 ...".
@@ -439,7 +473,8 @@ def parse_documents(documents, default_currency="RUB"):
         title, amount, currency = price
         title = normal_title(title, context)
         own_brand = product_block(title)
-        accessory = bool(ACCESSORY.search(title)) or (section == "Аксессуары" and not own_brand)
+        apple_accessory = own_brand == "Apple Accessories"
+        accessory = (bool(ACCESSORY.search(title)) or (section == "Аксессуары" and not own_brand)) and not apple_accessory
         model = iphone_model(title)
         special = special_block(title)
         if not special and section in {"ASIS", "CPO"}:
@@ -948,7 +983,11 @@ def render_blocks(items, settings, overrides=None, closed=False):
     logical_sections = []
     for block in names:
         lines = render_block_lines(block, groups[block], settings, overrides, closed=closed)
-        logical_sections.extend(section_chunks(block, lines))
+        # Apple has many logical subcategories. Smaller chunks let the physical
+        # packer fill Apple posts with several sections instead of orphaning a
+        # one-line Mac mini or Apple TV message after a nearly-full MacBook page.
+        chunk_limit = 1800 if physical_section_family(block) == "apple" else 3200
+        logical_sections.extend(section_chunks(block, lines, limit=chunk_limit))
 
     pages = OrderedDict()
     for bundle, sections in pack_physical_sections(logical_sections):
