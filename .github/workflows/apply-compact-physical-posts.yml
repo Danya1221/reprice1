@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/apply-compact-physical-posts.yml
       - apply_compact_physical_posts.py
+      - fix_compact_physical_posts.py
   workflow_dispatch:
 
 permissions:
@@ -22,7 +23,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply compact post changes
-        run: python apply_compact_physical_posts.py
+        run: |
+          python apply_compact_physical_posts.py
+          python fix_compact_physical_posts.py
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
