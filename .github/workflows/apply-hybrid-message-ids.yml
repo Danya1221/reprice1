@@ -1,0 +1,38 @@
+name: Apply hybrid message ID recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-hybrid-message-ids.yml
+      - apply_hybrid_message_ids.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply recovery changes
+        run: python apply_hybrid_message_ids.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bot_publisher.py first_message_publisher.py catalog_publisher.py control_catalog.py tests/test_bot_publisher.py
+          git diff --cached --check
+          git commit -m "Recover deleted Telegram messages from saved IDs"
+          git push origin HEAD:main
