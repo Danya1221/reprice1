@@ -33,7 +33,7 @@ jobs:
           PY
       - name: Apply physical order UI
         run: python apply_physical_order_ui.py
-      - name: Fix test helper import
+      - name: Fix updated test helpers
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -41,6 +41,20 @@ jobs:
           s = p.read_text(encoding='utf-8')
           if not s.startswith('import re\n'):
               s = 'import re\n' + s
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('tests/test_catalog.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              'return render_blocks(self.items, Settings(), {"block_order": order})',
+              'return render_blocks(self.items, Settings(), {"physical_order": order})',
+              1,
+          )
+          s = s.replace(
+              'pages = self.pages(["Dyson", "AirPods", "iPhone 17"])',
+              'pages = self.pages(["Dyson", "Apple", "iPhone 17"])',
+              1,
+          )
           p.write_text(s, encoding='utf-8')
           PY
       - name: Install dependencies
