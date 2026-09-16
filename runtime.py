@@ -69,9 +69,12 @@ class SyncService:
         self.reload_requested = False
 
     def _slot_sources(self, slot):
-        # Read every configured supplier from both accounts. A static feed is safe
-        # to read twice; a supplier bot may intentionally return account-specific prices.
-        return self.settings.sources
+        sources = tuple(self.settings.sources)
+        if int(slot) == 1:
+            return sources
+        # Account 2 exists only to compare the account-specific HI price.
+        # Never query the remaining suppliers from the second Telegram account.
+        return sources[:1]
 
     def attach_client(self, client, slot=1):
         slot = int(slot)
@@ -375,6 +378,8 @@ class SyncService:
             values = []
             for slot in (1, 2):
                 if slot == 2 and not self.account_configured(2):
+                    continue
+                if source not in self._slot_sources(slot):
                     continue
                 value = cache.get(self.source_cache_key(source, slot), {})
                 if value.get("status"):

@@ -41,6 +41,20 @@ class DualAccountRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    async def test_second_account_reads_only_primary_hi_supplier(self):
+        other = Source("@other", label="OTHER")
+        self.settings.sources = (self.settings.sources[0], other)
+        service = SyncService(self.client1, self.settings, self.state)
+        service.attach_client(self.client2, 2)
+
+        primary = [reader.source.peer for reader in service.readers_for_slot(1)]
+        secondary = [reader.source.peer for reader in service.readers_for_slot(2)]
+        active = [(slot, reader.source.peer) for slot, reader in service.active_reader_entries()]
+
+        self.assertEqual(primary, ["@hi", "@other"])
+        self.assertEqual(secondary, ["@hi"])
+        self.assertEqual(active, [(1, "@hi"), (1, "@other"), (2, "@hi")])
+
     async def test_same_hi_variant_from_two_accounts_uses_lower_price(self):
         expensive = Item("iPhone 17 256 Black", Decimal("60000"), "RUB", "iPhone 17")
         cheap = Item("iPhone 17 256 Black", Decimal("57000"), "RUB", "iPhone 17")
