@@ -194,10 +194,8 @@ def brand_of(text):
 
 def apple_watch_block(title):
     plain = FLAGS.sub("", clean(title)).strip()
-    if not re.search(r"\bwatch\b", plain, re.I):
-        return ""
-    # Never classify another manufacturer's watch as Apple just because the
-    # product name contains the generic word "Watch".
+
+    # Explicitly branded non-Apple watches always win over generic watch rules.
     if re.search(
         r"\b(?:galaxy|samsung|one\s*plus|oneplus|xiaomi|redmi|huawei|honor|"
         r"garmin|coros|pixel|fitbit|amazfit|oppo|vivo|realme|nothing)\b",
@@ -205,6 +203,18 @@ def apple_watch_block(title):
         re.I,
     ):
         return ""
+
+    # Supplier shorthand for Apple Watch. A Series shorthand must be followed
+    # by a real watch case size so Galaxy S-series phones are never mistaken
+    # for Apple Watch.
+    watch_size = r"(?:38|40|41|42|44|45|46|49)(?:\s*mm)?"
+    if re.search(r"^S\s*\d{1,2}\s+" + watch_size + r"\b", plain, re.I):
+        return "Apple Watch"
+    if re.search(r"^SE\s*\d*\s+" + watch_size + r"\b", plain, re.I):
+        return "Apple Watch"
+    if re.search(r"^(?:UL|ULTRA)\s*\d{1,2}\b", plain, re.I):
+        return "Apple Watch"
+
     if re.search(r"\bapple\s*watch\b|^watch\b", plain, re.I):
         return "Apple Watch"
     return ""
@@ -300,6 +310,7 @@ def normal_title(title, context=""):
         title = re.sub(r"\bS\s*53\b", "L", title, flags=re.I)
         if not re.search(r"ray[\s-]?ban", title, re.I):
             title = "Ray-Ban Meta " + title
+    title = re.sub(r"^UL\s*(\d{1,2})\b", r"Ultra \1", title, flags=re.I)
     return clean(title)
 
 
