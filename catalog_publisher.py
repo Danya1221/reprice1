@@ -25,29 +25,32 @@ def page_title(content):
     return html.unescape(match[1]) if match else "Прайс"
 
 
+def iphone_catalog_group(title):
+    """One catalog button per physical iPhone generation message."""
+    name = re.sub(r"\s+", " ", title).casefold().strip()
+    if not name.startswith("iphone"):
+        return ""
+    if re.search(r"\b(?:11|12|13|14|15)\b", name):
+        return "iPhone 11–15"
+    if re.search(r"\b16(?:e)?\b", name):
+        return "iPhone 16"
+    if "air" in name or re.search(r"\b17(?:e)?\b", name):
+        return "iPhone 17"
+    return "iPhone"
+
+
 def catalog_labels(content):
     """Buttons represented by one physical Telegram price message."""
-    # Major ecosystems are defined by the final physical post heading.  Do not
-    # let an old logical section name (Mac mini, Apple TV, Samsung S26, etc.)
-    # leak back into the public catalog buttons.
+    # Navigation follows physical Telegram posts, not every logical model inside
+    # them.  This is what keeps the catalog compact after iPhone bundling.
     title = page_title(content)
+    iphone_group = iphone_catalog_group(title)
+    if iphone_group:
+        return [iphone_group]
     if title.casefold().strip() == "apple":
         return ["Apple"]
     if title.casefold().strip() == "samsung":
         return ["Samsung"]
-
-    plain = html.unescape(re.sub(r"<[^>]+>", " ", content))
-    iphone_pattern = re.compile(
-        r"\biPhone\s+(?:Air|\d{1,2}e?(?:\s+(?:Plus|Pro(?:\s+Max)?))?)\b",
-        re.I,
-    )
-    iphones = []
-    for raw in iphone_pattern.findall(plain):
-        canonical = iphone_model_label(raw)
-        if canonical and canonical not in iphones:
-            iphones.append(canonical)
-    if iphones:
-        return iphones
 
     labels = []
     for part in [piece.strip() for piece in title.split("•") if piece.strip()]:
@@ -73,10 +76,10 @@ def iphone_model_label(raw):
 
 
 def catalog_group(title):
-    """Keep iPhone models directly navigable while grouping the rest compactly."""
+    """Map physical post headings to a small public navigation set."""
     name = title.casefold().strip()
     if name.startswith("iphone"):
-        return title.strip()
+        return iphone_catalog_group(title)
     if name.startswith(("apple watch", "airpods", "ipad", "macbook", "mac mini", "mac studio", "apple tv", "apple", "cpo", "asis")):
         return "Apple"
     if name.startswith("samsung"):
@@ -213,6 +216,20 @@ class CatalogPublisher(PinnedBotAPIPublisher):
                     continue
                 seen_groups.add(group)
                 buttons.append({"text": group, "url": link})
+        priority = {
+            "iPhone 11–15": 0,
+            "iPhone 16": 1,
+            "iPhone 17": 2,
+            "Apple": 3,
+            "Samsung": 4,
+            "Смартфоны": 5,
+            "Часы / носимое": 6,
+            "Аудио": 7,
+            "Фото / видео": 8,
+            "Игры": 9,
+            "Другое": 10,
+        }
+        buttons.sort(key=lambda button: (priority.get(button["text"], 100), button["text"].casefold()))
         batches = [buttons[start:start + 80] for start in range(0, len(buttons), 80)] or [[]]
         changes = 0
         for index, batch in enumerate(batches):
@@ -273,7 +290,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 3
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 4
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -281,7 +298,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 3)
+                self.state.set("catalog_layout_version", 4)
             return changes
 
     async def set_first_message(self, text):

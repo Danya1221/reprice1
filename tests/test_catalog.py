@@ -50,8 +50,9 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         ordered = sorted(manifest.values(), key=lambda e: e["id"])
         self.assertIn("Dyson", ordered[0]["content"])
         buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
-        self.assertEqual([b["text"] for b in buttons], ["Другое", "Apple", "iPhone 17"])
-        self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{ordered[0]['id']}")
+        self.assertEqual([b["text"] for b in buttons], ["iPhone 17", "Apple", "Другое"])
+        dyson_button = next(button for button in buttons if button["text"] == "Другое")
+        self.assertEqual(dyson_button["url"], f"https://t.me/c/777/{ordered[0]['id']}")
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
         self.publisher.calls.clear()
         await self.publisher.publish(self.pages(["Dyson", "AirPods", "iPhone 17"]))
@@ -194,7 +195,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
-        self.assertEqual(self.state.get("catalog_layout_version"), 3)
+        self.assertEqual(self.state.get("catalog_layout_version"), 4)
         edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
         self.assertTrue(edits)
         buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
@@ -229,20 +230,44 @@ Dyson HS08 — 40000"""]).items
         await self.publisher.publish(render_blocks(items, Settings()))
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
         labels = [button["text"] for button in buttons]
-        for model in ["iPhone 16", "iPhone 16 Plus", "iPhone 16 Pro"]:
-            self.assertIn(model, labels)
+        self.assertIn("iPhone 16", labels)
+        self.assertNotIn("iPhone 16 Plus", labels)
+        self.assertNotIn("iPhone 16 Pro", labels)
         self.assertTrue({"Apple", "Samsung", "Смартфоны", "Часы / носимое", "Аудио", "Фото / видео", "Игры", "Другое"}.issubset(set(labels)))
 
-    async def test_paired_iphone_models_have_separate_buttons_to_same_message(self):
+    async def test_paired_iphone_models_share_one_generation_button(self):
         items = parse_documents(["iPhone 16 128 Black — 60000\niPhone 16 Plus 128 Pink — 70000"]).items
         await self.publisher.publish(render_blocks(items, Settings()))
         manifest = self.state.get("published")["messages"]
         self.assertEqual(len(manifest), 1)
         message_id = next(iter(manifest.values()))["id"]
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
-        iphone_buttons = {button["text"]: button["url"] for button in buttons if button["text"].startswith("iPhone 16")}
-        self.assertEqual(set(iphone_buttons), {"iPhone 16", "iPhone 16 Plus"})
-        self.assertEqual(set(iphone_buttons.values()), {f"https://t.me/c/777/{message_id}"})
+        iphone_buttons = [button for button in buttons if button["text"].startswith("iPhone")]
+        self.assertEqual([button["text"] for button in iphone_buttons], ["iPhone 16"])
+        self.assertEqual(iphone_buttons[0]["url"], f"https://t.me/c/777/{message_id}")
+
+    async def test_many_iphone_models_produce_only_three_ordered_buttons(self):
+        items = parse_documents(["""iPhone 11 128 Black — 40000
+iPhone 12 128 Black — 45000
+iPhone 13 128 Black — 50000
+iPhone 14 Plus 128 Black — 55000
+iPhone 15 Pro Max 256 Black — 70000
+iPhone 16 128 Black — 60000
+iPhone 16 Plus 128 Pink — 70000
+iPhone 16 Pro 256 Black — 80000
+iPhone 16 Pro Max 256 Black — 90000
+iPhone 17e 256 Black — 70000
+iPhone 17 256 Black — 80000
+iPhone 17 Pro 256 Black — 90000
+iPhone 17 Pro Max 256 Black — 100000
+iPhone Air 256 Black — 85000
+Mac mini M4 16/256 Silver — 68800
+Samsung S26 12/256 Black — 65000"""]).items
+        await self.publisher.publish(render_blocks(items, Settings()))
+        buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        labels = [button["text"] for button in buttons]
+        self.assertEqual(labels[:5], ["iPhone 11–15", "iPhone 16", "iPhone 17", "Apple", "Samsung"])
+        self.assertFalse(any(label in labels for label in ["iPhone 16 Plus", "iPhone 17e", "iPhone Air", "iPhone 15 Pro Max"]))
 
     async def test_closed_catalog_keeps_buttons_and_removes_prices(self):
         await self.publisher.publish(self.pages())
