@@ -13,7 +13,7 @@ class ParserRegressionTests(unittest.TestCase):
 
     def test_short_iphone_tb_and_air_blocks(self):
         items = self.parse("17 Pro 1TB Orange — 100000\n17 Pro Max 2TB Silver — 120000\n17 Air 1TB Blue — 90000").items
-        self.assertEqual([i.block for i in items], ["iPhone 17 Pro / 17 Pro Max", "iPhone 17 Pro / 17 Pro Max", "iPhone Air"])
+        self.assertEqual([i.block for i in items], ["iPhone 17 Pro", "iPhone 17 Pro Max", "iPhone Air"])
         self.assertTrue(all(i.title.startswith("iPhone ") for i in items))
 
     def test_redmi_note_and_oura_do_not_inherit_dji(self):
@@ -25,13 +25,13 @@ class ParserRegressionTests(unittest.TestCase):
     def test_watch_series_and_macs_are_grouped(self):
         items = self.parse("Apple Watch\nSeries 11 46mm Jet Black — 40000\nUltra 3 49mm Black — 70000\nMacBook Air M4 16/256 — 90000\niMac M4 24 16/256 — 110000").items
         self.assertEqual([i.block for i in items], ["Apple Watch", "Apple Watch", "MacBook / iMac", "MacBook / iMac"])
-        watch_pages = [page for page in render_blocks(items, Settings()).values() if page.startswith("<b>Apple Watch</b>")]
-        self.assertEqual(len(watch_pages), 1)
-        self.assertIn("Series 11", watch_pages[0])
-        self.assertIn("Ultra 3", watch_pages[0])
+        packed = "\n".join(render_blocks(items, Settings()).values())
+        self.assertIn("— Apple Watch —", packed)
+        self.assertIn("Series 11", packed)
+        self.assertIn("Ultra 3", packed)
         pages = "\n".join(render_blocks(items, Settings()).values())
-        self.assertIn("<b>MacBook / iMac</b>", pages)
-        self.assertNotIn("<b>— MacBook / iMac —</b>", pages)
+        self.assertIn("<b>— MacBook / iMac —</b>", pages)
+        self.assertIn("<b>Apple</b>", pages)
 
     def test_iphone_11_to_15_publish_as_individual_models(self):
         items = self.parse("""iPhone: 13-14-15
@@ -43,15 +43,12 @@ class ParserRegressionTests(unittest.TestCase):
 iPhone 12 128 Black — 40000
 iPhone 11 Pro Max 256 Green — 39000""").items
         self.assertEqual({item.block for item in items}, {
-            "iPhone 11 Pro / 11 Pro Max", "iPhone 12 / 12 Plus",
-            "iPhone 13 / 13 Plus", "iPhone 14 / 14 Plus",
-            "iPhone 15 / 15 Plus", "iPhone 15 Pro / 15 Pro Max",
+            "iPhone 11 Pro Max", "iPhone 12", "iPhone 13", "iPhone 14",
+            "iPhone 15", "iPhone 15 Plus", "iPhone 15 Pro",
         })
         pages = render_blocks(items, Settings())
         headers = {page.split("\n", 1)[0] for page in pages.values()}
-        self.assertIn("<b>iPhone 13 / 13 Plus</b>", headers)
-        self.assertIn("<b>iPhone 15 / 15 Plus</b>", headers)
-        self.assertIn("<b>iPhone 15 Pro / 15 Pro Max</b>", headers)
+        self.assertTrue(any(page.startswith("<b>iPhone 11 / 12 / 13 / 14 / 15</b>") for page in pages.values()))
 
 
     def test_saved_wrong_block_is_reclassified(self):

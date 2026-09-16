@@ -26,25 +26,42 @@ def page_title(content):
 
 
 def catalog_labels(content):
-    """Return direct iPhone buttons for models actually present in a physical post."""
+    """Buttons represented by one physical Telegram price message."""
+    plain = html.unescape(re.sub(r"<[^>]+>", " ", content))
+    iphone_pattern = re.compile(
+        r"\biPhone\s+(?:Air|\d{1,2}e?(?:\s+(?:Plus|Pro(?:\s+Max)?))?)\b",
+        re.I,
+    )
+    iphones = []
+    for raw in iphone_pattern.findall(plain):
+        canonical = iphone_model_label(raw)
+        if canonical and canonical not in iphones:
+            iphones.append(canonical)
+    if iphones:
+        return iphones
+
     title = page_title(content)
-    if title.casefold().startswith("iphone") and "/" in title:
-        labels = re.findall(
-            r"<b>—\s*(iPhone\s+\d{1,2}(?:\s+(?:Plus|Pro(?:\s+Max)?))?)\s*—</b>",
-            content,
-            re.I,
-        )
-        result = []
-        for label in labels:
-            canonical = re.sub(r"\s+", " ", label).strip()
-            canonical = re.sub(r"\bplus\b", "Plus", canonical, flags=re.I)
-            canonical = re.sub(r"\bpro\s+max\b", "Pro Max", canonical, flags=re.I)
-            canonical = re.sub(r"\bpro\b", "Pro", canonical, flags=re.I)
-            if canonical not in result:
-                result.append(canonical)
-        if result:
-            return result
-    return [catalog_group(title)]
+    labels = []
+    for part in [piece.strip() for piece in title.split("•") if piece.strip()]:
+        group = catalog_group(part)
+        if group not in labels:
+            labels.append(group)
+    return labels or [catalog_group(title)]
+
+
+def iphone_model_label(raw):
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if raw.casefold() == "iphone air":
+        return "iPhone Air"
+    match = re.fullmatch(r"iPhone\s+(\d{1,2}e?)(?:\s+(Plus|Pro(?:\s+Max)?))?", raw, re.I)
+    if not match:
+        return ""
+    result = "iPhone " + match.group(1)
+    suffix = match.group(2)
+    if suffix:
+        suffix = re.sub(r"\s+", " ", suffix).title().replace("Pro Max", "Pro Max")
+        result += " " + suffix
+    return result
 
 
 def catalog_group(title):

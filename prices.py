@@ -168,31 +168,8 @@ def iphone_model(title):
 
 
 def iphone_publish_block(model):
-    """Pair base+Plus and Pro+Pro Max from the same generation in one Telegram post."""
-    if not model:
-        return ""
-    match = re.fullmatch(r"iPhone\s+(\d{1,2})", model, re.I)
-    if match:
-        return f"iPhone {match.group(1)} / {match.group(1)} Plus"
-    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s+Plus", model, re.I)
-    if match:
-        return f"iPhone {match.group(1)} / {match.group(1)} Plus"
-    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s+Pro(?:\s+Max)?", model, re.I)
-    if match:
-        return f"iPhone {match.group(1)} Pro / {match.group(1)} Pro Max"
-    return model
-
-
-def iphone_models_for_block(block):
-    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s*/\s*\1\s+Plus", block, re.I)
-    if match:
-        n = match.group(1)
-        return [f"iPhone {n}", f"iPhone {n} Plus"]
-    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s+Pro\s*/\s*\1\s+Pro Max", block, re.I)
-    if match:
-        n = match.group(1)
-        return [f"iPhone {n} Pro", f"iPhone {n} Pro Max"]
-    return [block] if block.startswith("iPhone") else []
+    """Logical iPhone block. Physical Telegram messages are grouped later."""
+    return model or ""
 
 
 def iphone_storage_key(item):
@@ -206,7 +183,6 @@ def iphone_storage_key(item):
     value = int(match.group(1))
     unit = (match.group(2) or "GB").upper()
     return f"{value}{unit}"
-
 
 def brand_of(text):
     for name, pattern in BRANDS:
@@ -614,96 +590,273 @@ def display_title(item):
     return title
 
 
+def iphone_bundle_key(block):
+    """Physical iPhone message requested by the operator."""
+    if block == "iPhone Air":
+        return "iphone17"
+    match = re.fullmatch(r"iPhone\s+(\d{1,2})(?:e)?(?:\s+(?:Plus|Pro(?:\s+Max)?))?", block, re.I)
+    if not match:
+        return ""
+    number = int(match.group(1))
+    if 11 <= number <= 15:
+        return "iphone11-15"
+    if number == 16:
+        return "iphone16"
+    if number == 17:
+        return "iphone17"
+    return ""
+
+
+def iphone_bundle_header(bundle, titles):
+    if bundle == "iphone11-15":
+        return "iPhone 11 / 12 / 13 / 14 / 15"
+    if bundle == "iphone16":
+        base = "iPhone 16 / 16 Plus / 16 Pro / 16 Pro Max"
+        if any(title.casefold() == "iphone 16e" for title in titles):
+            base += " / 16e"
+        return base
+    if bundle == "iphone17":
+        base = "iPhone 17 / 17 Pro / 17 Pro Max / Air"
+        if any(title.casefold() == "iphone 17e" for title in titles):
+            base += " / 17e"
+        return base
+    return " / ".join(titles)
+
+
+def physical_brand_label(title):
+    name = clean(title)
+    lower = name.casefold()
+    if lower.startswith("iphone"):
+        return "iPhone"
+    if lower.startswith(("airpods", "apple watch", "ipad", "macbook", "imac", "mac mini", "mac studio", "apple tv", "airtag", "apple")):
+        return "Apple"
+    if lower.startswith("samsung"):
+        return "Samsung"
+    if lower.startswith("ray-ban"):
+        return "Ray-Ban Meta"
+    if lower.startswith("dji") or lower.startswith("insta360"):
+        return "DJI / Insta360"
+    if lower.startswith("harman") or lower.startswith("bose"):
+        return "Harman Kardon / Bose"
+    if lower.startswith("kodak") or lower.startswith("fujifilm"):
+        return "Kodak / Fujifilm"
+    return name
+
+
+def iphone_storage_rank(item):
+    key = iphone_storage_key(item)
+    match = re.fullmatch(r"(\d+)(GB|TB)", key, re.I)
+    if not match:
+        return 10**9
+    value = int(match.group(1))
+    if match.group(2).upper() == "TB":
+        value *= 1024
+    return value
+
+
+def render_block_lines(block, block_items, settings, overrides, closed=False):
+    if closed:
+        return ["Продажи закрыты"]
+
+    has_activation = any(activation_state(item.title) != "unknown" or iphone_model(item.title) for item in block_items)
+
+    def condition(item):
+        value = activation_state(item.title)
+        return "inactive" if value == "unknown" else value
+
+    lines = []
+    statuses = sorted({condition(item) for item in block_items}, key=lambda status: CONDITION_ORDER[status])
+    for status_index, status in enumerate(statuses):
+        status_items = [item for item in block_items if condition(item) == status]
+        if status_index and lines and lines[-1] != "":
+            lines.append("")
+        if has_activation:
+            lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
+
+        last_sim = None
+        last_samsung_section = None
+        last_model_key = None
+        last_storage = None
+        sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
+
+        def full_sort(item):
+            if iphone_model(item.title):
+                return (SIM_ORDER.get(item.sim, 99), iphone_storage_rank(item), sorter(item))
+            return (SIM_ORDER.get(item.sim, 99), 0, sorter(item))
+
+        for item in sorted(status_items, key=full_sort):
+            if block == "Samsung A + S25":
+                samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
+                if samsung_section != last_samsung_section:
+                    if last_samsung_section is not None and lines and lines[-1] != "":
+                        lines.append("")
+                    lines.append("<b>— " + samsung_section + " —</b>")
+                    last_samsung_section = samsung_section
+
+            if iphone_model(item.title) and item.sim != last_sim:
+                label = SIM_LABELS.get(item.sim)
+                if label:
+                    if lines and lines[-1] != "" and not lines[-1].startswith("<b>"):
+                        lines.append("")
+                    lines.append("<b>— " + label + " —</b>")
+                last_sim = item.sim
+
+            if iphone_model(item.title):
+                storage = iphone_storage_key(item)
+                if (storage and last_storage is not None and storage != last_storage
+                        and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+                    lines.append("")
+                if storage:
+                    last_storage = storage
+            else:
+                model_key = model_group_key(item)
+                if (last_model_key is not None and model_key != last_model_key
+                        and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+                    lines.append("")
+                last_model_key = model_key
+
+            row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
+            line = "<code>" + html.escape(row) + "</code>"
+            if units(line) > 3000:
+                raise ValueError("Слишком длинное наименование товара")
+            lines.append(line)
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def section_chunks(title, lines, limit=3200):
+    """Split a logical block only when Telegram forces us to; never add Part labels."""
+    result = []
+    chunk = []
+    size = 0
+    for line in lines:
+        line_size = units(line) + 1
+        if chunk and size + line_size > limit:
+            while chunk and chunk[-1] == "":
+                chunk.pop()
+            result.append({"title": title, "body": "\n".join(chunk), "part": len(result)})
+            chunk = []
+            size = 0
+        chunk.append(line)
+        size += line_size
+    if chunk:
+        while chunk and chunk[-1] == "":
+            chunk.pop()
+        result.append({"title": title, "body": "\n".join(chunk), "part": len(result)})
+    return result or [{"title": title, "body": "", "part": 0}]
+
+
+def build_physical_message(sections, bundle=""):
+    if not sections:
+        return ""
+    if len(sections) == 1 and not bundle:
+        section = sections[0]
+        return "<b>" + html.escape(section["title"]) + "</b>\n\n" + section["body"]
+
+    titles = []
+    for section in sections:
+        if section["title"] not in titles:
+            titles.append(section["title"])
+
+    if bundle:
+        heading = iphone_bundle_header(bundle, titles)
+    else:
+        brands = []
+        for title in titles:
+            label = physical_brand_label(title)
+            if label not in brands:
+                brands.append(label)
+        heading = " • ".join(brands)
+
+    bodies = []
+    for section in sections:
+        bodies.append("<b>— " + html.escape(section["title"]) + " —</b>\n" + section["body"])
+    # Three newlines = a visible empty line between logical sections.
+    return "<b>" + html.escape(heading) + "</b>\n\n" + "\n\n\n".join(bodies)
+
+
+def split_bundle_sections(sections, bundle, limit=3950):
+    batches = []
+    current = []
+    for section in sections:
+        candidate = current + [section]
+        if current and units(build_physical_message(candidate, bundle)) > limit:
+            batches.append(current)
+            current = [section]
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return batches
+
+
+def pack_physical_sections(sections, limit=3950):
+    """Pack ordinary small brands, while preserving explicitly separated business sections."""
+    isolated = {
+        "CPO", "ASIS", "Аксессуары",
+        "Samsung Buds", "Samsung A + S25", "Samsung S26",
+        "Samsung Tab S", "Samsung Fold / Flip",
+    }
+    ordered_units = []
+    seen_bundles = set()
+    for section in sections:
+        bundle = iphone_bundle_key(section["title"])
+        if bundle:
+            if bundle in seen_bundles:
+                continue
+            seen_bundles.add(bundle)
+            bundle_sections = [entry for entry in sections if iphone_bundle_key(entry["title"]) == bundle]
+            for batch in split_bundle_sections(bundle_sections, bundle, limit):
+                ordered_units.append((bundle, batch))
+        elif section["title"] in isolated:
+            ordered_units.append(("isolated", [section]))
+        else:
+            ordered_units.append(("", [section]))
+
+    physical = []
+    pending = []
+    for bundle, unit_sections in ordered_units:
+        if bundle:
+            if pending:
+                physical.append(("", pending))
+                pending = []
+            if bundle == "isolated":
+                physical.append(("", unit_sections))
+            else:
+                physical.append((bundle, unit_sections))
+            continue
+
+        candidate = pending + unit_sections
+        if pending and units(build_physical_message(candidate)) > limit:
+            physical.append(("", pending))
+            pending = list(unit_sections)
+        else:
+            pending = candidate
+    if pending:
+        physical.append(("", pending))
+    return physical
+
+
 def render_blocks(items, settings, overrides=None, closed=False):
-    """Return stable page keys and HTML; each full product+price row is copyable."""
+    """Render logical blocks, then pack them into fewer large physical Telegram messages."""
     overrides = overrides or {}
     groups = OrderedDict()
     for item in items:
         groups.setdefault(item.block, []).append(item)
+
     order = overrides.get("block_order", [])
     names = ordered_blocks(groups, order)
-    pages = OrderedDict()
+    logical_sections = []
     for block in names:
-        header = "<b>" + html.escape(block) + "</b>"
-        if closed:
-            chunks = [["Продажи закрыты"]]
-        else:
-            block_items = groups[block]
-            has_activation = any(activation_state(item.title) != "unknown" or iphone_model(item.title) for item in block_items)
-            def condition(item):
-                value = activation_state(item.title)
-                return "inactive" if value == "unknown" else value
-            lines = []
-            paired_iphone_models = iphone_models_for_block(block)
-            is_paired_iphone = len(paired_iphone_models) == 2
-            model_batches = []
-            if is_paired_iphone:
-                for model_name in paired_iphone_models:
-                    subset = [item for item in block_items if iphone_model(item.title) == model_name]
-                    if subset:
-                        model_batches.append((model_name, subset))
-            else:
-                model_batches = [("", block_items)]
+        lines = render_block_lines(block, groups[block], settings, overrides, closed=closed)
+        logical_sections.extend(section_chunks(block, lines))
 
-            for model_index, (model_name, model_items) in enumerate(model_batches):
-                if model_index and lines and lines[-1] != "":
-                    lines.append("")
-                if is_paired_iphone:
-                    lines.append("<b>— " + html.escape(model_name) + " —</b>")
-                statuses = sorted(
-                    {condition(item) for item in model_items},
-                    key=lambda status: CONDITION_ORDER[status],
-                )
-                for status_index, status in enumerate(statuses):
-                    status_items = [item for item in model_items if condition(item) == status]
-                    if status_index and lines and lines[-1] != "":
-                        lines.append("")
-                    if has_activation:
-                        lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
-                    last_sim = None
-                    last_samsung_section = None
-                    last_model_key = None
-                    last_storage = None
-                    sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
-                    for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), sorter(i))):
-                        if block == "Samsung A + S25":
-                            samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
-                            if samsung_section != last_samsung_section:
-                                if last_samsung_section is not None and lines and lines[-1] != "":
-                                    lines.append("")
-                                lines.append("<b>— " + samsung_section + " —</b>")
-                                last_samsung_section = samsung_section
-                        if iphone_model(item.title) and item.sim != last_sim:
-                            label = SIM_LABELS.get(item.sim)
-                            if label:
-                                lines.append("<b>— " + label + " —</b>")
-                            last_sim = item.sim
-                        storage = iphone_storage_key(item) if iphone_model(item.title) else ""
-                        if (storage and last_storage is not None and storage != last_storage
-                                and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
-                            lines.append("")
-                        if storage:
-                            last_storage = storage
-                        model_key = model_group_key(item)
-                        if (not iphone_model(item.title) and last_model_key is not None and model_key != last_model_key
-                                and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
-                            lines.append("")
-                        last_model_key = model_key
-                        row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
-                        line = "<code>" + html.escape(row) + "</code>"
-                        if units(line) > 3000:
-                            raise ValueError("Слишком длинное наименование товара")
-                        lines.append(line)
-            chunks, chunk, size = [], [], units(header) + 50
-            for line in lines:
-                if size + units(line) + 1 > 3800 and chunk:
-                    chunks.append(chunk)
-                    chunk, size = [], units(header) + 50
-                chunk.append(line)
-                size += units(line) + 1
-            if chunk:
-                chunks.append(chunk)
-        for index, chunk in enumerate(chunks):
-            key = hashlib.sha256(block.encode()).hexdigest()[:16] + ":" + str(index)
-            pages[key] = header + "\n\n" + "\n".join(chunk)
+    pages = OrderedDict()
+    for bundle, sections in pack_physical_sections(logical_sections):
+        content = build_physical_message(sections, bundle)
+        seed = bundle + "|" + "|".join(f'{section["title"]}#{section["part"]}' for section in sections)
+        key = hashlib.sha256(seed.encode()).hexdigest()[:16] + ":0"
+        pages[key] = content
     return pages
