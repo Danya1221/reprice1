@@ -57,6 +57,19 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         await self.publisher.publish(self.pages(["Dyson", "AirPods", "iPhone 17"]))
         self.assertEqual(self.publisher.calls, [])
 
+    async def test_catalog_buttons_change_in_same_publish_when_page_family_changes(self):
+        first = {"old:0": "<b>Honor</b>\n\n<code>Honor 400 — 30000</code>"}
+        await self.publisher.publish(first)
+        message_id = next(iter(self.state.get("published")["messages"].values()))["id"]
+        self.publisher.calls.clear()
+        second = {"new:0": "<b>Samsung</b>\n\n<b>— Samsung S26 —</b>\n<code>S26 12/256 — 65000</code>"}
+        await self.publisher.publish(second)
+        manifest = self.state.get("published")["messages"]
+        self.assertEqual(next(iter(manifest.values()))["id"], message_id)
+        buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertEqual([b["text"] for b in buttons], ["Samsung"])
+        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
     async def test_existing_price_slots_stay_prices_and_catalog_is_last(self):
         await self.publisher.ensure_target()
         self.state.set("published", {"binding": self.publisher.binding(), "messages": {

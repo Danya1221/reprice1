@@ -248,9 +248,9 @@ def product_block(title):
 
 
 def ordered_blocks(blocks, preferred=()):
-    defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook / iMac", "Apple", "Ray-Ban Meta",
-                "Samsung", "Honor", "Realme", "Huawei", "Tecno", "Xiaomi", "Google", "COROS", "Rode", "Dyson",
-                "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
+    defaults = ["iPhone", "AirPods", "Apple Watch", "iPad", "MacBook / iMac", "Mac mini", "Mac Studio",
+                "Apple TV", "AirTag", "Apple", "Ray-Ban Meta", "Samsung", "Honor", "Realme", "Huawei", "Tecno",
+                "Xiaomi", "Google", "COROS", "Rode", "Dyson", "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
     def order_key(name):
         if name in preferred:
             return (-1, preferred.index(name), (), "")
@@ -792,50 +792,68 @@ def split_bundle_sections(sections, bundle, limit=3950):
     return batches
 
 
-def pack_physical_sections(sections, limit=3950):
-    """Pack ordinary small brands, while preserving explicitly separated business sections."""
-    isolated = {
-        "CPO", "ASIS", "Аксессуары",
-        "Samsung Buds", "Samsung A + S25", "Samsung S26",
-        "Samsung Tab S", "Samsung Fold / Flip",
-    }
-    ordered_units = []
-    seen_bundles = set()
-    for section in sections:
-        bundle = iphone_bundle_key(section["title"])
-        if bundle:
-            if bundle in seen_bundles:
-                continue
-            seen_bundles.add(bundle)
-            bundle_sections = [entry for entry in sections if iphone_bundle_key(entry["title"]) == bundle]
-            for batch in split_bundle_sections(bundle_sections, bundle, limit):
-                ordered_units.append((bundle, batch))
-        elif section["title"] in isolated:
-            ordered_units.append(("isolated", [section]))
-        else:
-            ordered_units.append(("", [section]))
+def physical_section_family(title):
+    """Keep major ecosystems together instead of mixing them with unrelated brands."""
+    if title in {"CPO", "ASIS", "Аксессуары"}:
+        return "isolated"
+    label = physical_brand_label(title)
+    if label == "Apple":
+        return "apple"
+    if label == "Samsung":
+        return "samsung"
+    return "other"
 
+
+def pack_physical_sections(sections, limit=3950):
+    """Pack by ecosystem: Apple together, Samsung together, other small brands separately."""
     physical = []
     pending = []
-    for bundle, unit_sections in ordered_units:
+    pending_family = ""
+    seen_iphone_bundles = set()
+
+    def flush_pending():
+        nonlocal pending, pending_family
+        if pending:
+            physical.append(("", pending))
+            pending = []
+            pending_family = ""
+
+    index = 0
+    while index < len(sections):
+        section = sections[index]
+        bundle = iphone_bundle_key(section["title"])
         if bundle:
-            if pending:
-                physical.append(("", pending))
-                pending = []
-            if bundle == "isolated":
-                physical.append(("", unit_sections))
-            else:
-                physical.append((bundle, unit_sections))
+            flush_pending()
+            if bundle not in seen_iphone_bundles:
+                seen_iphone_bundles.add(bundle)
+                bundle_sections = [entry for entry in sections if iphone_bundle_key(entry["title"]) == bundle]
+                for batch in split_bundle_sections(bundle_sections, bundle, limit):
+                    physical.append((bundle, batch))
+            index += 1
             continue
 
-        candidate = pending + unit_sections
+        family = physical_section_family(section["title"])
+        if family == "isolated":
+            flush_pending()
+            physical.append(("", [section]))
+            index += 1
+            continue
+
+        # Never let Apple/Samsung spill into Honor, Kodak, Marshall, Oura, etc.
+        if pending and family != pending_family:
+            flush_pending()
+
+        candidate = pending + [section]
         if pending and units(build_physical_message(candidate)) > limit:
-            physical.append(("", pending))
-            pending = list(unit_sections)
+            flush_pending()
+            pending = [section]
+            pending_family = family
         else:
             pending = candidate
-    if pending:
-        physical.append(("", pending))
+            pending_family = family
+        index += 1
+
+    flush_pending()
     return physical
 
 

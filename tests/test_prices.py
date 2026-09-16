@@ -115,10 +115,11 @@ Z Flip 7 12/256 Mint 🇦🇪 — 78000""").items
             "Samsung Fold / Flip", "Samsung Fold / Flip",
         ])
         pages = render_blocks(items, Settings())
-        headers = [content.split("\n", 1)[0] for content in pages.values()]
-        self.assertIn("<b>Samsung A + S25</b>", headers)
-        self.assertIn("<b>Samsung S26</b>", headers)
-        self.assertIn("<b>Samsung Fold / Flip</b>", headers)
+        text = "\n".join(pages.values())
+        self.assertIn("<b>Samsung</b>", text)
+        self.assertIn("<b>— Samsung A + S25 —</b>", text)
+        self.assertIn("<b>— Samsung S26 —</b>", text)
+        self.assertIn("<b>— Samsung Fold / Flip —</b>", text)
 
     def test_coros_does_not_inherit_xiaomi_context(self):
         items = self.parse("""Xiaomi
@@ -153,10 +154,11 @@ Tab S11 Ultra 12/512 Silver — 98000""").items
         ])
         self.assertTrue(all(not item.title.startswith("Samsung A +") for item in items))
         pages = render_blocks(items, Settings())
-        headers = [content.split("\n", 1)[0] for content in pages.values()]
-        self.assertIn("<b>Samsung A + S25</b>", headers)
-        self.assertIn("<b>Samsung S26</b>", headers)
-        self.assertIn("<b>Samsung Tab S</b>", headers)
+        text = "\n".join(pages.values())
+        self.assertIn("<b>Samsung</b>", text)
+        self.assertIn("<b>— Samsung A + S25 —</b>", text)
+        self.assertIn("<b>— Samsung S26 —</b>", text)
+        self.assertIn("<b>— Samsung Tab S —</b>", text)
 
     def test_supplier_style_samsung_sections(self):
         items = self.parse("""Buds 3 FE Black 🇦🇪 - 6400
@@ -179,11 +181,12 @@ S26 Ultra 16/1TB Black 🇨🇱 - 117500""").items
         ])
         pages = render_blocks(items, Settings())
         text = "\n".join(pages.values())
-        self.assertIn("<b>Samsung Buds</b>", text)
+        self.assertIn("<b>Samsung</b>", text)
+        self.assertIn("<b>— Samsung Buds —</b>", text)
         self.assertIn("<b>— Galaxy A —</b>", text)
         self.assertIn("<b>— Galaxy S25 —</b>", text)
-        self.assertIn("<b>Samsung S26</b>", text)
-        combined = next(page for page in pages.values() if page.startswith("<b>Samsung A + S25</b>"))
+        self.assertIn("<b>— Samsung S26 —</b>", text)
+        combined = next(page for page in pages.values() if page.startswith("<b>Samsung</b>"))
         self.assertLess(combined.index("Galaxy A"), combined.index("Galaxy S25"))
 
     def test_all_apple_watches_share_one_block(self):
@@ -258,6 +261,34 @@ Realme GT 7 12/256 Black — 42000""").items
         for brand in ["Xiaomi", "Vivo", "Realme"]:
             self.assertIn(brand, header)
         self.assertIn("</code>\n\n\n<b>— ", content)
+
+    def test_apple_sections_stay_together_and_never_mix_with_other_brands(self):
+        items = self.parse("""Kodak Mini Shot 3 — 12000
+Mac mini M4 16/256 Silver — 68800
+iMac M4 24 16/256 Blue — 110000
+MacBook Air M4 16/256 — 90000
+Marshall Major V Black — 5400
+Oura Ring 5 Size 8 Black — 35800
+Apple TV 4K 64GB — 20200""").items
+        pages = list(render_blocks(items, Settings()).values())
+        apple = next(page for page in pages if page.startswith("<b>Apple</b>"))
+        for label in ["MacBook / iMac", "Mac mini", "Apple TV"]:
+            self.assertIn(label, apple)
+        for foreign in ["Kodak", "Marshall", "Oura Ring"]:
+            self.assertNotIn("— " + foreign, apple)
+
+    def test_samsung_sections_stay_together_and_do_not_mix_with_honor(self):
+        items = self.parse("""Buds 4 Black — 9000
+A27 8/256 Blue — 23800
+S25 Ultra 12/256 Black — 65000
+S26 12/256 Black — 64900
+Honor 400 12/256 Black — 33000""").items
+        pages = list(render_blocks(items, Settings()).values())
+        samsung = next(page for page in pages if page.startswith("<b>Samsung</b>"))
+        self.assertIn("Samsung Buds", samsung)
+        self.assertIn("Samsung A + S25", samsung)
+        self.assertIn("Samsung S26", samsung)
+        self.assertNotIn("Honor", samsung)
 
     def test_blank_line_is_added_when_model_changes(self):
         items = self.parse("""A17 6/128GB Gray — 15000
