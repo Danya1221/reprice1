@@ -48,7 +48,8 @@ BRANDS = (
     ("Harman Kardon / Bose", r"harman\s*kardon|\bbose\b|\baura\s+studio\b|\bonyx\b|soundsticks"),
     ("Google", r"\bgoogle\b|\bpixel\b|\bfitbit\b"),
     ("Samsung", r"\bsamsung\b|\bgalaxy\b|самсунг"),
-    ("Apple", r"\bapple\b|\biphone\b|айфон|\bipad\b|\bmacbook\b|\bairpods\b|\bimac\b|apple\s*watch"),
+    ("Apple", r"\bapple\b|\biphone\b|айфон|\bipad\b|\bmacbook\b|\bairpods\b|\bimac\b|"
+              r"\bmac\s+mini\b|\bmac\s+studio\b|\bapple\s*tv\b|\bairtag\b|apple\s*watch"),
     ("Sony", r"\bsony\b"),
     ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b|^\s*(?:redmi\s+)?note\s+\d{1,2}[a-z]*\b"),
     ("Huawei", r"\bhuawei\b"),
@@ -607,6 +608,22 @@ def iphone_bundle_key(block):
     return ""
 
 
+def iphone_bundle_section_rank(title):
+    """Operator-requested visual order inside the large iPhone messages."""
+    name = title.casefold().strip()
+    if name == "iphone 17e":
+        return (0, name)
+    if name == "iphone air":
+        return (1, name)
+    if name == "iphone 17":
+        return (2, name)
+    if name == "iphone 17 pro":
+        return (3, name)
+    if name == "iphone 17 pro max":
+        return (4, name)
+    return (10, name)
+
+
 def iphone_bundle_header(bundle, titles):
     if bundle == "iphone11-15":
         return "iPhone 11 / 12 / 13 / 14 / 15"
@@ -616,10 +633,17 @@ def iphone_bundle_header(bundle, titles):
             base += " / 16e"
         return base
     if bundle == "iphone17":
-        base = "iPhone 17 / 17 Pro / 17 Pro Max / Air"
-        if any(title.casefold() == "iphone 17e" for title in titles):
-            base += " / 17e"
-        return base
+        ordered = sorted(titles, key=iphone_bundle_section_rank)
+        labels = []
+        for title in ordered:
+            name = title.casefold()
+            if name == "iphone air":
+                labels.append("17 Air")
+            elif name.startswith("iphone "):
+                labels.append(title[7:])
+            else:
+                labels.append(title)
+        return "iPhone " + " / ".join(labels)
     return " / ".join(titles)
 
 
@@ -641,6 +665,15 @@ def physical_brand_label(title):
     if lower.startswith("kodak") or lower.startswith("fujifilm"):
         return "Kodak / Fujifilm"
     return name
+
+
+def product_storage_key(item):
+    """Storage part for RAM/storage products such as Galaxy S26 12/256 or 16/1TB."""
+    title = FLAGS.sub("", clean(item.title))
+    match = re.search(r"\b\d{1,2}\s*/\s*(\d{1,4})\s*(GB|TB)?\b", title, re.I)
+    if not match:
+        return ""
+    return match.group(1) + (match.group(2) or "GB").upper()
 
 
 def iphone_storage_rank(item):
@@ -670,8 +703,11 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
         status_items = [item for item in block_items if condition(item) == status]
         if status_index and lines and lines[-1] != "":
             lines.append("")
-        if has_activation:
-            lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
+        # Ordinary/non-activated stock is the default and needs no noisy heading.
+        # Only explicitly active stock gets its own visible section.
+        if has_activation and status == "active":
+            lines.append("<b>— Актив —</b>")
+            lines.append("")
 
         last_sim = None
         last_samsung_section = None
@@ -691,14 +727,16 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                     if last_samsung_section is not None and lines and lines[-1] != "":
                         lines.append("")
                     lines.append("<b>— " + samsung_section + " —</b>")
+                    lines.append("")
                     last_samsung_section = samsung_section
 
             if iphone_model(item.title) and item.sim != last_sim:
                 label = SIM_LABELS.get(item.sim)
                 if label:
-                    if lines and lines[-1] != "" and not lines[-1].startswith("<b>"):
+                    if lines and lines[-1] != "":
                         lines.append("")
                     lines.append("<b>— " + label + " —</b>")
+                    lines.append("")
                 last_sim = item.sim
 
             if iphone_model(item.title):
@@ -710,9 +748,18 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                     last_storage = storage
             else:
                 model_key = model_group_key(item)
-                if (last_model_key is not None and model_key != last_model_key
-                        and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+                model_changed = last_model_key is not None and model_key != last_model_key
+                if (model_changed and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
                     lines.append("")
+                if model_changed:
+                    last_storage = None
+                if block.startswith("Samsung"):
+                    storage = product_storage_key(item)
+                    if (storage and last_storage is not None and storage != last_storage
+                            and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+                        lines.append("")
+                    if storage:
+                        last_storage = storage
                 last_model_key = model_key
 
             row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
@@ -772,7 +819,7 @@ def build_physical_message(sections, bundle=""):
 
     bodies = []
     for section in sections:
-        bodies.append("<b>— " + html.escape(section["title"]) + " —</b>\n" + section["body"])
+        bodies.append("<b>— " + html.escape(section["title"]) + " —</b>\n\n" + section["body"])
     # Three newlines = a visible empty line between logical sections.
     return "<b>" + html.escape(heading) + "</b>\n\n" + "\n\n\n".join(bodies)
 
@@ -827,6 +874,8 @@ def pack_physical_sections(sections, limit=3950):
             if bundle not in seen_iphone_bundles:
                 seen_iphone_bundles.add(bundle)
                 bundle_sections = [entry for entry in sections if iphone_bundle_key(entry["title"]) == bundle]
+                if bundle == "iphone17":
+                    bundle_sections.sort(key=lambda entry: iphone_bundle_section_rank(entry["title"]))
                 for batch in split_bundle_sections(bundle_sections, bundle, limit):
                     physical.append((bundle, batch))
             index += 1

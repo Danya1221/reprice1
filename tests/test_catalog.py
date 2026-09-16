@@ -55,7 +55,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
         self.publisher.calls.clear()
         await self.publisher.publish(self.pages(["Dyson", "AirPods", "iPhone 17"]))
-        self.assertEqual(self.publisher.calls, [])
+        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
 
     async def test_catalog_buttons_change_in_same_publish_when_page_family_changes(self):
         first = {"old:0": "<b>Honor</b>\n\n<code>Honor 400 — 30000</code>"}

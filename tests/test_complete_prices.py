@@ -28,7 +28,7 @@ class CompletePriceTests(unittest.TestCase):
         items = parse_documents(["AirTag 1 pack — 35 $\niPhone 16 Pro 256 Natural CPO 🇺🇸 — 79000"]).items
         self.assertEqual(items[0].price, Decimal(35))
         content = "\n".join(render_blocks(items, Settings()).values())
-        self.assertIn("Не активированное", content)
+        self.assertNotIn("Не активированное", content)
         self.assertNotIn("Статус не указан", content)
 
     def test_all_selection_overrides_old_env_filters(self):

@@ -248,7 +248,7 @@ iPhone Air 256 Gold — 80000""").items
         self.assertEqual(len(pages), 3)
         self.assertTrue(any(page.startswith("<b>iPhone 11 / 12 / 13 / 14 / 15</b>") for page in pages))
         self.assertTrue(any(page.startswith("<b>iPhone 16 / 16 Plus / 16 Pro / 16 Pro Max</b>") for page in pages))
-        self.assertTrue(any(page.startswith("<b>iPhone 17 / 17 Pro / 17 Pro Max / Air</b>") for page in pages))
+        self.assertTrue(any(page.startswith("<b>iPhone 17 Air / 17 / 17 Pro / 17 Pro Max</b>") for page in pages))
 
     def test_small_brand_blocks_are_packed_with_visible_section_gap(self):
         items = self.parse("""Xiaomi 15 12/256 White — 48000
@@ -314,8 +314,50 @@ S25 Ultra 12/256 Black — 65000""").items
         iphone16 = next(page for page in pages.values() if page.startswith("<b>iPhone 16 / 16 Plus / 16 Pro / 16 Pro Max</b>"))
         self.assertIn("— iPhone 16 —", iphone16)
         self.assertIn("— iPhone 16 Plus —", iphone16)
-        self.assertGreaterEqual(iphone16.count("— Не активированное —"), 2)
+        self.assertNotIn("— Не активированное —", iphone16)
         self.assertGreaterEqual(iphone16.count("— Актив —"), 2)
+
+    def test_service_headings_have_visible_blank_lines(self):
+        items = self.parse("iPhone 17e 256 Black 1Sim+eSim — 63800\niPhone 17e 512 White 1Sim+eSim Актив — 70000").items
+        content = next(iter(render_blocks(items, Settings()).values()))
+        self.assertIn("— iPhone 17e —</b>\n\n<b>— SIM + eSIM —</b>\n\n<code>", content)
+        self.assertIn("— Актив —</b>\n\n<b>— SIM + eSIM —</b>\n\n<code>", content)
+        self.assertNotIn("— Не активированное —", content)
+
+    def test_iphone17_visual_order_is_17e_air_pro_pro_max(self):
+        items = self.parse("""iPhone 17 Pro Max 256 Silver — 100000
+iPhone Air 256 Gold — 80000
+iPhone 17e 256 Black — 65000
+iPhone 17 Pro 256 Blue — 90000""").items
+        content = next(iter(render_blocks(items, Settings()).values()))
+        positions = [content.index(label) for label in ["— iPhone 17e —", "— iPhone Air —", "— iPhone 17 Pro —", "— iPhone 17 Pro Max —"]]
+        self.assertEqual(positions, sorted(positions))
+        self.assertTrue(content.startswith("<b>iPhone 17e / 17 Air / 17 Pro / 17 Pro Max</b>"))
+
+    def test_samsung_memory_sizes_have_blank_lines(self):
+        items = self.parse("""S26 12/128 Black — 57300
+S26 12/128 Cobalt Violet — 57300
+S26 12/256 Black — 64300
+S26 12/256 Sky Blue — 63000
+S26 12/512 Black — 70800""").items
+        content = next(iter(render_blocks(items, Settings()).values()))
+        self.assertIn("12/128 Cobalt Violet — 57 300</code>\n\n<code>S26 12/256", content)
+        self.assertIn("12/256 Sky Blue — 63 000</code>\n\n<code>S26 12/512", content)
+
+    def test_mac_mini_and_apple_tv_never_inherit_previous_brand(self):
+        items = self.parse("""Kodak
+Kodak Mini Shot 3 — 12000
+Mac mini M4 16/256 Silver — 68800
+Apple TV 4K 64GB — 20200""").items
+        mac = next(item for item in items if item.block == "Mac mini")
+        tv = next(item for item in items if item.block == "Apple TV")
+        self.assertTrue(mac.title.startswith("Mac mini"))
+        self.assertTrue(tv.title.startswith("Apple TV"))
+        self.assertNotIn("Kodak", mac.title)
+        self.assertNotIn("Kodak", tv.title)
+        apple = next(page for page in render_blocks(items, Settings()).values() if page.startswith("<b>Apple</b>"))
+        self.assertIn("— Mac mini —", apple)
+        self.assertIn("— Apple TV —", apple)
 
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]
@@ -338,10 +380,9 @@ iPhone 17 256 Black 🇮🇳 — 60000""").items
 iPhone 17 256 White Неактив 🇮🇳 — 61000
 iPhone 17 256 Blue 🇮🇳 — 62000""").items
         content = next(iter(render_blocks(items, Settings()).values()))
-        self.assertIn("— Не активированное —", content)
+        self.assertNotIn("— Не активированное —", content)
         self.assertIn("— Актив —", content)
         self.assertNotIn("Статус не указан", content)
-        self.assertLess(content.index("— Не активированное —"), content.index("— Актив —"))
         self.assertLess(content.index("256 Blue"), content.index("— Актив —"))
 
     def test_accessories_filter(self):
