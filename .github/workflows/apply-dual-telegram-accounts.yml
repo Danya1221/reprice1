@@ -1,0 +1,38 @@
+name: Apply dual Telegram accounts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-dual-telegram-accounts.yml
+      - apply_dual_telegram_accounts.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply dual account support
+        run: python apply_dual_telegram_accounts.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config.py runtime.py main.py control_botapi.py .env.example tests/test_dual_accounts.py
+          git diff --cached --check
+          git commit -m "Support two Telegram supplier accounts"
+          git pull --rebase origin main
+          git push origin HEAD:main
