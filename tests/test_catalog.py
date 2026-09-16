@@ -176,6 +176,31 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(method == "pinChatMessage" and payload.get("message_id") == first
                             for method, payload in self.publisher.calls))
 
+    async def test_mac_mini_uses_apple_catalog_button(self):
+        items = parse_documents(["Mac mini M4 16/256 Silver — 68800"]).items
+        pages = render_blocks(items, Settings())
+        content = next(iter(pages.values()))
+        self.assertTrue(content.startswith("<b>Apple</b>"))
+        await self.publisher.publish(pages)
+        buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        self.assertEqual([button["text"] for button in buttons], ["Apple"])
+
+    async def test_catalog_layout_version_forces_existing_keyboard_edit(self):
+        items = parse_documents(["Mac mini M4 16/256 Silver — 68800"]).items
+        pages = render_blocks(items, Settings())
+        await self.publisher.publish(pages)
+        catalog_id = self.state.get("catalog")["messages"][0]["id"]
+        self.state.set("catalog_layout_version", 2)
+        self.publisher.calls.clear()
+        await self.publisher.publish(pages)
+        self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
+        self.assertEqual(self.state.get("catalog_layout_version"), 3)
+        edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
+        self.assertTrue(edits)
+        buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
+        self.assertEqual([button["text"] for button in buttons], ["Apple"])
+        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
     async def test_samsung_series_share_one_compact_catalog_button(self):
         items = parse_documents(["""Samsung
 A56 8/256 Black — 35000

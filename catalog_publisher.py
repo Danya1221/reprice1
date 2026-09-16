@@ -27,6 +27,15 @@ def page_title(content):
 
 def catalog_labels(content):
     """Buttons represented by one physical Telegram price message."""
+    # Major ecosystems are defined by the final physical post heading.  Do not
+    # let an old logical section name (Mac mini, Apple TV, Samsung S26, etc.)
+    # leak back into the public catalog buttons.
+    title = page_title(content)
+    if title.casefold().strip() == "apple":
+        return ["Apple"]
+    if title.casefold().strip() == "samsung":
+        return ["Samsung"]
+
     plain = html.unescape(re.sub(r"<[^>]+>", " ", content))
     iphone_pattern = re.compile(
         r"\biPhone\s+(?:Air|\d{1,2}e?(?:\s+(?:Plus|Pro(?:\s+Max)?))?)\b",
@@ -40,7 +49,6 @@ def catalog_labels(content):
     if iphones:
         return iphones
 
-    title = page_title(content)
     labels = []
     for part in [piece.strip() for piece in title.split("•") if piece.strip()]:
         group = catalog_group(part)
@@ -261,7 +269,19 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             changes = await super().publish(pages)
             count = 1
             records = await self._prepare_catalog(count)
+
+            # Existing Telegram catalog messages may carry a hash produced by an
+            # older button-layout algorithm.  Force one in-place keyboard rewrite
+            # when this layout version changes; keep the same message ID.
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 3
+            if force_catalog:
+                for record in records:
+                    record["hash"] = ""
+                self.save_catalog(records)
+
             changes += await self._update_catalog(pages, records)
+            if force_catalog:
+                self.state.set("catalog_layout_version", 3)
             return changes
 
     async def set_first_message(self, text):
