@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/apply-dual-telegram-accounts.yml
       - apply_dual_telegram_accounts.py
+      - apply_dual_telegram_accounts_v2.py
   workflow_dispatch:
 
 permissions:
@@ -22,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply dual account support
-        run: python apply_dual_telegram_accounts.py
+        run: python apply_dual_telegram_accounts_v2.py
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
