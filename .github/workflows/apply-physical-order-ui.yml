@@ -70,5 +70,6 @@ jobs:
           git add prices.py control_catalog.py tests/test_catalog.py tests/test_prices.py
           git diff --cached --check
           git commit -m "Order current physical price messages by number"
+          git checkout -- apply_physical_order_ui.py
           git pull --rebase origin main
           git push origin HEAD:main
