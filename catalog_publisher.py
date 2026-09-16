@@ -25,6 +25,28 @@ def page_title(content):
     return html.unescape(match[1]) if match else "Прайс"
 
 
+def catalog_labels(content):
+    """Return direct iPhone buttons for models actually present in a physical post."""
+    title = page_title(content)
+    if title.casefold().startswith("iphone") and "/" in title:
+        labels = re.findall(
+            r"<b>—\s*(iPhone\s+\d{1,2}(?:\s+(?:Plus|Pro(?:\s+Max)?))?)\s*—</b>",
+            content,
+            re.I,
+        )
+        result = []
+        for label in labels:
+            canonical = re.sub(r"\s+", " ", label).strip()
+            canonical = re.sub(r"\bplus\b", "Plus", canonical, flags=re.I)
+            canonical = re.sub(r"\bpro\s+max\b", "Pro Max", canonical, flags=re.I)
+            canonical = re.sub(r"\bpro\b", "Pro", canonical, flags=re.I)
+            if canonical not in result:
+                result.append(canonical)
+        if result:
+            return result
+    return [catalog_group(title)]
+
+
 def catalog_group(title):
     """Keep iPhone models directly navigable while grouping the rest compactly."""
     name = title.casefold().strip()
@@ -157,11 +179,13 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             if block_key in seen_blocks or key not in manifest:
                 continue
             seen_blocks.add(block_key)
-            group = catalog_group(page_title(content))
-            if group in seen_groups:
-                continue
+            labels = catalog_labels(content)
             link = message_link(self.target, manifest[key]["id"])
-            if link:
+            if not link:
+                continue
+            for group in labels:
+                if group in seen_groups:
+                    continue
                 seen_groups.add(group)
                 buttons.append({"text": group, "url": link})
         batches = [buttons[start:start + 80] for start in range(0, len(buttons), 80)] or [[]]

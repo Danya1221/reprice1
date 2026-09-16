@@ -13,7 +13,7 @@ class ParserRegressionTests(unittest.TestCase):
 
     def test_short_iphone_tb_and_air_blocks(self):
         items = self.parse("17 Pro 1TB Orange — 100000\n17 Pro Max 2TB Silver — 120000\n17 Air 1TB Blue — 90000").items
-        self.assertEqual([i.block for i in items], ["iPhone 17 Pro", "iPhone 17 Pro Max", "iPhone Air"])
+        self.assertEqual([i.block for i in items], ["iPhone 17 Pro / 17 Pro Max", "iPhone 17 Pro / 17 Pro Max", "iPhone Air"])
         self.assertTrue(all(i.title.startswith("iPhone ") for i in items))
 
     def test_redmi_note_and_oura_do_not_inherit_dji(self):
@@ -43,14 +43,15 @@ class ParserRegressionTests(unittest.TestCase):
 iPhone 12 128 Black — 40000
 iPhone 11 Pro Max 256 Green — 39000""").items
         self.assertEqual({item.block for item in items}, {
-            "iPhone 11 Pro Max", "iPhone 12", "iPhone 13", "iPhone 14",
-            "iPhone 15", "iPhone 15 Plus", "iPhone 15 Pro",
+            "iPhone 11 Pro / 11 Pro Max", "iPhone 12 / 12 Plus",
+            "iPhone 13 / 13 Plus", "iPhone 14 / 14 Plus",
+            "iPhone 15 / 15 Plus", "iPhone 15 Pro / 15 Pro Max",
         })
         pages = render_blocks(items, Settings())
         headers = {page.split("\n", 1)[0] for page in pages.values()}
-        self.assertIn("<b>iPhone 13</b>", headers)
-        self.assertIn("<b>iPhone 15 Plus</b>", headers)
-        self.assertIn("<b>iPhone 15 Pro</b>", headers)
+        self.assertIn("<b>iPhone 13 / 13 Plus</b>", headers)
+        self.assertIn("<b>iPhone 15 / 15 Plus</b>", headers)
+        self.assertIn("<b>iPhone 15 Pro / 15 Pro Max</b>", headers)
 
 
     def test_saved_wrong_block_is_reclassified(self):

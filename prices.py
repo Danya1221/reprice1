@@ -168,8 +168,44 @@ def iphone_model(title):
 
 
 def iphone_publish_block(model):
-    """Publish every iPhone model/variant as its own Telegram block."""
-    return model or ""
+    """Pair base+Plus and Pro+Pro Max from the same generation in one Telegram post."""
+    if not model:
+        return ""
+    match = re.fullmatch(r"iPhone\s+(\d{1,2})", model, re.I)
+    if match:
+        return f"iPhone {match.group(1)} / {match.group(1)} Plus"
+    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s+Plus", model, re.I)
+    if match:
+        return f"iPhone {match.group(1)} / {match.group(1)} Plus"
+    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s+Pro(?:\s+Max)?", model, re.I)
+    if match:
+        return f"iPhone {match.group(1)} Pro / {match.group(1)} Pro Max"
+    return model
+
+
+def iphone_models_for_block(block):
+    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s*/\s*\1\s+Plus", block, re.I)
+    if match:
+        n = match.group(1)
+        return [f"iPhone {n}", f"iPhone {n} Plus"]
+    match = re.fullmatch(r"iPhone\s+(\d{1,2})\s+Pro\s*/\s*\1\s+Pro Max", block, re.I)
+    if match:
+        n = match.group(1)
+        return [f"iPhone {n} Pro", f"iPhone {n} Pro Max"]
+    return [block] if block.startswith("iPhone") else []
+
+
+def iphone_storage_key(item):
+    title = FLAGS.sub("", clean(item.title))
+    model = iphone_model(title)
+    if model:
+        title = re.sub(re.escape(model), "", title, count=1, flags=re.I).strip()
+    match = re.search(r"\b(\d{1,4})\s*(GB|TB)?\b", title, re.I)
+    if not match:
+        return ""
+    value = int(match.group(1))
+    unit = (match.group(2) or "GB").upper()
+    return f"{value}{unit}"
 
 
 def brand_of(text):
@@ -598,41 +634,66 @@ def render_blocks(items, settings, overrides=None, closed=False):
                 value = activation_state(item.title)
                 return "inactive" if value == "unknown" else value
             lines = []
-            statuses = sorted(
-                {condition(item) for item in block_items},
-                key=lambda status: CONDITION_ORDER[status],
-            )
-            for status in statuses:
-                status_items = [item for item in block_items if condition(item) == status]
-                if has_activation:
-                    lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
-                last_sim = None
-                last_samsung_section = None
-                last_model_key = None
-                sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
-                for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), sorter(i))):
-                    if block == "Samsung A + S25":
-                        samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
-                        if samsung_section != last_samsung_section:
-                            if last_samsung_section is not None and lines and lines[-1] != "":
-                                lines.append("")
-                            lines.append("<b>— " + samsung_section + " —</b>")
-                            last_samsung_section = samsung_section
-                    if iphone_model(item.title) and item.sim != last_sim:
-                        label = SIM_LABELS.get(item.sim)
-                        if label:
-                            lines.append("<b>— " + label + " —</b>")
-                        last_sim = item.sim
-                    model_key = model_group_key(item)
-                    if (last_model_key is not None and model_key != last_model_key
-                            and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+            paired_iphone_models = iphone_models_for_block(block)
+            is_paired_iphone = len(paired_iphone_models) == 2
+            model_batches = []
+            if is_paired_iphone:
+                for model_name in paired_iphone_models:
+                    subset = [item for item in block_items if iphone_model(item.title) == model_name]
+                    if subset:
+                        model_batches.append((model_name, subset))
+            else:
+                model_batches = [("", block_items)]
+
+            for model_index, (model_name, model_items) in enumerate(model_batches):
+                if model_index and lines and lines[-1] != "":
+                    lines.append("")
+                if is_paired_iphone:
+                    lines.append("<b>— " + html.escape(model_name) + " —</b>")
+                statuses = sorted(
+                    {condition(item) for item in model_items},
+                    key=lambda status: CONDITION_ORDER[status],
+                )
+                for status_index, status in enumerate(statuses):
+                    status_items = [item for item in model_items if condition(item) == status]
+                    if status_index and lines and lines[-1] != "":
                         lines.append("")
-                    last_model_key = model_key
-                    row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
-                    line = "<code>" + html.escape(row) + "</code>"
-                    if units(line) > 3000:
-                        raise ValueError("Слишком длинное наименование товара")
-                    lines.append(line)
+                    if has_activation:
+                        lines.append("<b>— " + CONDITION_LABELS[status] + " —</b>")
+                    last_sim = None
+                    last_samsung_section = None
+                    last_model_key = None
+                    last_storage = None
+                    sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
+                    for item in sorted(status_items, key=lambda i: (SIM_ORDER.get(i.sim, 99), sorter(i))):
+                        if block == "Samsung A + S25":
+                            samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
+                            if samsung_section != last_samsung_section:
+                                if last_samsung_section is not None and lines and lines[-1] != "":
+                                    lines.append("")
+                                lines.append("<b>— " + samsung_section + " —</b>")
+                                last_samsung_section = samsung_section
+                        if iphone_model(item.title) and item.sim != last_sim:
+                            label = SIM_LABELS.get(item.sim)
+                            if label:
+                                lines.append("<b>— " + label + " —</b>")
+                            last_sim = item.sim
+                        storage = iphone_storage_key(item) if iphone_model(item.title) else ""
+                        if (storage and last_storage is not None and storage != last_storage
+                                and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+                            lines.append("")
+                        if storage:
+                            last_storage = storage
+                        model_key = model_group_key(item)
+                        if (not iphone_model(item.title) and last_model_key is not None and model_key != last_model_key
+                                and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
+                            lines.append("")
+                        last_model_key = model_key
+                        row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
+                        line = "<code>" + html.escape(row) + "</code>"
+                        if units(line) > 3000:
+                            raise ValueError("Слишком длинное наименование товара")
+                        lines.append(line)
             chunks, chunk, size = [], [], units(header) + 50
             for line in lines:
                 if size + units(line) + 1 > 3800 and chunk:

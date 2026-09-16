@@ -195,6 +195,17 @@ Dyson HS08 — 40000"""]).items
             self.assertIn(model, labels)
         self.assertTrue({"Apple", "Samsung", "Смартфоны", "Часы / носимое", "Аудио", "Фото / видео", "Игры", "Другое"}.issubset(set(labels)))
 
+    async def test_paired_iphone_models_have_separate_buttons_to_same_message(self):
+        items = parse_documents(["iPhone 16 128 Black — 60000\niPhone 16 Plus 128 Pink — 70000"]).items
+        await self.publisher.publish(render_blocks(items, Settings()))
+        manifest = self.state.get("published")["messages"]
+        self.assertEqual(len(manifest), 1)
+        message_id = next(iter(manifest.values()))["id"]
+        buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        iphone_buttons = {button["text"]: button["url"] for button in buttons if button["text"].startswith("iPhone 16")}
+        self.assertEqual(set(iphone_buttons), {"iPhone 16", "iPhone 16 Plus"})
+        self.assertEqual(set(iphone_buttons.values()), {f"https://t.me/c/777/{message_id}"})
+
     async def test_closed_catalog_keeps_buttons_and_removes_prices(self):
         await self.publisher.publish(self.pages())
         await self.publisher.hide_existing()
@@ -252,7 +263,7 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.options, {})
         await self.controller.handle_callback(self.callback("order:apply"))
         await self.controller.task
-        self.assertEqual(self.options["block_order"], ["Dyson", "iPhone 17"])
+        self.assertEqual(self.options["block_order"], ["Dyson", "iPhone 17 / 17 Plus"])
         self.service.refresh_format.assert_awaited_once()
 
     async def test_order_screen_includes_blocks_from_all_raw_supplier_caches(self):

@@ -26,7 +26,7 @@ class PriceTests(unittest.TestCase):
 
     def test_pro_max_is_separate_from_base(self):
         items = self.parse("iPhone 17 256 Black — 60000\niPhone 17 Pro Max 256 Black — 90000").items
-        self.assertEqual([i.block for i in items], ["iPhone 17", "iPhone 17 Pro Max"])
+        self.assertEqual([i.block for i in items], ["iPhone 17 / 17 Plus", "iPhone 17 Pro / 17 Pro Max"])
 
     def test_sim_header_and_explicit_variants(self):
         items = self.parse("""iPhone 17
@@ -209,6 +209,28 @@ A57 8/256GB Navy — 31800""").items
 A55 8/256 Blue — 29900""").items
         self.assertEqual([item.block for item in items], ["Товары", "Товары"])
 
+    def test_iphone_base_plus_and_pro_pairs_share_messages(self):
+        items = self.parse("""iPhone 16 128 Black — 60000
+iPhone 16 256 Blue — 65000
+iPhone 16 Plus 128 Pink — 70000
+iPhone 16 Plus 512 White — 82000
+iPhone 16 Pro 256 Black — 90000
+iPhone 16 Pro Max 256 Natural — 100000""").items
+        self.assertEqual({item.block for item in items}, {
+            "iPhone 16 / 16 Plus", "iPhone 16 Pro / 16 Pro Max"
+        })
+        pages = render_blocks(items, Settings())
+        contents = list(pages.values())
+        base = next(page for page in contents if page.startswith("<b>iPhone 16 / 16 Plus</b>"))
+        pro = next(page for page in contents if page.startswith("<b>iPhone 16 Pro / 16 Pro Max</b>"))
+        self.assertIn("— iPhone 16 —", base)
+        self.assertIn("— iPhone 16 Plus —", base)
+        self.assertIn("— iPhone 16 Pro —", pro)
+        self.assertIn("— iPhone 16 Pro Max —", pro)
+        self.assertIn("128 Black", base)
+        self.assertIn("\n\n<code>iPhone 16 256 Blue", base)
+        self.assertIn("\n\n<code>iPhone 16 Plus 512 White", base)
+
     def test_blank_line_is_added_when_model_changes(self):
         items = self.parse("""A17 6/128GB Gray — 15000
 A17 8/256GB Blue — 17800
@@ -228,14 +250,13 @@ S25 Ultra 12/256 Black — 65000""").items
 16 Plus 128GB Black 🇮🇳 — 73700
 16 Plus 128GB Pink 🇮🇳 Актив — 72000
 16 Pro 256GB Natural 🇦🇪 — 83600""").items
-        self.assertEqual({item.block for item in items}, {"iPhone 16", "iPhone 16 Plus", "iPhone 16 Pro"})
+        self.assertEqual({item.block for item in items}, {"iPhone 16 / 16 Plus", "iPhone 16 Pro / 16 Pro Max"})
         pages = render_blocks(items, Settings())
-        iphone16 = next(page for page in pages.values() if page.startswith("<b>iPhone 16</b>"))
-        iphone16plus = next(page for page in pages.values() if page.startswith("<b>iPhone 16 Plus</b>"))
-        self.assertIn("— Не активированное —", iphone16)
-        self.assertIn("— Актив —", iphone16)
-        self.assertIn("— Не активированное —", iphone16plus)
-        self.assertIn("— Актив —", iphone16plus)
+        iphone16 = next(page for page in pages.values() if page.startswith("<b>iPhone 16 / 16 Plus</b>"))
+        self.assertIn("— iPhone 16 —", iphone16)
+        self.assertIn("— iPhone 16 Plus —", iphone16)
+        self.assertGreaterEqual(iphone16.count("— Не активированное —"), 2)
+        self.assertGreaterEqual(iphone16.count("— Актив —"), 2)
 
     def test_preserve_explicit_condition_and_original_packaging(self):
         item = self.parse("iPhone 16 128 Black Актив (Ориг. Упаковка) — 45000").items[0]
@@ -332,7 +353,7 @@ iPhone 17 256 Blue 🇮🇳 — 62000""").items
     def test_closure_and_block_filter(self):
         self.assertTrue(self.parse("В данный момент мы закрыты. Ждём завтра").closed)
         items = self.parse("iPhone 17 256 Black — 60000\nDyson HS08 — 40000").items
-        self.assertEqual([i.block for i in select_items(items, Settings(), {"disabled_blocks": ["Dyson"]})], ["iPhone 17"])
+        self.assertEqual([i.block for i in select_items(items, Settings(), {"disabled_blocks": ["Dyson"]})], ["iPhone 17 / 17 Plus"])
 
     def test_esim_separators_are_not_physical_sim(self):
         for label in ("e-SIM", "e SIM", "eSIM"):
