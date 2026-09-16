@@ -422,6 +422,13 @@ S25 Ultra 12/256 Black — 65000""").items
         self.assertIn("— Актив —</b>\n\n<b>— SIM + eSIM —</b>\n\n<code>", content)
         self.assertNotIn("— Не активированное —", content)
 
+    def test_iphone_11_to_15_visual_order_is_ascending(self):
+        items = self.parse("iPhone 15 Pro Max 256 Black — 84000\niPhone 15 128 Blue — 48800\niPhone 14 512 Blue — 54300\niPhone 13 128 Midnight — 45200\niPhone 12 128 White — 33600\niPhone 11 128 Black — 30000").items
+        content = next(iter(render_blocks(items, Settings()).values()))
+        positions = [content.index(label) for label in ["— iPhone 11 —", "— iPhone 12 —", "— iPhone 13 —", "— iPhone 14 —", "— iPhone 15 —"]]
+        self.assertEqual(positions, sorted(positions))
+        self.assertTrue(content.startswith("<b>iPhone 11 / 12 / 13 / 14 / 15</b>"))
+
     def test_iphone17_visual_order_is_17e_air_pro_pro_max(self):
         items = self.parse("""iPhone 17 Pro Max 256 Silver — 100000
 iPhone Air 256 Gold — 80000

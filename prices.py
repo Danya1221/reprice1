@@ -983,7 +983,7 @@ def pack_physical_sections(sections, limit=3950):
             if bundle not in seen_iphone_bundles:
                 seen_iphone_bundles.add(bundle)
                 bundle_sections = [entry for entry in sections if iphone_bundle_key(entry["title"]) == bundle]
-                if bundle == "iphone17":
+                if bundle in {"iphone11-15", "iphone17"}:
                     bundle_sections.sort(key=lambda entry: iphone_bundle_section_rank(entry["title"]))
                 for batch in split_bundle_sections(bundle_sections, bundle, limit):
                     physical.append((bundle, batch))
