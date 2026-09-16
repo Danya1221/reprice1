@@ -4,7 +4,7 @@ import hashlib
 
 from control_first import FirstMessageController
 from bot_publisher import is_missing_message_error
-from prices import Item, ordered_blocks
+from prices import render_blocks, rendered_page_title, select_items
 
 
 def block_id(block):
@@ -25,20 +25,17 @@ class CatalogController(FirstMessageController):
         return {"inline_keyboard": rows}
 
     def known_blocks(self):
-        blocks = {item.block for item in self.service.cached_items(include_closed=True)}
-        # Read every raw cached supplier row as well. This avoids the order screen
-        # looking like it contains only iPhones when merged/current items are partial.
-        sources = self.service.state.get("sources", {}) or {}
-        for source in sources.values():
-            for raw in source.get("items", []) or []:
-                try:
-                    block = Item.from_dict(raw).block
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if block:
-                    blocks.add(block)
-        blocks.update(block for block in self.service.options().get("block_order", []) if block)
-        return blocks
+        """Current physical Telegram message headings, exactly as they are published."""
+        catalog = self.service.cached_items(include_closed=True)
+        options = self.service.options()
+        selected = select_items(catalog, self.service.settings, options)
+        pages = render_blocks(selected, self.service.settings, options)
+        result = []
+        for content in pages.values():
+            title = rendered_page_title(content)
+            if title and title not in result:
+                result.append(title)
+        return result
 
     async def _edit_or_send(self, chat_id, message_id, text, reply_markup=None):
         """Edit the control message in place; only /order without a callback sends one."""
@@ -63,13 +60,13 @@ class CatalogController(FirstMessageController):
 
     def _draft_order(self, user_id):
         known = self.known_blocks()
-        preferred = self.order_drafts.get(user_id, self.service.options().get("block_order", []))
-        order = ordered_blocks(known, preferred)
+        preferred = self.order_drafts.get(user_id, self.service.options().get("physical_order", []))
+        order = [name for name in preferred if name in known]
+        order.extend(name for name in known if name not in order)
         self.order_drafts[user_id] = order
         return order
 
     async def show_order(self, chat_id, user_id, page=0, message_id=None, notice=""):
-        """Show the whole sortable block list in one compact message."""
         order = self._draft_order(user_id)
         selected = self.order_selected.get(user_id)
         if selected not in order:
@@ -77,71 +74,52 @@ class CatalogController(FirstMessageController):
             self.order_selected.pop(user_id, None)
 
         rows = []
-        block_buttons = []
+        buttons = []
         for index, block in enumerate(order):
-            ident = block_id(block)
-            mark = "✅ " if block == selected else ""
-            block_buttons.append({
-                "text": f"{mark}{index + 1}. {block}",
-                "callback_data": f"order:select:{ident}",
+            buttons.append({
+                "text": ("✅ " if block == selected else "") + f"{index + 1}. {block}",
+                "callback_data": f"order:select:{block_id(block)}",
             })
-        # Two columns keep 30-50 blocks readable without pagination.
-        for start in range(0, len(block_buttons), 2):
-            rows.append(block_buttons[start:start + 2])
-
-        if selected:
-            rows.extend([
-                [{"text": "⏫ В начало", "callback_data": "order:move:first"},
-                 {"text": "⬆️ Выше", "callback_data": "order:move:up"}],
-                [{"text": "⬇️ Ниже", "callback_data": "order:move:down"},
-                 {"text": "⏬ В конец", "callback_data": "order:move:last"}],
-            ])
+        for start in range(0, len(buttons), 2):
+            rows.append(buttons[start:start + 2])
         if order:
-            rows.append([{"text": "✅ Сохранить", "callback_data": "order:apply"},
-                         {"text": "↩️ По умолчанию", "callback_data": "order:reset"}])
+            rows.append([{"text": "↩️ По умолчанию", "callback_data": "order:reset"}])
         rows.append([{"text": "⬅️ Назад", "callback_data": "order:back"}])
 
         if order:
-            selected_text = f"\nВыбран: {selected}" if selected else "\nНажми на блок, который хочешь переместить."
+            if selected:
+                hint = f"\n\nВыбран: {selected}\nОтправь одним сообщением номер позиции от 1 до {len(order)}."
+            else:
+                hint = "\n\nНажми на нужное сообщение, затем просто отправь номер места."
             text = (
-                f"↕️ Порядок блоков · всего {len(order)}\n"
-                "Все блоки здесь сразу — без страниц."
-                + selected_text
+                f"↕️ Порядок сообщений · всего {len(order)}\n"
+                "Здесь только реальные сообщения, которые сейчас публикуются в прайсе."
+                + hint
             )
         else:
-            text = "Сначала запроси прайс — здесь появятся все его блоки."
+            text = "Сначала запроси прайс — здесь появятся текущие сообщения прайса."
         if notice:
             text = notice + "\n\n" + text
         await self._edit_or_send(chat_id, message_id, text, {"inline_keyboard": rows})
 
-    def _move_selected(self, user_id, direction):
+    def _move_selected_to(self, user_id, position):
         order = self._draft_order(user_id)
         selected = self.order_selected.get(user_id)
         if selected not in order:
-            return order
-        index = order.index(selected)
-        if direction == "first":
-            target = 0
-        elif direction == "last":
-            target = len(order) - 1
-        elif direction == "up":
-            target = max(0, index - 1)
-        elif direction == "down":
-            target = min(len(order) - 1, index + 1)
-        else:
-            return order
-        if target != index:
-            order.pop(index)
-            order.insert(target, selected)
-            self.order_drafts[user_id] = order
-        return order
+            raise ValueError("Сначала выбери сообщение из списка")
+        if not 1 <= position <= len(order):
+            raise ValueError(f"Номер должен быть от 1 до {len(order)}")
+        order.remove(selected)
+        order.insert(position - 1, selected)
+        self.order_drafts[user_id] = order
+        return order, selected
 
     async def _refresh_order_result(self, chat_id, user_id, message_id):
         try:
             count, changes = await self.service.refresh_format()
             await self.show_order(
                 chat_id, user_id, message_id=message_id,
-                notice=f"✅ Сохранено. Прайс обновлён: {count} позиций.",
+                notice=f"✅ Порядок применён. Прайс обновлён: {count} позиций.",
             )
         except Exception as exc:
             await self.show_order(
@@ -149,14 +127,14 @@ class CatalogController(FirstMessageController):
                 notice="⚠️ Порядок сохранён, но обновление не завершилось: " + str(exc),
             )
 
-    async def refresh_order(self, chat_id, user_id, message_id):
+    async def refresh_order(self, chat_id, user_id, message_id=None):
         if self.task and not self.task.done():
             await self.show_order(
                 chat_id, user_id, message_id=message_id,
-                notice="⏳ Обновление уже идёт. Порядок сохранён.",
+                notice="⏳ Обновление уже идёт. Новый порядок сохранён.",
             )
             return
-        await self.show_order(chat_id, user_id, message_id=message_id, notice="⏳ Сохранил порядок, обновляю прайс…")
+        await self.show_order(chat_id, user_id, message_id=message_id, notice="⏳ Порядок сохранён, обновляю прайс…")
         self.task = asyncio.create_task(self._refresh_order_result(chat_id, user_id, message_id))
 
     async def _refresh_result(self, chat_id):
@@ -196,30 +174,24 @@ class CatalogController(FirstMessageController):
                 block = next((block for block in order if block_id(block) == ident), None)
                 if block:
                     self.order_selected[user_id] = block
-                await self.show_order(chat_id, user_id, message_id=message_id)
-            elif data.startswith("order:move:"):
-                self._move_selected(user_id, data.rsplit(":", 1)[1])
-                await self.show_order(chat_id, user_id, message_id=message_id)
-            # Backward compatibility for old inline keyboards already sent to Telegram.
-            elif data.startswith(("order:up:", "order:down:")):
-                _, direction, ident, _page = data.split(":")
-                order = self._draft_order(user_id)
-                block = next((block for block in order if block_id(block) == ident), None)
-                if block:
-                    self.order_selected[user_id] = block
-                    self._move_selected(user_id, "up" if direction == "up" else "down")
-                await self.show_order(chat_id, user_id, message_id=message_id)
-            elif data == "order:reset":
-                order = ordered_blocks(self.known_blocks(), [])
-                self.order_drafts[user_id] = order
-                self.order_selected.pop(user_id, None)
-                await self.show_order(chat_id, user_id, message_id=message_id, notice="↩️ Вернул порядок по умолчанию.")
-            elif data == "order:apply":
-                order = self.order_drafts.get(user_id)
-                if order is None:
+                    await self.show_order(
+                        chat_id, user_id, message_id=message_id,
+                        notice=f"Выбран «{block}». Теперь отправь номер его места.",
+                    )
+                else:
                     await self.show_order(chat_id, user_id, message_id=message_id)
-                    return
-                self.service.set_option("block_order", ordered_blocks(self.known_blocks(), order))
+            # Old keyboards may still be visible in Telegram. Open the new screen
+            # instead of applying their obsolete logical-block movement actions.
+            elif data.startswith(("order:move:", "order:up:", "order:down:")) or data == "order:apply":
+                await self.show_order(
+                    chat_id, user_id, message_id=message_id,
+                    notice="Эта старая кнопка больше не используется. Выбери текущее сообщение и отправь его номер.",
+                )
+            elif data == "order:reset":
+                self.order_drafts.pop(user_id, None)
+                self.order_selected.pop(user_id, None)
+                self.service.set_option("physical_order", [])
+                self.service.set_option("block_order", [])
                 await self.refresh_order(chat_id, user_id, message_id)
             elif data == "order:back":
                 await self._edit_or_send(chat_id, message_id, "🛠 Управление прайсом", self.menu())
@@ -239,6 +211,37 @@ class CatalogController(FirstMessageController):
 
     async def handle_message(self, message):
         text = (message.get("text") or "").strip()
+        user_id = message.get("from", {}).get("id")
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        chat_type = chat.get("type", "private")
+
+        # Login codes/passwords and the custom first-message flow always win.
+        if user_id in self.login_flows or user_id in getattr(self, "first_message_waiting", set()):
+            await super().handle_message(message)
+            return
+
+        if user_id in self.order_selected and text and not text.startswith("/"):
+            if not self.allowed(user_id, chat_type):
+                await self.explain_access(chat_id, user_id, chat_type)
+                return
+            if not text.isdigit():
+                await self.send(chat_id, "Отправь только номер позиции, например 3. Для отмены нажми другой пункт меню.")
+                return
+            try:
+                order, selected = self._move_selected_to(user_id, int(text))
+            except ValueError as exc:
+                await self.send(chat_id, str(exc))
+                return
+            self.service.set_option("physical_order", order)
+            # Remove the obsolete parser-level order so old Mac mini/AirPods/S26
+            # names can never affect the new physical-message layout again.
+            self.service.set_option("block_order", [])
+            self.order_selected.pop(user_id, None)
+            await self.send(chat_id, f"✅ {selected} → место №{int(text)}. Обновляю прайс…")
+            await self.refresh_order(chat_id, user_id)
+            return
+
         words = text.split(maxsplit=1)
         command, _, recipient = (words[0].lower() if words else "").partition("@")
         if command != "/order":
@@ -246,22 +249,31 @@ class CatalogController(FirstMessageController):
             return
         if recipient and self.username and recipient != self.username:
             return
-        user_id = message.get("from", {}).get("id")
-        chat = message.get("chat") or {}
-        chat_id = chat.get("id")
-        if not self.allowed(user_id, chat.get("type")):
-            await self.explain_access(chat_id, user_id, chat.get("type"))
+        if not self.allowed(user_id, chat_type):
+            await self.explain_access(chat_id, user_id, chat_type)
             return
         if len(words) == 1:
             await self.show_order(chat_id, user_id)
             return
-        names = {block.casefold(): block for block in self.known_blocks()}
-        requested = [part.strip().casefold() for part in words[1].split(",") if part.strip()]
-        unknown = [name for name in requested if name not in names]
-        if unknown:
-            await self.send(chat_id, "Нет таких блоков: " + ", ".join(unknown) + ". Открой /order, чтобы выбрать из списка.")
+
+        # Optional direct command: /order Apple 2
+        name, separator, raw_position = words[1].rpartition(" ")
+        if not separator or not raw_position.isdigit():
+            await self.send(chat_id, "Открой /order, выбери текущее сообщение и отправь номер его места.")
             return
-        order = ordered_blocks(names.values(), [names[name] for name in requested])
-        self.order_drafts[user_id] = order
-        self.service.set_option("block_order", order)
-        await self.refresh_catalog(chat_id)
+        available = self._draft_order(user_id)
+        block = next((value for value in available if value.casefold() == name.strip().casefold()), None)
+        if not block:
+            await self.send(chat_id, "Нет такого текущего сообщения. Открой /order и выбери его кнопкой.")
+            return
+        self.order_selected[user_id] = block
+        try:
+            order, selected = self._move_selected_to(user_id, int(raw_position))
+        except ValueError as exc:
+            await self.send(chat_id, str(exc))
+            return
+        self.service.set_option("physical_order", order)
+        self.service.set_option("block_order", [])
+        self.order_selected.pop(user_id, None)
+        await self.send(chat_id, f"✅ {selected} → место №{int(raw_position)}. Обновляю прайс…")
+        await self.refresh_order(chat_id, user_id)

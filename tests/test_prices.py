@@ -1,3 +1,4 @@
+import re
 import unittest
 from decimal import Decimal
 
@@ -551,6 +552,19 @@ iPhone 17 256 Blue 🇮🇳 — 62000""").items
         self.assertTrue(self.parse("В данный момент мы закрыты. Ждём завтра").closed)
         items = self.parse("iPhone 17 256 Black — 60000\nDyson HS08 — 40000").items
         self.assertEqual([i.block for i in select_items(items, Settings(), {"disabled_blocks": ["Dyson"]})], ["iPhone 17"])
+
+    def test_physical_order_reorders_final_messages_not_logical_apple_sections(self):
+        items = self.parse(
+            "iPhone 17 256 Black — 60000\n"
+            "Mac Mini (MU9D3) M4/16/256 Silver — 68500\n"
+            "Apple TV 4K 128GB — 15000\n"
+            "Dyson HS08 — 40000"
+        ).items
+        pages = render_blocks(items, Settings(), {"physical_order": ["Dyson", "Apple"]})
+        titles = [re.match(r"<b>(.*?)</b>", page).group(1) for page in pages.values()]
+        self.assertEqual(titles[:2], ["Dyson", "Apple"])
+        self.assertNotIn("Mac mini", titles)
+        self.assertNotIn("Apple TV", titles)
 
     def test_esim_separators_are_not_physical_sim(self):
         for label in ("e-SIM", "e SIM", "eSIM"):

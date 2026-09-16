@@ -1015,28 +1015,45 @@ def pack_physical_sections(sections, limit=3950):
     return physical
 
 
+def rendered_page_title(content):
+    """Visible top heading of one final Telegram price message."""
+    match = re.match(r"<b>\s*(?:—\s*)?(.*?)(?:\s*—)?\s*</b>", content or "")
+    return html.unescape(match.group(1)).strip() if match else "Прайс"
+
+
 def render_blocks(items, settings, overrides=None, closed=False):
-    """Render logical blocks, then pack them into fewer large physical Telegram messages."""
+    """Render logical sections, pack them, then order the real Telegram messages."""
     overrides = overrides or {}
     groups = OrderedDict()
     for item in items:
         groups.setdefault(item.block, []).append(item)
 
-    order = overrides.get("block_order", [])
-    names = ordered_blocks(groups, order)
+    # Old block_order contained parser-level names such as Mac mini, AirPods or
+    # Samsung S26. Those are no longer Telegram messages, so it must not drive
+    # publication order. The operator now orders the final physical headings.
+    names = ordered_blocks(groups, [])
     logical_sections = []
     for block in names:
         lines = render_block_lines(block, groups[block], settings, overrides, closed=closed)
-        # Apple has many logical subcategories. Smaller chunks let the physical
-        # packer fill Apple posts with several sections instead of orphaning a
-        # one-line Mac mini or Apple TV message after a nearly-full MacBook page.
         chunk_limit = 1800 if physical_section_family(block) == "apple" else 3200
         logical_sections.extend(section_chunks(block, lines, limit=chunk_limit))
 
-    pages = OrderedDict()
+    built = []
     for bundle, sections in pack_physical_sections(logical_sections):
         content = build_physical_message(sections, bundle)
         seed = bundle + "|" + "|".join(f'{section["title"]}#{section["part"]}' for section in sections)
         key = hashlib.sha256(seed.encode()).hexdigest()[:16] + ":0"
+        built.append((key, content, rendered_page_title(content)))
+
+    preferred = [clean(value) for value in overrides.get("physical_order", []) if clean(value)]
+    if preferred:
+        rank = {name.casefold(): index for index, name in enumerate(preferred)}
+        built = [entry for _, entry in sorted(
+            enumerate(built),
+            key=lambda pair: (rank.get(pair[1][2].casefold(), len(rank)), pair[0]),
+        )]
+
+    pages = OrderedDict()
+    for key, content, _title in built:
         pages[key] = content
     return pages

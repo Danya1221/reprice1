@@ -43,7 +43,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     def pages(self, order=()):
-        return render_blocks(self.items, Settings(), {"block_order": order})
+        return render_blocks(self.items, Settings(), {"physical_order": order})
 
     def catalog_edit(self):
         return [payload for method, payload in self.publisher.calls
@@ -55,7 +55,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         catalog_id = self.state.get("catalog")["messages"][0]["id"]
         self.assertGreater(catalog_id, max(before))
         self.publisher.calls.clear()
-        pages = self.pages(["Dyson", "AirPods", "iPhone 17"])
+        pages = self.pages(["Dyson", "Apple", "iPhone 17"])
         await self.publisher.publish(pages)
         manifest = self.state.get("published")["messages"]
         self.assertEqual(before, {entry["id"] for entry in manifest.values()})
@@ -319,7 +319,7 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
             self.options[key] = value
         self.service = SimpleNamespace(
             cached_items=lambda **kw: parse_documents(["iPhone 17 256 Black — 60000\nDyson HS08 — 40000"]).items,
-            options=lambda: self.options, state=self.state, set_option=set_option,
+            options=lambda: self.options, state=self.state, set_option=set_option, settings=Settings(),
             refresh_format=AsyncMock(return_value=(2, 2)))
         self.controller = CatalogController("TOKEN", self.service, [42])
         self.controller.send = AsyncMock()
@@ -334,26 +334,37 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
         return {"id": "callback", "data": data, "from": {"id": user},
                 "message": {"chat": {"id": user, "type": kind}}}
 
-    async def test_order_changes_only_after_apply(self):
+    async def test_order_moves_selected_physical_message_by_typed_number(self):
         await self.controller.handle_callback(self.callback("order:show:0"))
-        await self.controller.handle_callback(self.callback(f"order:up:{block_id('Dyson')}:0"))
-        self.assertEqual(self.options, {})
-        await self.controller.handle_callback(self.callback("order:apply"))
+        order = self.controller._draft_order(42)
+        self.assertIn("Dyson", order)
+        dyson = next(name for name in order if name == "Dyson")
+        await self.controller.handle_callback(self.callback(f"order:select:{block_id(dyson)}"))
+        await self.controller.handle_message({"text": "1", "from": {"id": 42}, "chat": {"id": 42, "type": "private"}})
         await self.controller.task
-        self.assertEqual(self.options["block_order"], ["Dyson", "iPhone 17"])
+        self.assertEqual(self.options["physical_order"][0], "Dyson")
+        self.assertEqual(self.options["block_order"], [])
         self.service.refresh_format.assert_awaited_once()
 
-    async def test_order_screen_includes_blocks_from_all_raw_supplier_caches(self):
-        raw = parse_documents(["Samsung Galaxy S26 12/256 Black — 70000\nVivo V70 12/256 Grey — 46300\nOura Ring 4 Silver — 35000"]).items
-        self.state.set("sources", {"extra": {"items": [item.to_dict() for item in raw]}})
+    async def test_order_screen_uses_current_physical_message_titles(self):
+        items = parse_documents([
+            "iPhone 17 256 Black — 60000\n"
+            "Mac Mini (MU9D3) M4/16/256 Silver — 68500\n"
+            "Apple TV 4K 128GB — 15000\n"
+            "Dyson HS08 — 40000"
+        ]).items
+        self.service.cached_items = lambda **kw: items
         await self.controller.show_order(42, 42, 0)
         text = self.controller.send.await_args.args[1]
         keyboard = self.controller.send.await_args.args[2]["inline_keyboard"]
         labels = [button["text"] for row in keyboard for button in row]
-        self.assertIn("Samsung", " ".join(labels))
-        self.assertIn("Vivo", " ".join(labels))
-        self.assertIn("Oura Ring", " ".join(labels))
-        self.assertIn("всего 5", text)
+        joined = " ".join(labels)
+        self.assertIn("iPhone", joined)
+        self.assertIn("Apple", joined)
+        self.assertIn("Dyson", joined)
+        self.assertNotIn("Mac mini", joined)
+        self.assertNotIn("Apple TV", joined)
+        self.assertIn("реальные сообщения", text)
 
     async def test_unknown_user_and_group_cannot_change_order_or_selection(self):
         for callback in [self.callback("catalog:all", user=99), self.callback("order:apply", kind="supergroup")]:
