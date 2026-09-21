@@ -81,6 +81,17 @@ Ray-Ban Meta Skyler S53 Brown — 34000""").items
         self.assertIn(" M ", items[-2].title)
         self.assertIn(" L ", items[-1].title)
 
+    def test_sparse_action_camera_brands_share_one_physical_post(self):
+        items = self.parse("""DJI Osmo Action 5 Pro — 41000
+Insta360 X5 — 52000
+GoPro Hero 13 Black — 47000""").items
+        pages = render_blocks(items, Settings())
+        action_pages = [text for text in pages.values() if text.startswith("<b>Экшн-камеры</b>")]
+        self.assertEqual(len(action_pages), 1)
+        text = action_pages[0]
+        self.assertIn("<b>— DJI / Insta360 —</b>", text)
+        self.assertIn("<b>— GoPro —</b>", text)
+
     def test_note_14s_and_rode_do_not_inherit_dji_section(self):
         items = self.parse("""DJI / Insta360
 Note 14S 8/256 Aurora Purple 🇪🇺 — 17800

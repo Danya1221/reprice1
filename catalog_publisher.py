@@ -69,6 +69,18 @@ def apple_catalog_label(content):
     return ""
 
 
+def action_camera_catalog_labels(content):
+    """Brand buttons for the shared action-camera Telegram post."""
+    if page_title(content).casefold().strip() not in {"экшн-камеры", "экшн камеры"}:
+        return []
+    labels = []
+    for value in re.findall(r"<b>—\s*(.*?)\s*—</b>", content, re.I):
+        label = re.sub(r"\s+", " ", html.unescape(value)).strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
 def catalog_labels(content):
     """Base label of one physical Telegram post."""
     title = re.sub(r"\s+", " ", page_title(content)).strip() or "Прайс"
@@ -243,6 +255,17 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             if not link:
                 continue
 
+            action_labels = action_camera_catalog_labels(content)
+            if action_labels:
+                for label in action_labels:
+                    count = label_counts.get(label, 0) + 1
+                    label_counts[label] = count
+                    shown = label if count == 1 else f"{label} · {count}"
+                    if len(shown) > 64:
+                        shown = shown[:61].rstrip() + "…"
+                    buttons.append({"text": shown, "url": link})
+                continue
+
             is_apple = page_title(content).casefold().strip() == "apple"
             if is_apple and apple_total >= 2:
                 apple_index += 1
@@ -333,7 +356,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 9
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 10
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -341,7 +364,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 9)
+                self.state.set("catalog_layout_version", 10)
             return changes
 
     async def set_first_message(self, text):

@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from catalog_publisher import CatalogPublisher, catalog_labels, page_title
+from catalog_publisher import CatalogPublisher, action_camera_catalog_labels, catalog_labels, page_title
 from config import Settings
 from control_catalog import CatalogController, block_id
 from prices import parse_documents, physical_message_labels, render_blocks
@@ -256,7 +256,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
-        self.assertEqual(self.state.get("catalog_layout_version"), 9)
+        self.assertEqual(self.state.get("catalog_layout_version"), 10)
         edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
         self.assertTrue(edits)
         buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
@@ -326,6 +326,26 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             buttons[1]["url"],
             f"https://t.me/c/777/{manifest['apple-ipad-mac:0']['id']}",
         )
+
+    async def test_action_camera_post_has_brand_buttons_to_same_message(self):
+        items = parse_documents(["""DJI Osmo Action 5 Pro — 41000
+Insta360 X5 — 52000
+GoPro Hero 13 Black — 47000"""]).items
+        pages = render_blocks(items, Settings())
+        self.assertEqual(len(pages), 1)
+        content = next(iter(pages.values()))
+        self.assertEqual(action_camera_catalog_labels(content), ["DJI / Insta360", "GoPro"])
+
+        await self.publisher.publish(pages)
+        manifest = self.state.get("published")["messages"]
+        message_id = next(iter(manifest.values()))["id"]
+        buttons = [
+            button
+            for row in self.catalog_edit()["reply_markup"]["inline_keyboard"]
+            for button in row
+        ]
+        self.assertEqual([button["text"] for button in buttons], ["DJI / Insta360", "GoPro"])
+        self.assertTrue(all(button["url"] == f"https://t.me/c/777/{message_id}" for button in buttons))
 
     async def test_samsung_series_share_one_compact_catalog_button(self):
         items = parse_documents(["""Samsung
