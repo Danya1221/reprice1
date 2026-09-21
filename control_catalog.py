@@ -4,7 +4,7 @@ import hashlib
 
 from control_first import FirstMessageController
 from bot_publisher import is_missing_message_error
-from prices import render_blocks, rendered_page_title, select_items
+from prices import physical_order_label, render_blocks, rendered_page_title, select_items
 
 
 def block_id(block):
@@ -25,14 +25,14 @@ class CatalogController(FirstMessageController):
         return {"inline_keyboard": rows}
 
     def known_blocks(self):
-        """Current physical Telegram message headings, exactly as they are published."""
+        """Current physical messages using stable names for persistent ordering."""
         catalog = self.service.cached_items(include_closed=True)
         options = self.service.options()
         selected = select_items(catalog, self.service.settings, options)
         pages = render_blocks(selected, self.service.settings, options)
         result = []
         for content in pages.values():
-            title = rendered_page_title(content)
+            title = physical_order_label(rendered_page_title(content))
             if title and title not in result:
                 result.append(title)
         return result
@@ -60,11 +60,46 @@ class CatalogController(FirstMessageController):
 
     def _draft_order(self, user_id):
         known = self.known_blocks()
-        preferred = self.order_drafts.get(user_id, self.service.options().get("physical_order", []))
+        raw_preferred = self.order_drafts.get(
+            user_id, self.service.options().get("physical_order", [])
+        )
+        preferred = []
+        for value in raw_preferred:
+            name = physical_order_label(value)
+            if name and name not in preferred:
+                preferred.append(name)
         order = [name for name in preferred if name in known]
+        # Newly discovered messages never disturb the saved order: append them.
         order.extend(name for name in known if name not in order)
         self.order_drafts[user_id] = order
         return order
+
+    def _persistent_order(self, active_order):
+        """Keep temporarily missing blocks in their old slots.
+
+        Supplier stock can make a whole message disappear for one refresh. Do not
+        forget its saved position; fill only the active slots with the new order
+        and append brand-new blocks at the end.
+        """
+        previous = []
+        for value in self.service.options().get("physical_order", []):
+            name = physical_order_label(value)
+            if name and name not in previous:
+                previous.append(name)
+
+        active_set = set(active_order)
+        active_iter = iter(active_order)
+        merged = []
+        for name in previous:
+            if name in active_set:
+                merged.append(next(active_iter))
+            else:
+                merged.append(name)
+        merged.extend(active_iter)
+        for name in active_order:
+            if name not in merged:
+                merged.append(name)
+        return merged
 
     async def show_order(self, chat_id, user_id, page=0, message_id=None, notice=""):
         order = self._draft_order(user_id)
@@ -233,7 +268,7 @@ class CatalogController(FirstMessageController):
             except ValueError as exc:
                 await self.send(chat_id, str(exc))
                 return
-            self.service.set_option("physical_order", order)
+            self.service.set_option("physical_order", self._persistent_order(order))
             # Remove the obsolete parser-level order so old Mac mini/AirPods/S26
             # names can never affect the new physical-message layout again.
             self.service.set_option("block_order", [])
