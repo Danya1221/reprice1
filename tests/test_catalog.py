@@ -239,12 +239,43 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
-        self.assertEqual(self.state.get("catalog_layout_version"), 8)
+        self.assertEqual(self.state.get("catalog_layout_version"), 9)
         edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
         self.assertTrue(edits)
         buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], ["Apple"])
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
+    async def test_two_physical_apple_posts_get_fixed_customer_labels(self):
+        pages = {
+            "apple-one:0": (
+                "<b>Apple</b>\n\n"
+                "<b>— AirPods —</b>\n\n<code>AirPods Pro 3 — 20000</code>"
+            ),
+            "apple-two:0": (
+                "<b>Apple</b>\n\n"
+                "<b>— iPad —</b>\n\n<code>iPad Air 11 — 60000</code>"
+            ),
+        }
+        await self.publisher.publish(pages)
+        manifest = self.state.get("published")["messages"]
+        buttons = [
+            button
+            for row in self.catalog_edit()["reply_markup"]["inline_keyboard"]
+            for button in row
+        ]
+        self.assertEqual(
+            [button["text"] for button in buttons],
+            ["AirPods / Apple Watch", "iPad / MacBook"],
+        )
+        self.assertEqual(
+            buttons[0]["url"],
+            f"https://t.me/c/777/{manifest['apple-one:0']['id']}",
+        )
+        self.assertEqual(
+            buttons[1]["url"],
+            f"https://t.me/c/777/{manifest['apple-two:0']['id']}",
+        )
 
     async def test_split_apple_buttons_describe_their_real_contents(self):
         pages = {
