@@ -253,6 +253,47 @@ iPhone Air 256 Gold — 80000""").items
         self.assertTrue(any(page.startswith("<b>iPhone 16 / 16 Plus / 16 Pro / 16 Pro Max</b>") for page in pages))
         self.assertTrue(any(page.startswith("<b>iPhone 17 Air / 17 / 17 Pro / 17 Pro Max</b>") for page in pages))
 
+    def test_future_iphone_generation_gets_own_message_automatically(self):
+        items = self.parse("""iPhone 18 256 Blue — 150000
+iPhone 18 Pro 256 Orange — 180000
+iPhone 18 Pro Max 512 Silver — 220000""").items
+        self.assertEqual(
+            {item.block for item in items},
+            {"iPhone 18", "iPhone 18 Pro", "iPhone 18 Pro Max"},
+        )
+        pages = list(render_blocks(items, Settings()).values())
+        self.assertEqual(len(pages), 1)
+        content = pages[0]
+        self.assertTrue(content.startswith("<b>iPhone 18 / 18 Pro / 18 Pro Max</b>"), content)
+        for label in ("iPhone 18", "iPhone 18 Pro", "iPhone 18 Pro Max"):
+            self.assertIn("— " + label + " —", content)
+
+    def test_even_later_iphone_generation_needs_no_code_change(self):
+        items = self.parse("iPhone 19 256 Black — 160000\niPhone 19 Pro 512 Silver — 210000").items
+        content = next(iter(render_blocks(items, Settings()).values()))
+        self.assertTrue(content.startswith("<b>iPhone 19 / 19 Pro</b>"), content)
+
+    def test_saved_iphone_order_survives_visible_header_change(self):
+        first_items = self.parse(
+            "Dyson HS08 — 40000\n"
+            "iPhone 17 256 Black — 70000\n"
+            "iPhone 17 Pro Max 256 Silver — 100000"
+        ).items
+        old_heading = next(
+            page for page in render_blocks(first_items, Settings()).values()
+            if page.startswith("<b>iPhone")
+        ).split("</b>", 1)[0].replace("<b>", "")
+        second_items = self.parse(
+            "Dyson HS08 — 40000\n"
+            "iPhone 17 256 Black — 70000\n"
+            "iPhone 17 Pro 256 Blue — 90000"
+        ).items
+        pages = list(render_blocks(
+            second_items, Settings(), {"physical_order": ["Dyson", old_heading]}
+        ).values())
+        self.assertTrue(pages[0].startswith("<b>Dyson</b>"))
+        self.assertTrue(pages[1].startswith("<b>iPhone 17 / 17 Pro</b>"))
+
     def test_small_brand_blocks_are_packed_with_visible_section_gap(self):
         items = self.parse("""Xiaomi 15 12/256 White — 48000
 Vivo V70 12/256 Grey — 46000
