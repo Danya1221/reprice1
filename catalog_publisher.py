@@ -220,7 +220,17 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         buttons = []
         contents = list(pages.values())
         labels = physical_message_labels(contents)
+
+        # The current Apple stock is physically split into two stable posts:
+        # 1) headphones + watches, 2) iPads + Macs. Name those posts by purpose
+        # instead of exposing meaningless "Apple" / "Apple · 2" buttons.
+        apple_total = sum(
+            1 for content in contents
+            if page_title(content).casefold().strip() == "apple"
+        )
+        apple_index = 0
         label_counts = {}
+
         for (key, content), title in zip(pages.items(), labels):
             if key not in manifest:
                 continue
@@ -228,11 +238,22 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             if not link:
                 continue
 
-            label = apple_catalog_label(content) or title
-            count = label_counts.get(label, 0) + 1
-            label_counts[label] = count
-            if count > 1:
-                label = f"{label} · {count}"
+            is_apple = page_title(content).casefold().strip() == "apple"
+            if is_apple and apple_total >= 2:
+                apple_index += 1
+                if apple_index == 1:
+                    label = "AirPods / Apple Watch"
+                elif apple_index == 2:
+                    label = "iPad / MacBook"
+                else:
+                    label = f"Apple · {apple_index}"
+            else:
+                label = apple_catalog_label(content) or title
+                count = label_counts.get(label, 0) + 1
+                label_counts[label] = count
+                if count > 1:
+                    label = f"{label} · {count}"
+
             if len(label) > 64:
                 label = label[:61].rstrip() + "…"
             buttons.append({"text": label, "url": link})
@@ -307,7 +328,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 8
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 9
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -315,7 +336,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 8)
+                self.state.set("catalog_layout_version", 9)
             return changes
 
     async def set_first_message(self, text):
