@@ -4,7 +4,7 @@ import hashlib
 
 from control_first import FirstMessageController
 from bot_publisher import is_missing_message_error
-from prices import physical_order_label, render_blocks, rendered_page_title, select_items
+from prices import physical_message_labels, physical_order_label, render_blocks, select_items
 
 
 def block_id(block):
@@ -25,17 +25,12 @@ class CatalogController(FirstMessageController):
         return {"inline_keyboard": rows}
 
     def known_blocks(self):
-        """Current physical messages using stable names for persistent ordering."""
+        """Every real physical Telegram message, including split overflow posts."""
         catalog = self.service.cached_items(include_closed=True)
         options = self.service.options()
         selected = select_items(catalog, self.service.settings, options)
         pages = render_blocks(selected, self.service.settings, options)
-        result = []
-        for content in pages.values():
-            title = physical_order_label(rendered_page_title(content))
-            if title and title not in result:
-                result.append(title)
-        return result
+        return physical_message_labels(list(pages.values()))
 
     async def _edit_or_send(self, chat_id, message_id, text, reply_markup=None):
         """Edit the control message in place; only /order without a callback sends one."""
@@ -307,7 +302,7 @@ class CatalogController(FirstMessageController):
         except ValueError as exc:
             await self.send(chat_id, str(exc))
             return
-        self.service.set_option("physical_order", order)
+        self.service.set_option("physical_order", self._persistent_order(order))
         self.service.set_option("block_order", [])
         self.order_selected.pop(user_id, None)
         await self.send(chat_id, f"✅ {selected} → место №{int(raw_position)}. Обновляю прайс…")
