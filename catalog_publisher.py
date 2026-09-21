@@ -30,11 +30,12 @@ def iphone_catalog_group(title):
     name = re.sub(r"\s+", " ", title).casefold().strip()
     if not name.startswith("iphone"):
         return ""
-    if re.search(r"\b(?:11|12|13|14|15)\b", name):
+    numbers = [int(value) for value in re.findall(r"\b(\d{1,2})\b", name)]
+    if numbers and all(11 <= value <= 15 for value in numbers):
         return "iPhone 11–15"
-    if re.search(r"\b16(?:e)?\b", name):
-        return "iPhone 16"
-    if "air" in name or re.search(r"\b17(?:e)?\b", name):
+    if numbers:
+        return f"iPhone {numbers[0]}"
+    if "air" in name:
         return "iPhone 17"
     return "iPhone"
 
