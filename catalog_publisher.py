@@ -41,6 +41,34 @@ def iphone_catalog_group(title):
     return "iPhone"
 
 
+def apple_catalog_label(content):
+    """Human-readable label for split Apple physical posts."""
+    if page_title(content).casefold().strip() != "apple":
+        return ""
+
+    sections = [
+        re.sub(r"\s+", " ", html.unescape(value)).strip()
+        for value in re.findall(r"<b>—\s*(.*?)\s*—</b>", content, re.I)
+    ]
+    lowered = [value.casefold() for value in sections]
+
+    has_airpods = any(value.startswith("airpods") for value in lowered)
+    has_watch = any(value.startswith("apple watch") for value in lowered)
+    if has_airpods and has_watch:
+        return "AirPods / Apple Watch"
+
+    has_ipad = any(value.startswith("ipad") for value in lowered)
+    has_mac = any(
+        value.startswith(("macbook", "mac mini", "mac studio", "imac"))
+        or value == "macbook / imac"
+        for value in lowered
+    )
+    if has_ipad and has_mac:
+        return "iPad / MacBook"
+
+    return ""
+
+
 def catalog_labels(content):
     """Base label of one physical Telegram post."""
     title = re.sub(r"\s+", " ", page_title(content)).strip() or "Прайс"
@@ -190,14 +218,23 @@ class CatalogPublisher(PinnedBotAPIPublisher):
     async def _update_catalog(self, pages, records):
         manifest = self.state.get("published", {}).get("messages", {})
         buttons = []
-        labels = physical_message_labels(list(pages.values()))
+        contents = list(pages.values())
+        labels = physical_message_labels(contents)
+        label_counts = {}
         for (key, content), title in zip(pages.items(), labels):
             if key not in manifest:
                 continue
             link = message_link(self.target, manifest[key]["id"])
             if not link:
                 continue
-            label = title if len(title) <= 64 else title[:61].rstrip() + "…"
+
+            label = apple_catalog_label(content) or title
+            count = label_counts.get(label, 0) + 1
+            label_counts[label] = count
+            if count > 1:
+                label = f"{label} · {count}"
+            if len(label) > 64:
+                label = label[:61].rstrip() + "…"
             buttons.append({"text": label, "url": link})
 
         # Preserve the exact physical post order. The catalog is navigation to
@@ -270,7 +307,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 7
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 8
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -278,7 +315,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 7)
+                self.state.set("catalog_layout_version", 8)
             return changes
 
     async def set_first_message(self, text):
