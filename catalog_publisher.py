@@ -41,10 +41,16 @@ def iphone_catalog_group(title):
 
 
 def catalog_labels(content):
-    """Use exactly the visible physical Telegram post heading for navigation."""
+    """Stable compact navigation label for each physical Telegram post."""
     title = re.sub(r"\s+", " ", page_title(content)).strip() or "Прайс"
-    # Telegram inline button text is bounded; keep the beginning intact because
-    # it is the same text the customer sees at the top of the price message.
+
+    # iPhone buttons are generation names, not the full changing message header.
+    # Thus a post containing 18 / 18 Pro / 18 Pro Max always has one button
+    # named "iPhone 18", and future generations appear automatically.
+    iphone = iphone_catalog_group(title)
+    if iphone:
+        return [iphone]
+
     if len(title) > 64:
         title = title[:61].rstrip() + "…"
     return [title]
