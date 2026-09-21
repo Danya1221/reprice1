@@ -79,6 +79,31 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         labels = [button["text"] for button in buttons]
         self.assertEqual(labels, ["iPhone 18"])
 
+    async def test_split_iphone17_pro_max_keeps_every_catalog_link(self):
+        source = "\n".join(
+            f"iPhone 17 Pro Max 256 Color{i:03d} — {100000 + i}"
+            for i in range(140)
+        )
+        items = parse_documents([source]).items
+        pages = render_blocks(items, Settings())
+        promax_pages = [
+            content for content in pages.values()
+            if "— iPhone 17 Pro Max —" in content
+        ]
+        self.assertGreaterEqual(len(promax_pages), 2)
+
+        await self.publisher.publish(pages)
+        buttons = [
+            button
+            for row in self.catalog_edit()["reply_markup"]["inline_keyboard"]
+            for button in row
+            if button["text"].startswith("iPhone 17 Pro Max")
+        ]
+        self.assertEqual(len(buttons), len(promax_pages))
+        self.assertEqual(buttons[0]["text"], "iPhone 17 Pro Max")
+        self.assertEqual(buttons[1]["text"], "iPhone 17 Pro Max · 2")
+        self.assertEqual(len({button["url"] for button in buttons}), len(buttons))
+
     async def test_catalog_buttons_change_in_same_publish_when_page_family_changes(self):
         first = {"old:0": "<b>Honor</b>\n\n<code>Honor 400 — 30000</code>"}
         await self.publisher.publish(first)
