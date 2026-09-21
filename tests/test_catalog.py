@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from catalog_publisher import CatalogPublisher, page_title
+from catalog_publisher import CatalogPublisher, catalog_labels, page_title
 from config import Settings
 from control_catalog import CatalogController, block_id
 from prices import parse_documents, render_blocks
@@ -14,11 +14,9 @@ from test_first_message import FakePinnedPublisher
 def expected_catalog_titles(pages):
     result = []
     for content in pages.values():
-        title = page_title(content)
-        if len(title) > 64:
-            title = title[:61].rstrip() + "…"
-        if title not in result:
-            result.append(title)
+        for title in catalog_labels(content):
+            if title not in result:
+                result.append(title)
     return result
 
 
@@ -79,7 +77,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         await self.publisher.publish(pages)
         buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
         labels = [button["text"] for button in buttons]
-        self.assertEqual(labels, ["iPhone 18 / 18 Pro"])
+        self.assertEqual(labels, ["iPhone 18"])
 
     async def test_catalog_buttons_change_in_same_publish_when_page_family_changes(self):
         first = {"old:0": "<b>Honor</b>\n\n<code>Honor 400 — 30000</code>"}
