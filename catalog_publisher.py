@@ -41,14 +41,33 @@ def iphone_catalog_group(title):
 
 
 def catalog_labels(content):
-    """Stable compact navigation label for each physical Telegram post."""
-    title = re.sub(r"\s+", " ", page_title(content)).strip() or "Прайс"
+    """Compact label for one physical Telegram post.
 
-    # iPhone buttons are generation names, not the full changing message header.
-    # Thus a post containing 18 / 18 Pro / 18 Pro Max always has one button
-    # named "iPhone 18", and future generations appear automatically.
+    A whole iPhone generation keeps the short generation button. If Telegram
+    forced the generation into several physical posts, use the model actually
+    present in this post so every split page remains reachable from the catalog.
+    """
+    title = re.sub(r"\s+", " ", page_title(content)).strip() or "Прайс"
     iphone = iphone_catalog_group(title)
     if iphone:
+        section_models = []
+        for raw in re.findall(r"<b>—\s*(iPhone\s+.*?)\s*—</b>", content, re.I):
+            model = iphone_model_label(html.unescape(raw))
+            if model and model not in section_models:
+                section_models.append(model)
+
+        # One physical post containing several models is the normal generation
+        # page and should stay compact: "iPhone 17", "iPhone 18", etc.
+        if len(section_models) > 1:
+            return [iphone]
+
+        # A split/overflow post normally contains one model only. Name its
+        # button after that model, e.g. "iPhone 17 Pro Max".
+        if len(section_models) == 1:
+            model = section_models[0]
+            if model != iphone:
+                return [model]
+
         return [iphone]
 
     if len(title) > 64:
@@ -196,7 +215,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
     async def _update_catalog(self, pages, records):
         manifest = self.state.get("published", {}).get("messages", {})
         buttons = []
-        seen_titles = set()
+        title_counts = {}
         for key, content in pages.items():
             if key not in manifest:
                 continue
@@ -204,10 +223,10 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             if not link:
                 continue
             for title in catalog_labels(content):
-                if title in seen_titles:
-                    continue
-                seen_titles.add(title)
-                buttons.append({"text": title, "url": link})
+                count = title_counts.get(title, 0) + 1
+                title_counts[title] = count
+                label = title if count == 1 else f"{title} · {count}"
+                buttons.append({"text": label, "url": link})
 
         # Preserve the exact physical post order. The catalog is navigation to
         # those posts, so it must not reorder or rename them independently.
@@ -279,7 +298,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 5
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 6
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -287,7 +306,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 5)
+                self.state.set("catalog_layout_version", 6)
             return changes
 
     async def set_first_message(self, text):
