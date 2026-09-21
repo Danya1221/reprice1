@@ -1034,22 +1034,51 @@ def pack_physical_sections(sections, limit=3950):
 
 
 def physical_order_label(title):
-    """Stable operator-facing name for a physical message.
+    """Stable name of one *physical* Telegram price message.
 
-    The visible iPhone heading changes as models appear/disappear, but its order
-    key must stay the same. Other stable family headings are kept unchanged.
+    A multi-model iPhone heading is represented by its generation (iPhone 17,
+    iPhone 18, ...). A split overflow message containing one model keeps that
+    exact model name (for example iPhone 17 Pro Max), so it can be moved and
+    linked independently.
     """
     name = clean(title)
+    if not name:
+        return ""
+
+    # Preserve occurrence suffixes used when one model itself spans 2+ posts.
+    suffix = ""
+    occurrence = re.fullmatch(r"(.+?)\s+·\s+(\d+)", name)
+    if occurrence:
+        name = clean(occurrence.group(1))
+        suffix = " · " + occurrence.group(2)
+
     lower = name.casefold()
     if lower.startswith("iphone"):
         numbers = [int(value) for value in re.findall(r"\b(\d{1,2})\b", name)]
-        if numbers:
-            if any(11 <= value <= 15 for value in numbers) and all(11 <= value <= 15 for value in numbers):
-                return "iPhone 11–15"
-            return f"iPhone {numbers[0]}"
-        if "air" in lower:
-            return "iPhone 17"
-    return name
+
+        # Only headings with several model sections are collapsed to the
+        # generation button/order key. Single-model overflow pages remain exact.
+        if "/" in name and numbers:
+            if all(11 <= value <= 15 for value in numbers):
+                name = "iPhone 11–15"
+            else:
+                name = f"iPhone {numbers[0]}"
+        elif lower == "iphone air":
+            name = "iPhone 17"
+
+    return name + suffix
+
+
+def physical_message_labels(contents):
+    """Unique labels for physical posts, in their current physical order."""
+    counts = {}
+    labels = []
+    for content in contents:
+        base = physical_order_label(rendered_page_title(content))
+        count = counts.get(base, 0) + 1
+        counts[base] = count
+        labels.append(base if count == 1 else f"{base} · {count}")
+    return labels
 
 
 def rendered_page_title(content):
@@ -1082,6 +1111,14 @@ def render_blocks(items, settings, overrides=None, closed=False):
         key = hashlib.sha256(seed.encode()).hexdigest()[:16] + ":0"
         built.append((key, content, rendered_page_title(content)))
 
+    # Assign a unique stable label to every physical post *before* custom
+    # ordering. This keeps duplicate overflow pages addressable as "· 2", "· 3".
+    labels = physical_message_labels([entry[1] for entry in built])
+    built = [
+        (key, content, title, label)
+        for (key, content, title), label in zip(built, labels)
+    ]
+
     preferred = [
         physical_order_label(value)
         for value in overrides.get("physical_order", [])
@@ -1092,12 +1129,12 @@ def render_blocks(items, settings, overrides=None, closed=False):
         built = [entry for _, entry in sorted(
             enumerate(built),
             key=lambda pair: (
-                rank.get(physical_order_label(pair[1][2]).casefold(), len(rank)),
+                rank.get(pair[1][3].casefold(), len(rank)),
                 pair[0],
             ),
         )]
 
     pages = OrderedDict()
-    for key, content, _title in built:
+    for key, content, _title, _label in built:
         pages[key] = content
     return pages
