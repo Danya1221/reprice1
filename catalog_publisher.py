@@ -6,6 +6,7 @@ import re
 
 from bot_publisher import digest, is_missing_message_error
 from first_message_publisher import PinnedBotAPIPublisher
+from prices import physical_message_labels, physical_order_label
 
 
 CATALOG_TEXT = "🗂 КАТАЛОГ — выбери модель или категорию\nНажми на кнопку — перейдёшь к нужной части прайса.\nСкопируй позицию вместе с ценой и пришли её менеджеру."
@@ -41,38 +42,12 @@ def iphone_catalog_group(title):
 
 
 def catalog_labels(content):
-    """Compact label for one physical Telegram post.
-
-    A whole iPhone generation keeps the short generation button. If Telegram
-    forced the generation into several physical posts, use the model actually
-    present in this post so every split page remains reachable from the catalog.
-    """
+    """Base label of one physical Telegram post."""
     title = re.sub(r"\s+", " ", page_title(content)).strip() or "Прайс"
-    iphone = iphone_catalog_group(title)
-    if iphone:
-        section_models = []
-        for raw in re.findall(r"<b>—\s*(iPhone\s+.*?)\s*—</b>", content, re.I):
-            model = iphone_model_label(html.unescape(raw))
-            if model and model not in section_models:
-                section_models.append(model)
-
-        # One physical post containing several models is the normal generation
-        # page and should stay compact: "iPhone 17", "iPhone 18", etc.
-        if len(section_models) > 1:
-            return [iphone]
-
-        # A split/overflow post normally contains one model only. Name its
-        # button after that model, e.g. "iPhone 17 Pro Max".
-        if len(section_models) == 1:
-            model = section_models[0]
-            if model != iphone:
-                return [model]
-
-        return [iphone]
-
-    if len(title) > 64:
-        title = title[:61].rstrip() + "…"
-    return [title]
+    label = physical_order_label(title)
+    if len(label) > 64:
+        label = label[:61].rstrip() + "…"
+    return [label]
 
 
 def iphone_model_label(raw):
@@ -215,18 +190,15 @@ class CatalogPublisher(PinnedBotAPIPublisher):
     async def _update_catalog(self, pages, records):
         manifest = self.state.get("published", {}).get("messages", {})
         buttons = []
-        title_counts = {}
-        for key, content in pages.items():
+        labels = physical_message_labels(list(pages.values()))
+        for (key, content), title in zip(pages.items(), labels):
             if key not in manifest:
                 continue
             link = message_link(self.target, manifest[key]["id"])
             if not link:
                 continue
-            for title in catalog_labels(content):
-                count = title_counts.get(title, 0) + 1
-                title_counts[title] = count
-                label = title if count == 1 else f"{title} · {count}"
-                buttons.append({"text": label, "url": link})
+            label = title if len(title) <= 64 else title[:61].rstrip() + "…"
+            buttons.append({"text": label, "url": link})
 
         # Preserve the exact physical post order. The catalog is navigation to
         # those posts, so it must not reorder or rename them independently.
@@ -298,7 +270,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 6
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 7
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -306,7 +278,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 6)
+                self.state.set("catalog_layout_version", 7)
             return changes
 
     async def set_first_message(self, text):
