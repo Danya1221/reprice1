@@ -265,7 +265,7 @@ Dyson HS08 — 40000"""]).items
         self.assertEqual(len(manifest), 1)
         message_id = next(iter(manifest.values()))["id"]
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
-        self.assertEqual([button["text"] for button in buttons], [page_title(next(iter(pages.values())))])
+        self.assertEqual([button["text"] for button in buttons], ["iPhone 16"])
         self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{message_id}")
 
     async def test_many_iphone_models_produce_only_three_ordered_buttons(self):
