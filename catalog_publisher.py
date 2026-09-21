@@ -211,8 +211,13 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             self.save_catalog(records)
 
         for index in range(count):
-            if index >= len(records) or not records[index].get("hash"):
+            if index >= len(records):
                 await self._catalog_entry(records, index, CATALOG_TEXT + "\n\nОбновляю разделы…", [])
+            elif not records[index].get("hash"):
+                # Never erase a live catalog keyboard with a temporary empty one.
+                # An interrupted refresh can otherwise leave every brand button
+                # missing until the next successful publish.
+                continue
         return records
 
     async def _update_catalog(self, pages, records):

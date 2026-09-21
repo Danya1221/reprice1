@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -230,6 +231,22 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], ["Apple"])
 
+    async def test_prepare_never_clears_existing_catalog_keyboard(self):
+        await self.publisher.publish(self.pages())
+        stored = self.state.get("catalog")
+        stored["messages"][0]["hash"] = ""
+        self.state.set("catalog", stored)
+        self.publisher.calls.clear()
+
+        await self.publisher._prepare_catalog(1)
+
+        empty_keyboard_edits = [
+            payload for method, payload in self.publisher.calls
+            if method == "editMessageText"
+            and payload.get("reply_markup", {}).get("inline_keyboard") == []
+        ]
+        self.assertEqual(empty_keyboard_edits, [])
+
     async def test_catalog_layout_version_forces_existing_keyboard_edit(self):
         items = parse_documents(["Mac mini M4 16/256 Silver — 68800"]).items
         pages = render_blocks(items, Settings())
@@ -429,6 +446,16 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
     def callback(self, data, user=42, kind="private"):
         return {"id": "callback", "data": data, "from": {"id": user},
                 "message": {"chat": {"id": user, "type": kind}}}
+
+    async def test_catalog_refresh_waits_for_supplier_read_without_touching_early(self):
+        self.service.busy = True
+        await self.controller.refresh_catalog(42)
+        await asyncio.sleep(0)
+        self.service.refresh_format.assert_not_awaited()
+
+        self.service.busy = False
+        await asyncio.wait_for(self.controller.task, timeout=1)
+        self.service.refresh_format.assert_awaited_once()
 
     async def test_order_moves_selected_physical_message_by_typed_number(self):
         await self.controller.handle_callback(self.callback("order:show:0"))
