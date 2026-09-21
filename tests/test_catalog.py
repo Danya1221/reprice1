@@ -334,7 +334,7 @@ GoPro Hero 13 Black — 47000"""]).items
         pages = render_blocks(items, Settings())
         self.assertEqual(len(pages), 1)
         content = next(iter(pages.values()))
-        self.assertEqual(action_camera_catalog_labels(content), ["DJI / Insta360", "GoPro"])
+        self.assertEqual(action_camera_catalog_labels(content), ["DJI", "Insta360", "GoPro"])
 
         await self.publisher.publish(pages)
         manifest = self.state.get("published")["messages"]
@@ -344,7 +344,7 @@ GoPro Hero 13 Black — 47000"""]).items
             for row in self.catalog_edit()["reply_markup"]["inline_keyboard"]
             for button in row
         ]
-        self.assertEqual([button["text"] for button in buttons], ["DJI / Insta360", "GoPro"])
+        self.assertEqual([button["text"] for button in buttons], ["DJI", "Insta360", "GoPro"])
         self.assertTrue(all(button["url"] == f"https://t.me/c/777/{message_id}" for button in buttons))
 
     async def test_samsung_series_share_one_compact_catalog_button(self):
