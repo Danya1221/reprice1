@@ -672,36 +672,52 @@ def display_title(item):
 
 
 def iphone_bundle_key(block):
-    """Physical iPhone message requested by the operator."""
+    """Stable physical iPhone generation key.
+
+    11–15 intentionally remain one legacy message. Every generation from 16
+    onward gets its own message automatically, so iPhone 18/19/etc require no
+    code change when suppliers start listing them.
+    """
     if block == "iPhone Air":
         return "iphone17"
-    match = re.fullmatch(r"iPhone\s+(\d{1,2})(?:e)?(?:\s+(?:Plus|Pro(?:\s+Max)?))?", block, re.I)
+    match = re.fullmatch(
+        r"iPhone\s+(\d{1,2})(?:e)?(?:\s+(?:Plus|Pro(?:\s+Max)?|Mini|Air))?",
+        block, re.I,
+    )
     if not match:
         return ""
     number = int(match.group(1))
     if 11 <= number <= 15:
         return "iphone11-15"
-    if number == 16:
-        return "iphone16"
-    if number == 17:
-        return "iphone17"
+    if number >= 16:
+        return f"iphone{number}"
     return ""
 
 
 def iphone_bundle_section_rank(title):
-    """Operator-requested visual order inside the large iPhone messages."""
-    name = title.casefold().strip()
-    if name == "iphone 17e":
-        return (0, name)
+    """Predictable model order inside any iPhone generation message."""
+    name = clean(title).casefold()
     if name == "iphone air":
         return (1, name)
-    if name == "iphone 17":
-        return (2, name)
-    if name == "iphone 17 pro":
-        return (3, name)
-    if name == "iphone 17 pro max":
-        return (4, name)
-    return (10, name)
+    match = re.fullmatch(
+        r"iphone\s+(\d{1,2})(e)?(?:\s+(mini|air|plus|pro(?:\s+max)?))?",
+        name, re.I,
+    )
+    if not match:
+        return (20, name)
+    suffix = (match.group(3) or "").casefold()
+    if match.group(2):
+        suffix = "e"
+    rank = {
+        "e": 0,
+        "air": 1,
+        "": 2,
+        "mini": 3,
+        "plus": 4,
+        "pro": 5,
+        "pro max": 6,
+    }.get(suffix, 10)
+    return (rank, name)
 
 
 def iphone_bundle_header(bundle, titles):
@@ -712,17 +728,19 @@ def iphone_bundle_header(bundle, titles):
         if any(title.casefold() == "iphone 16e" for title in titles):
             base += " / 16e"
         return base
-    if bundle == "iphone17":
+    if bundle.startswith("iphone") and bundle[6:].isdigit():
+        generation = int(bundle[6:])
         ordered = sorted(titles, key=iphone_bundle_section_rank)
         labels = []
         for title in ordered:
-            name = title.casefold()
-            if name == "iphone air":
+            name = clean(title)
+            lower = name.casefold()
+            if lower == "iphone air" and generation == 17:
                 labels.append("17 Air")
-            elif name.startswith("iphone "):
-                labels.append(title[7:])
+            elif lower.startswith("iphone "):
+                labels.append(name[7:])
             else:
-                labels.append(title)
+                labels.append(name)
         return "iPhone " + " / ".join(labels)
     return " / ".join(titles)
 
@@ -983,7 +1001,7 @@ def pack_physical_sections(sections, limit=3950):
             if bundle not in seen_iphone_bundles:
                 seen_iphone_bundles.add(bundle)
                 bundle_sections = [entry for entry in sections if iphone_bundle_key(entry["title"]) == bundle]
-                if bundle in {"iphone11-15", "iphone17"}:
+                if bundle.startswith("iphone"):
                     bundle_sections.sort(key=lambda entry: iphone_bundle_section_rank(entry["title"]))
                 for batch in split_bundle_sections(bundle_sections, bundle, limit):
                     physical.append((bundle, batch))
@@ -1013,6 +1031,25 @@ def pack_physical_sections(sections, limit=3950):
 
     flush_pending()
     return physical
+
+
+def physical_order_label(title):
+    """Stable operator-facing name for a physical message.
+
+    The visible iPhone heading changes as models appear/disappear, but its order
+    key must stay the same. Other stable family headings are kept unchanged.
+    """
+    name = clean(title)
+    lower = name.casefold()
+    if lower.startswith("iphone"):
+        numbers = [int(value) for value in re.findall(r"\b(\d{1,2})\b", name)]
+        if numbers:
+            if any(11 <= value <= 15 for value in numbers) and all(11 <= value <= 15 for value in numbers):
+                return "iPhone 11–15"
+            return f"iPhone {numbers[0]}"
+        if "air" in lower:
+            return "iPhone 17"
+    return name
 
 
 def rendered_page_title(content):
@@ -1045,12 +1082,19 @@ def render_blocks(items, settings, overrides=None, closed=False):
         key = hashlib.sha256(seed.encode()).hexdigest()[:16] + ":0"
         built.append((key, content, rendered_page_title(content)))
 
-    preferred = [clean(value) for value in overrides.get("physical_order", []) if clean(value)]
+    preferred = [
+        physical_order_label(value)
+        for value in overrides.get("physical_order", [])
+        if clean(value)
+    ]
     if preferred:
         rank = {name.casefold(): index for index, name in enumerate(preferred)}
         built = [entry for _, entry in sorted(
             enumerate(built),
-            key=lambda pair: (rank.get(pair[1][2].casefold(), len(rank)), pair[0]),
+            key=lambda pair: (
+                rank.get(physical_order_label(pair[1][2]).casefold(), len(rank)),
+                pair[0],
+            ),
         )]
 
     pages = OrderedDict()
