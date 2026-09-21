@@ -70,6 +70,17 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         await self.publisher.publish(pages)
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
 
+    async def test_iphone18_catalog_button_appears_automatically(self):
+        items = parse_documents([
+            "iPhone 18 256 Blue — 150000\n"
+            "iPhone 18 Pro 256 Orange — 180000"
+        ]).items
+        pages = render_blocks(items, Settings())
+        await self.publisher.publish(pages)
+        buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
+        labels = [button["text"] for button in buttons]
+        self.assertEqual(labels, ["iPhone 18 / 18 Pro"])
+
     async def test_catalog_buttons_change_in_same_publish_when_page_family_changes(self):
         first = {"old:0": "<b>Honor</b>\n\n<code>Honor 400 — 30000</code>"}
         await self.publisher.publish(first)
@@ -365,6 +376,42 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Mac mini", joined)
         self.assertNotIn("Apple TV", joined)
         self.assertIn("реальные сообщения", text)
+
+    async def test_new_generation_is_appended_without_changing_saved_order(self):
+        self.options["physical_order"] = ["Dyson", "iPhone 17", "Apple"]
+        items = parse_documents([
+            "iPhone 17 256 Black — 60000\n"
+            "Dyson HS08 — 40000\n"
+            "iPhone 18 256 Blue — 150000"
+        ]).items
+        self.service.cached_items = lambda **kw: items
+        order = self.controller._draft_order(42)
+        self.assertEqual(order[:2], ["Dyson", "iPhone 17"])
+        self.assertEqual(order[-1], "iPhone 18")
+
+    async def test_temporarily_missing_block_keeps_saved_position(self):
+        self.options["physical_order"] = ["Dyson", "Apple", "iPhone 17", "Samsung"]
+        items = parse_documents([
+            "iPhone 17 256 Black — 60000\n"
+            "Dyson HS08 — 40000"
+        ]).items
+        self.service.cached_items = lambda **kw: items
+        self.controller.order_selected[42] = "iPhone 17"
+        order, selected = self.controller._move_selected_to(42, 1)
+        self.assertEqual(selected, "iPhone 17")
+        persistent = self.controller._persistent_order(order)
+        self.assertEqual(persistent, ["iPhone 17", "Apple", "Dyson", "Samsung"])
+
+    async def test_order_screen_uses_stable_iphone_generation_name(self):
+        items = parse_documents([
+            "iPhone 18 256 Blue — 150000\n"
+            "iPhone 18 Pro 256 Orange — 180000\n"
+            "Dyson HS08 — 40000"
+        ]).items
+        self.service.cached_items = lambda **kw: items
+        known = self.controller.known_blocks()
+        self.assertIn("iPhone 18", known)
+        self.assertNotIn("iPhone 18 / 18 Pro", known)
 
     async def test_unknown_user_and_group_cannot_change_order_or_selection(self):
         for callback in [self.callback("catalog:all", user=99), self.callback("order:apply", kind="supergroup")]:
