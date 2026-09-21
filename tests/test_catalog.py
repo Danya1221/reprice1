@@ -239,12 +239,45 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
-        self.assertEqual(self.state.get("catalog_layout_version"), 7)
+        self.assertEqual(self.state.get("catalog_layout_version"), 8)
         edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
         self.assertTrue(edits)
         buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], ["Apple"])
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
+    async def test_split_apple_buttons_describe_their_real_contents(self):
+        pages = {
+            "apple-audio-watch:0": (
+                "<b>Apple</b>\n\n"
+                "<b>— AirPods —</b>\n\n<code>AirPods Pro 3 — 20000</code>\n\n\n"
+                "<b>— Apple Watch —</b>\n\n<code>Apple Watch Ultra 3 — 70000</code>"
+            ),
+            "apple-ipad-mac:0": (
+                "<b>Apple</b>\n\n"
+                "<b>— iPad —</b>\n\n<code>iPad Air 11 — 60000</code>\n\n\n"
+                "<b>— MacBook / iMac —</b>\n\n<code>MacBook Air M5 — 120000</code>"
+            ),
+        }
+        await self.publisher.publish(pages)
+        manifest = self.state.get("published")["messages"]
+        buttons = [
+            button
+            for row in self.catalog_edit()["reply_markup"]["inline_keyboard"]
+            for button in row
+        ]
+        self.assertEqual(
+            [button["text"] for button in buttons],
+            ["AirPods / Apple Watch", "iPad / MacBook"],
+        )
+        self.assertEqual(
+            buttons[0]["url"],
+            f"https://t.me/c/777/{manifest['apple-audio-watch:0']['id']}",
+        )
+        self.assertEqual(
+            buttons[1]["url"],
+            f"https://t.me/c/777/{manifest['apple-ipad-mac:0']['id']}",
+        )
 
     async def test_samsung_series_share_one_compact_catalog_button(self):
         items = parse_documents(["""Samsung
