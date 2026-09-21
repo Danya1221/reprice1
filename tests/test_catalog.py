@@ -1,11 +1,10 @@
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from catalog_publisher import CatalogPublisher, action_camera_catalog_labels, catalog_labels, page_title
+from catalog_publisher import CatalogPublisher, catalog_labels, page_title
 from config import Settings
 from control_catalog import CatalogController, block_id
 from prices import parse_documents, physical_message_labels, render_blocks
@@ -231,22 +230,6 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], ["Apple"])
 
-    async def test_prepare_never_clears_existing_catalog_keyboard(self):
-        await self.publisher.publish(self.pages())
-        stored = self.state.get("catalog")
-        stored["messages"][0]["hash"] = ""
-        self.state.set("catalog", stored)
-        self.publisher.calls.clear()
-
-        await self.publisher._prepare_catalog(1)
-
-        empty_keyboard_edits = [
-            payload for method, payload in self.publisher.calls
-            if method == "editMessageText"
-            and payload.get("reply_markup", {}).get("inline_keyboard") == []
-        ]
-        self.assertEqual(empty_keyboard_edits, [])
-
     async def test_catalog_layout_version_forces_existing_keyboard_edit(self):
         items = parse_documents(["Mac mini M4 16/256 Silver — 68800"]).items
         pages = render_blocks(items, Settings())
@@ -256,7 +239,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
-        self.assertEqual(self.state.get("catalog_layout_version"), 10)
+        self.assertEqual(self.state.get("catalog_layout_version"), 9)
         edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
         self.assertTrue(edits)
         buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
@@ -326,26 +309,6 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             buttons[1]["url"],
             f"https://t.me/c/777/{manifest['apple-ipad-mac:0']['id']}",
         )
-
-    async def test_action_camera_post_has_brand_buttons_to_same_message(self):
-        items = parse_documents(["""DJI Osmo Action 5 Pro — 41000
-Insta360 X5 — 52000
-GoPro Hero 13 Black — 47000"""]).items
-        pages = render_blocks(items, Settings())
-        self.assertEqual(len(pages), 1)
-        content = next(iter(pages.values()))
-        self.assertEqual(action_camera_catalog_labels(content), ["DJI", "Insta360", "GoPro"])
-
-        await self.publisher.publish(pages)
-        manifest = self.state.get("published")["messages"]
-        message_id = next(iter(manifest.values()))["id"]
-        buttons = [
-            button
-            for row in self.catalog_edit()["reply_markup"]["inline_keyboard"]
-            for button in row
-        ]
-        self.assertEqual([button["text"] for button in buttons], ["DJI", "Insta360", "GoPro"])
-        self.assertTrue(all(button["url"] == f"https://t.me/c/777/{message_id}" for button in buttons))
 
     async def test_samsung_series_share_one_compact_catalog_button(self):
         items = parse_documents(["""Samsung
@@ -466,16 +429,6 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
     def callback(self, data, user=42, kind="private"):
         return {"id": "callback", "data": data, "from": {"id": user},
                 "message": {"chat": {"id": user, "type": kind}}}
-
-    async def test_catalog_refresh_waits_for_supplier_read_without_touching_early(self):
-        self.service.busy = True
-        await self.controller.refresh_catalog(42)
-        await asyncio.sleep(0)
-        self.service.refresh_format.assert_not_awaited()
-
-        self.service.busy = False
-        await asyncio.wait_for(self.controller.task, timeout=1)
-        self.service.refresh_format.assert_awaited_once()
 
     async def test_order_moves_selected_physical_message_by_typed_number(self):
         await self.controller.handle_callback(self.callback("order:show:0"))

@@ -42,8 +42,7 @@ BRANDS = (
     ("Canon", r"\bcanon\b|кэнон|канон"),
     ("Rode", r"\br(?:o|ø)de\b"),
     ("COROS", r"\bcoros\b"),
-    ("DJI", r"\bdji\b"),
-    ("Insta360", r"\binsta\s*360\b"),
+    ("DJI / Insta360", r"\bdji\b|\binsta\s*360\b"),
     ("Kodak / Fujifilm", r"\bkodak\b|\bfujifilm\b"),
     ("Bowers & Wilkins", r"bowers|b&w|\bpx[78]\b"),
     ("Harman Kardon / Bose", r"harman\s*kardon|\bbose\b|\baura\s+studio\b|\bonyx\b|soundsticks"),
@@ -330,7 +329,7 @@ def product_block(title):
 def ordered_blocks(blocks, preferred=()):
     defaults = ["iPhone", "AirPods", "Apple Accessories", "Mac mini", "Apple TV", "AirTag",
                 "Apple Watch", "iPad", "MacBook / iMac", "Mac Studio", "Apple", "Ray-Ban Meta", "Samsung", "Honor", "Realme", "Huawei", "Tecno",
-                "Xiaomi", "Google", "COROS", "Rode", "Dyson", "Oura Ring", "DJI", "Insta360", "GoPro", "CPO", "ASIS", "Аксессуары", "Товары"]
+                "Xiaomi", "Google", "COROS", "Rode", "Dyson", "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
     def order_key(name):
         if name in preferred:
             return (-1, preferred.index(name), (), "")
@@ -757,20 +756,13 @@ def physical_brand_label(title):
         return "Samsung"
     if lower.startswith("ray-ban"):
         return "Ray-Ban Meta"
-    if lower.startswith("dji"):
-        return "DJI"
-    if lower.startswith("insta360"):
-        return "Insta360"
+    if lower.startswith("dji") or lower.startswith("insta360"):
+        return "DJI / Insta360"
     if lower.startswith("harman") or lower.startswith("bose"):
         return "Harman Kardon / Bose"
     if lower.startswith("kodak") or lower.startswith("fujifilm"):
         return "Kodak / Fujifilm"
     return name
-
-
-def is_action_camera_title(title):
-    label = physical_brand_label(title)
-    return label in {"DJI", "Insta360", "GoPro"}
 
 
 def product_storage_key(item):
@@ -904,15 +896,6 @@ def section_chunks(title, lines, limit=3200):
 def build_physical_message(sections, bundle=""):
     if not sections:
         return ""
-
-    action_cameras = not bundle and all(is_action_camera_title(section["title"]) for section in sections)
-    if action_cameras:
-        bodies = [
-            "<b>— " + html.escape(section["title"]) + " —</b>\n\n" + section["body"]
-            for section in sections
-        ]
-        return "<b>Экшн-камеры</b>\n\n" + "\n\n\n".join(bodies)
-
     if len(sections) == 1 and not bundle:
         section = sections[0]
         heading = physical_brand_label(section["title"])
@@ -962,7 +945,7 @@ def split_bundle_sections(sections, bundle, limit=3950):
 
 
 def physical_section_family(title):
-    """Keep major ecosystems and sparse action cameras together."""
+    """Keep major ecosystems together instead of mixing them with unrelated brands."""
     if title in {"CPO", "ASIS", "Аксессуары"}:
         return "isolated"
     label = physical_brand_label(title)
@@ -970,8 +953,6 @@ def physical_section_family(title):
         return "apple"
     if label == "Samsung":
         return "samsung"
-    if is_action_camera_title(title):
-        return "action-cameras"
     return "other"
 
 
@@ -987,7 +968,7 @@ def pack_physical_sections(sections, limit=3950):
             compacted.append(section)
             continue
         family = physical_section_family(section["title"])
-        if family in {"apple", "samsung", "action-cameras"}:
+        if family in {"apple", "samsung"}:
             if family in emitted_families:
                 continue
             emitted_families.add(family)

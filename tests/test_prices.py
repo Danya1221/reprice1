@@ -76,22 +76,10 @@ Google Fitbit Air Obsidian — 10700
 Ray-Ban Meta Wayfarer S50 Black — 32000
 Ray-Ban Meta Skyler S53 Brown — 34000""").items
         self.assertEqual([i.block for i in items], [
-            "LEGO", "Dyson", "Canon", "DJI", "Insta360", "Google",
+            "LEGO", "Dyson", "Canon", "DJI / Insta360", "DJI / Insta360", "Google",
             "Ray-Ban Meta", "Ray-Ban Meta"])
         self.assertIn(" M ", items[-2].title)
         self.assertIn(" L ", items[-1].title)
-
-    def test_sparse_action_camera_brands_share_one_physical_post(self):
-        items = self.parse("""DJI Osmo Action 5 Pro — 41000
-Insta360 X5 — 52000
-GoPro Hero 13 Black — 47000""").items
-        pages = render_blocks(items, Settings())
-        action_pages = [text for text in pages.values() if text.startswith("<b>Экшн-камеры</b>")]
-        self.assertEqual(len(action_pages), 1)
-        text = action_pages[0]
-        self.assertIn("<b>— DJI —</b>", text)
-        self.assertIn("<b>— Insta360 —</b>", text)
-        self.assertIn("<b>— GoPro —</b>", text)
 
     def test_note_14s_and_rode_do_not_inherit_dji_section(self):
         items = self.parse("""DJI / Insta360
@@ -102,12 +90,12 @@ RODE Wireless Pro 🇷🇺 — 23300
 DJI Osmo Pocket 4 Creator Combo — 44800
 Insta360 X6 Standard Bundle — 51100""").items
         self.assertEqual([item.block for item in items], [
-            "Xiaomi", "Xiaomi", "Rode", "Rode", "DJI", "Insta360"
+            "Xiaomi", "Xiaomi", "Rode", "Rode", "DJI / Insta360", "DJI / Insta360"
         ])
         self.assertTrue(items[0].title.startswith("Note 14S"))
         self.assertTrue(items[2].title.startswith("RODE Wireless"))
-        self.assertNotIn("DJI Note", items[0].title)
-        self.assertNotIn("DJI RODE", items[2].title)
+        self.assertNotIn("DJI / Insta360 Note", items[0].title)
+        self.assertNotIn("DJI / Insta360 RODE", items[2].title)
 
     def test_samsung_series_are_read_and_split_into_catalog_blocks(self):
         items = self.parse("""Samsung

@@ -174,24 +174,9 @@ class CatalogController(FirstMessageController):
         except Exception as exc:
             await self.send(chat_id, "Настройки сохранены; обновление не завершилось: " + str(exc), self.menu())
 
-    async def _refresh_catalog_after_read(self, chat_id):
-        # Automatic supplier reading may be running outside self.task. Wait for it
-        # instead of starting a competing format refresh that can interrupt the
-        # catalog keyboard update.
-        while getattr(self.service, "busy", False):
-            await asyncio.sleep(1)
-        await self._refresh_result(chat_id)
-
     async def refresh_catalog(self, chat_id):
         if self.task and not self.task.done():
             await self.send(chat_id, "Обновление уже идёт. Сохранённые настройки применятся при следующем обновлении.")
-            return
-        if getattr(self.service, "busy", False):
-            await self.send(
-                chat_id,
-                "⏳ Сейчас читаю прайс. Кнопки каталога оставляю на месте и обновлю их сразу после чтения.",
-            )
-            self.task = asyncio.create_task(self._refresh_catalog_after_read(chat_id))
             return
         await self.send(chat_id, "Обновляю сообщения и кнопки каталога…")
         self.task = asyncio.create_task(self._refresh_result(chat_id))
