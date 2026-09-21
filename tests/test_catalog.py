@@ -7,17 +7,15 @@ from unittest.mock import AsyncMock
 from catalog_publisher import CatalogPublisher, catalog_labels, page_title
 from config import Settings
 from control_catalog import CatalogController, block_id
-from prices import parse_documents, render_blocks
+from prices import parse_documents, physical_message_labels, render_blocks
 from state import StateStore
 from test_first_message import FakePinnedPublisher
 
 def expected_catalog_titles(pages):
-    result = []
-    for content in pages.values():
-        for title in catalog_labels(content):
-            if title not in result:
-                result.append(title)
-    return result
+    return [
+        title if len(title) <= 64 else title[:61].rstrip() + "…"
+        for title in physical_message_labels(list(pages.values()))
+    ]
 
 
 
@@ -241,7 +239,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
-        self.assertEqual(self.state.get("catalog_layout_version"), 6)
+        self.assertEqual(self.state.get("catalog_layout_version"), 7)
         edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
         self.assertTrue(edits)
         buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
@@ -435,6 +433,29 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
         known = self.controller.known_blocks()
         self.assertIn("iPhone 18", known)
         self.assertNotIn("iPhone 18 / 18 Pro", known)
+
+    async def test_split_17_pro_max_is_a_real_movable_physical_block(self):
+        source = "\n".join([
+            *[f"iPhone 17 256 Base{i:02d} — {80000 + i}" for i in range(5)],
+            *[f"iPhone 17 Pro Max 256 Max{i:03d} — {120000 + i}" for i in range(120)],
+        ])
+        items = parse_documents([source]).items
+        self.service.cached_items = lambda **kw: items
+
+        known = self.controller.known_blocks()
+        self.assertIn("iPhone 17", known)
+        self.assertIn("iPhone 17 Pro Max", known)
+
+        self.controller.order_selected[42] = "iPhone 17 Pro Max"
+        order, selected = self.controller._move_selected_to(42, 1)
+        self.assertEqual(selected, "iPhone 17 Pro Max")
+        saved = self.controller._persistent_order(order)
+        self.options["physical_order"] = saved
+
+        pages = render_blocks(items, Settings(), self.options)
+        labels = physical_message_labels(list(pages.values()))
+        self.assertEqual(labels[0], "iPhone 17 Pro Max")
+        self.assertIn("iPhone 17", labels)
 
     async def test_unknown_user_and_group_cannot_change_order_or_selection(self):
         for callback in [self.callback("catalog:all", user=99), self.callback("order:apply", kind="supergroup")]:
