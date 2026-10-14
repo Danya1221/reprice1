@@ -4,7 +4,7 @@ import hashlib
 
 from control_first import FirstMessageController
 from bot_publisher import is_missing_message_error
-from prices import physical_message_labels, physical_order_label, render_blocks, select_items
+from prices import merge_physical_order, physical_page_labels, render_blocks, select_items
 
 
 def block_id(block):
@@ -14,7 +14,6 @@ def block_id(block):
 class CatalogController(FirstMessageController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.order_drafts = {}
         self.order_selected = {}
 
     def menu(self):
@@ -30,7 +29,7 @@ class CatalogController(FirstMessageController):
         options = self.service.options()
         selected = select_items(catalog, self.service.settings, options)
         pages = render_blocks(selected, self.service.settings, options)
-        return physical_message_labels(list(pages.values()))
+        return physical_page_labels(pages)
 
     async def _edit_or_send(self, chat_id, message_id, text, reply_markup=None):
         """Edit the control message in place; only /order without a callback sends one."""
@@ -55,18 +54,12 @@ class CatalogController(FirstMessageController):
 
     def _draft_order(self, user_id):
         known = self.known_blocks()
-        raw_preferred = self.order_drafts.get(
-            user_id, self.service.options().get("physical_order", [])
+        # Every movement is saved immediately. An old control screen must use
+        # the latest durable order, not a draft left open before another sync.
+        preferred = merge_physical_order(
+            self.service.options().get("physical_order", []), known
         )
-        preferred = []
-        for value in raw_preferred:
-            name = physical_order_label(value)
-            if name and name not in preferred:
-                preferred.append(name)
         order = [name for name in preferred if name in known]
-        # Newly discovered messages never disturb the saved order: append them.
-        order.extend(name for name in known if name not in order)
-        self.order_drafts[user_id] = order
         return order
 
     def _persistent_order(self, active_order):
@@ -74,13 +67,11 @@ class CatalogController(FirstMessageController):
 
         Supplier stock can make a whole message disappear for one refresh. Do not
         forget its saved position; fill only the active slots with the new order
-        and append brand-new blocks at the end.
+        with brand-new blocks initially placed above the saved slots.
         """
-        previous = []
-        for value in self.service.options().get("physical_order", []):
-            name = physical_order_label(value)
-            if name and name not in previous:
-                previous.append(name)
+        previous = merge_physical_order(
+            self.service.options().get("physical_order", []), active_order
+        )
 
         active_set = set(active_order)
         active_iter = iter(active_order)
@@ -141,7 +132,6 @@ class CatalogController(FirstMessageController):
             raise ValueError(f"Номер должен быть от 1 до {len(order)}")
         order.remove(selected)
         order.insert(position - 1, selected)
-        self.order_drafts[user_id] = order
         return order, selected
 
     async def _refresh_order_result(self, chat_id, user_id, message_id):
@@ -218,7 +208,6 @@ class CatalogController(FirstMessageController):
                     notice="Эта старая кнопка больше не используется. Выбери текущее сообщение и отправь его номер.",
                 )
             elif data == "order:reset":
-                self.order_drafts.pop(user_id, None)
                 self.order_selected.pop(user_id, None)
                 self.service.set_option("physical_order", [])
                 self.service.set_option("block_order", [])

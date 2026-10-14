@@ -7,7 +7,10 @@ from zoneinfo import ZoneInfo
 
 from telethon import errors
 
-from prices import Item, render_blocks, select_items
+from prices import (
+    Item, merge_physical_order, physical_message_labels, physical_page_labels,
+    render_blocks, select_items,
+)
 from publisher import Publisher
 from supplier import SupplierReader
 
@@ -214,6 +217,20 @@ class SyncService:
 
     async def render(self, closed=False, items=None):
         options = self.options()
+        if "physical_order" not in options:
+            # Adopt the already published layout once on upgrade. Empty orders
+            # explicitly saved by the Reset button still mean default order.
+            stored = self.state.get("published", {}) or {}
+            binding = self.publisher.binding()
+            target = self.state.get("publish_target", {}).get("chat_id")
+            if target and hasattr(self.publisher, "configured_target"):
+                # Bot API resolves the saved group only during publish().
+                binding = f"botapi:{target}"
+            if stored.get("binding") == binding:
+                entries = sorted(stored.get("messages", {}).values(), key=lambda entry: int(entry["id"]))
+                options["physical_order"] = physical_message_labels([
+                    entry["content"] for entry in entries if entry.get("content")
+                ])
         catalog = self.cached_items(include_closed=closed) if items is None else items
         if closed and not catalog:
             changes = await self.publisher.hide_existing()
@@ -228,6 +245,14 @@ class SyncService:
                     f"Защита публикации: рендер потерял позиции ({rendered_rows} из {len(selected)}). "
                     "Текущий прайс оставлен без изменений."
                 )
+        # Remember every observed page, including pages added automatically.
+        # Keep missing/disabled pages in the order so they return to their slots.
+        if not closed:
+            order = merge_physical_order(options.get("physical_order", []), physical_page_labels(pages))
+            latest_options = self.options()
+            if order != latest_options.get("physical_order"):
+                latest_options["physical_order"] = order
+                self.state.set("options", latest_options)
         changes = await self.publisher.publish(pages)
         self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(selected)})
         return len(selected), changes

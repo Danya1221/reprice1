@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from telethon.errors import FloodWaitError
 
 from config import Settings, Source
-from prices import Item, ParseResult
+from prices import Item, ParseResult, parse_documents, physical_page_labels
 from runtime import SyncService, is_open, LoginRequired, merge_lowest
 from state import StateStore
 
@@ -131,6 +131,94 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "рендер потерял позиции"):
                 await self.service.render(items=[self.item])
         self.service.publisher.publish.assert_not_awaited()
+
+    async def test_new_pages_stay_above_saved_order_after_refresh_and_restart(self):
+        self.service.set_option("physical_order", ["Dyson", "iPhone 17", "Apple"])
+        initial = parse_documents([
+            "iPhone 17 256 Black — 60000\nDyson HS08 — 40000\nAirPods 4 — 10000"
+        ]).items
+        await self.service.render(items=initial)
+        added = parse_documents(["iPhone 18 256 Blue — 150000"]).items + initial
+        await self.service.render(items=added)
+        expected = ["iPhone 18", "Dyson", "iPhone 17", "Apple"]
+        self.assertEqual(physical_page_labels(self.service.publisher.publish.call_args.args[0]), expected)
+        self.assertEqual(self.service.options()["physical_order"], expected)
+
+        state = StateStore(self.state.path)
+        restarted = SyncService(self.client, self.settings, state)
+        restarted.publisher.publish = AsyncMock(return_value=0)
+        await restarted.render(items=list(reversed(added)))
+        self.assertEqual(physical_page_labels(restarted.publisher.publish.call_args.args[0]), expected)
+        self.assertEqual(restarted.options()["physical_order"], expected)
+
+        remaining = [item for item in added if item.block != "iPhone 17"]
+        await restarted.render(items=remaining)
+        self.assertEqual(restarted.options()["physical_order"], expected)
+        await restarted.render(items=added)
+        self.assertEqual(physical_page_labels(restarted.publisher.publish.call_args.args[0]), expected)
+
+        restarted.set_option("disabled_blocks", ["Dyson"])
+        await restarted.render(items=added)
+        self.assertEqual(restarted.options()["physical_order"], expected)
+        restarted.set_option("disabled_blocks", [])
+        await restarted.render(items=added)
+        self.assertEqual(physical_page_labels(restarted.publisher.publish.call_args.args[0]), expected)
+
+    async def test_upgrade_adopts_last_published_order_before_adding_new_page(self):
+        self.state.set("published", {"binding": self.service.publisher.binding(), "messages": {
+            "iphone:0": {"id": 20, "content": "<b>iPhone 17</b>"},
+            "dyson:0": {"id": 10, "content": "<b>Dyson</b>"},
+        }})
+        items = parse_documents([
+            "iPhone 17 256 Black — 60000\nDyson HS08 — 40000\niPhone 18 256 Blue — 150000"
+        ]).items
+        await self.service.render(items=items)
+        expected = ["iPhone 18", "Dyson", "iPhone 17"]
+        self.assertEqual(self.service.options()["physical_order"], expected)
+        self.assertEqual(physical_page_labels(self.service.publisher.publish.call_args.args[0]), expected)
+
+    async def test_single_model_heading_does_not_reset_generation_position(self):
+        self.service.set_option("physical_order", ["Dyson", "iPhone 17", "Apple"])
+        items = parse_documents([
+            "iPhone 17 Pro 256 Blue — 90000\nDyson HS08 — 40000\nAirPods 4 — 10000"
+        ]).items
+        await self.service.render(items=items)
+        self.assertEqual(physical_page_labels(self.service.publisher.publish.call_args.args[0]),
+                         ["Dyson", "iPhone 17 Pro", "Apple"])
+
+    async def test_packed_heading_change_keeps_its_place_among_existing_pages(self):
+        items = parse_documents([
+            "iPhone 17 256 Black — 60000\nSamsung S26 12/256 Black — 65000\n"
+            "Xiaomi 15 12/256 White — 48000\nRealme GT 7 12/256 Black — 42000"
+        ]).items
+        await self.service.render(items=items)
+        labels = physical_page_labels(self.service.publisher.publish.call_args.args[0])
+        packed = next(label for label in labels if "•" in label)
+        self.service.set_option("physical_order", [packed, "Samsung", "iPhone 17"])
+        added = items + parse_documents(["Vivo V70 12/256 Grey — 46000"]).items
+        await self.service.render(items=added)
+        new_labels = physical_page_labels(self.service.publisher.publish.call_args.args[0])
+        self.assertIn("Vivo", new_labels[0])
+        self.assertEqual(new_labels[1:], ["Samsung", "iPhone 17"])
+        self.assertEqual(len(self.service.options()["physical_order"]), 3)
+
+    async def test_explicit_reset_does_not_adopt_old_published_order(self):
+        self.state.set("published", {"binding": self.service.publisher.binding(), "messages": {
+            "dyson:0": {"id": 10, "content": "<b>Dyson</b>"},
+            "iphone:0": {"id": 20, "content": "<b>iPhone 17</b>"},
+        }})
+        self.service.set_option("physical_order", [])
+        items = parse_documents(["Dyson HS08 — 40000\niPhone 17 256 Black — 60000"]).items
+        await self.service.render(items=items)
+        self.assertEqual(physical_page_labels(self.service.publisher.publish.call_args.args[0]),
+                         ["iPhone 17", "Dyson"])
+
+    async def test_closed_refresh_does_not_forget_overflow_order(self):
+        previous = ["Apple · 2", "Dyson", "Apple", "iPhone 17"]
+        self.service.set_option("physical_order", previous)
+        items = parse_documents(["AirPods 4 — 10000\nDyson HS08 — 40000"]).items
+        await self.service.render(closed=True, items=items)
+        self.assertEqual(self.service.options()["physical_order"], previous)
 
 
     async def test_format_change_during_initialization_is_reported(self):

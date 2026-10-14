@@ -6,7 +6,7 @@ import re
 
 from bot_publisher import digest, is_missing_message_error
 from first_message_publisher import PinnedBotAPIPublisher
-from prices import physical_message_labels, physical_order_label
+from prices import physical_page_labels, physical_order_label
 
 
 CATALOG_TEXT = "🗂 КАТАЛОГ — выбери модель или категорию\nНажми на кнопку — перейдёшь к нужной части прайса.\nСкопируй позицию вместе с ценой и пришли её менеджеру."
@@ -219,7 +219,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         manifest = self.state.get("published", {}).get("messages", {})
         buttons = []
         contents = list(pages.values())
-        labels = physical_message_labels(contents)
+        labels = physical_page_labels(pages)
 
         # The current Apple stock is physically split into two stable posts:
         # 1) headphones + watches, 2) iPads + Macs. Name those posts by purpose
@@ -228,7 +228,6 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             1 for content in contents
             if page_title(content).casefold().strip() == "apple"
         )
-        apple_index = 0
         label_counts = {}
 
         for (key, content), title in zip(pages.items(), labels):
@@ -240,7 +239,8 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             is_apple = page_title(content).casefold().strip() == "apple"
             if is_apple and apple_total >= 2:
-                apple_index += 1
+                occurrence = re.fullmatch(r"Apple(?:\s+·\s+(\d+))?", title)
+                apple_index = int(occurrence.group(1) or 1) if occurrence else 1
                 if apple_index == 1:
                     label = "AirPods / Apple Watch"
                 elif apple_index == 2:

@@ -7,14 +7,15 @@ from unittest.mock import AsyncMock
 from catalog_publisher import CatalogPublisher, catalog_labels, page_title
 from config import Settings
 from control_catalog import CatalogController, block_id
-from prices import parse_documents, physical_message_labels, render_blocks
+from prices import parse_documents, physical_message_labels, physical_page_labels, render_blocks
 from state import StateStore
+from runtime import SyncService
 from test_first_message import FakePinnedPublisher
 
 def expected_catalog_titles(pages):
     return [
         title if len(title) <= 64 else title[:61].rstrip() + "…"
-        for title in physical_message_labels(list(pages.values()))
+        for title in physical_page_labels(pages)
     ]
 
 
@@ -65,6 +66,41 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
+    async def test_new_generation_precedes_saved_posts_and_catalog_links(self):
+        service = SyncService(None, Settings(send_delay=0), self.state)
+        service.publisher = self.publisher
+        service.set_option("physical_order", ["Dyson", "Apple", "iPhone 17"])
+        await service.render(items=self.items)
+        original_ids = {entry["id"] for entry in self.state.get("published")["messages"].values()}
+        items = self.items + parse_documents(["iPhone 18 256 Blue — 150000"]).items
+        await service.render(items=items)
+        expected = ["iPhone 18", "Dyson", "Apple", "iPhone 17"]
+        manifest = self.state.get("published")["messages"]
+        slots = sorted(manifest.values(), key=lambda entry: entry["id"])
+        self.assertTrue(original_ids.issubset({entry["id"] for entry in slots}))
+        self.assertEqual(physical_message_labels([entry["content"] for entry in slots]), expected)
+        buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        self.assertEqual([button["text"] for button in buttons], expected)
+        self.assertEqual([button["url"] for button in buttons],
+                         [f"https://t.me/c/777/{entry['id']}" for entry in slots])
+
+    async def test_moved_duplicate_apple_page_keeps_catalog_name_and_link(self):
+        items = parse_documents(["\n".join(
+            f"AirPods Pro 3 Color{i:03d} — {20000 + i}" for i in range(110)
+        )]).items
+        original = render_blocks(items, Settings())
+        await self.publisher.publish(original)
+        original_buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        labels = physical_page_labels(original)
+        second_key = list(original)[labels.index("Apple · 2")]
+        pages = render_blocks(items, Settings(), {"physical_order": ["Apple · 2", "Apple", *labels[2:]]})
+        await self.publisher.publish(pages)
+        manifest = self.state.get("published")["messages"]
+        buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        self.assertEqual(buttons[0]["text"], original_buttons[1]["text"])
+        self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{manifest[second_key]['id']}")
+        self.assertEqual(manifest[second_key]["content"], original[second_key])
 
     async def test_iphone18_catalog_button_appears_automatically(self):
         items = parse_documents([
@@ -462,7 +498,7 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Apple TV", joined)
         self.assertIn("реальные сообщения", text)
 
-    async def test_new_generation_is_appended_without_changing_saved_order(self):
+    async def test_new_generation_is_prepended_without_changing_saved_order(self):
         self.options["physical_order"] = ["Dyson", "iPhone 17", "Apple"]
         items = parse_documents([
             "iPhone 17 256 Black — 60000\n"
@@ -471,8 +507,24 @@ class CatalogControlTests(unittest.IsolatedAsyncioTestCase):
         ]).items
         self.service.cached_items = lambda **kw: items
         order = self.controller._draft_order(42)
-        self.assertEqual(order[:2], ["Dyson", "iPhone 17"])
-        self.assertEqual(order[-1], "iPhone 18")
+        self.assertEqual(order, ["iPhone 18", "Dyson", "iPhone 17"])
+
+    async def test_old_control_screen_uses_latest_saved_order(self):
+        self.options["physical_order"] = ["Dyson", "iPhone 17"]
+        self.controller._draft_order(42)
+        self.options["physical_order"] = ["iPhone 17", "Dyson"]
+        self.assertEqual(self.controller._draft_order(42), ["iPhone 17", "Dyson"])
+
+    async def test_duplicate_page_keeps_its_identity_after_moving(self):
+        items = parse_documents(["\n".join(
+            f"AirPods Pro 3 Color{i:03d} — {20000 + i}" for i in range(110)
+        )]).items
+        self.service.cached_items = lambda **kw: items
+        before = self.controller.known_blocks()
+        self.assertIn("Apple · 2", before)
+        self.options["physical_order"] = ["Apple · 2", "Apple", *before[2:]]
+        self.assertEqual(self.controller.known_blocks()[:2], ["Apple · 2", "Apple"])
+        self.assertEqual(self.controller._draft_order(42)[:2], ["Apple · 2", "Apple"])
 
     async def test_temporarily_missing_block_keeps_saved_position(self):
         self.options["physical_order"] = ["Dyson", "Apple", "iPhone 17", "Samsung"]

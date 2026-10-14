@@ -1081,6 +1081,74 @@ def physical_message_labels(contents):
     return labels
 
 
+class PhysicalPages(OrderedDict):
+    """Keep occurrence labels attached to their pages when pages are moved."""
+
+    def __init__(self):
+        super().__init__()
+        self.labels = {}
+
+
+def physical_page_labels(pages):
+    labels = getattr(pages, "labels", {})
+    if all(key in labels for key in pages):
+        return [labels[key] for key in pages]
+    return physical_message_labels(list(pages.values()))
+
+
+def merge_physical_order(previous, current):
+    """Prepend new pages, retain missing slots and match stock-dependent headings.
+
+    Exact matches win before matching a renamed packed heading. This prevents a
+    new overflow page from taking an existing page's place just because both
+    pages contain the same brand or iPhone generation.
+    """
+    def unique(values):
+        result, seen = [], set()
+        for value in values:
+            name = physical_order_label(value)
+            if name and name.casefold() not in seen:
+                result.append(name)
+                seen.add(name.casefold())
+        return result
+
+    previous, current = unique(previous), unique(current)
+    ranks = {name.casefold(): index for index, name in enumerate(previous)}
+    matched = {}
+    pending = []
+    for name in current:
+        index = ranks.get(name.casefold())
+        if index is None:
+            pending.append(name)
+        else:
+            matched[index] = name
+
+    def members(name):
+        occurrence = re.fullmatch(r"(.+?)\s+·\s+(\d+)", name)
+        base = occurrence.group(1) if occurrence else name
+        part = occurrence.group(2) if occurrence else "1"
+        bundle = iphone_bundle_key(base)
+        names = {bundle} if bundle else {value.strip().casefold() for value in base.split("•")}
+        return names, part
+
+    new = []
+    for name in pending:
+        names, part = members(name)
+        candidates = []
+        for index, old in enumerate(previous):
+            if index in matched:
+                continue
+            old_names, old_part = members(old)
+            common = len(names & old_names) if part == old_part else 0
+            if common:
+                candidates.append((common / len(names | old_names), common, -index, index))
+        if candidates:
+            matched[max(candidates)[-1]] = name
+        else:
+            new.append(name)
+    return new + [matched.get(index, name) for index, name in enumerate(previous)]
+
+
 def rendered_page_title(content):
     """Visible top heading of one final Telegram price message."""
     match = re.match(r"<b>\s*(?:—\s*)?(.*?)(?:\s*—)?\s*</b>", content or "")
@@ -1119,11 +1187,7 @@ def render_blocks(items, settings, overrides=None, closed=False):
         for (key, content, title), label in zip(built, labels)
     ]
 
-    preferred = [
-        physical_order_label(value)
-        for value in overrides.get("physical_order", [])
-        if clean(value)
-    ]
+    preferred = merge_physical_order(overrides.get("physical_order", []), labels)
     if preferred:
         rank = {name.casefold(): index for index, name in enumerate(preferred)}
         built = [entry for _, entry in sorted(
@@ -1134,7 +1198,8 @@ def render_blocks(items, settings, overrides=None, closed=False):
             ),
         )]
 
-    pages = OrderedDict()
-    for key, content, _title, _label in built:
+    pages = PhysicalPages()
+    for key, content, _title, label in built:
         pages[key] = content
+        pages.labels[key] = label
     return pages

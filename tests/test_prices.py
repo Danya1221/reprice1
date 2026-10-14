@@ -608,7 +608,7 @@ iPhone 17 256 Blue 🇮🇳 — 62000""").items
             "Apple TV 4K 128GB — 15000\n"
             "Dyson HS08 — 40000"
         ).items
-        pages = render_blocks(items, Settings(), {"physical_order": ["Dyson", "Apple"]})
+        pages = render_blocks(items, Settings(), {"physical_order": ["Dyson", "Apple", "iPhone 17"]})
         titles = [re.match(r"<b>(.*?)</b>", page).group(1) for page in pages.values()]
         self.assertEqual(titles[:2], ["Dyson", "Apple"])
         self.assertNotIn("Mac mini", titles)
