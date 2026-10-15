@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo
 from telethon import errors
 
 from prices import (
-    Item, merge_physical_order, physical_message_labels, physical_page_labels,
-    render_blocks, select_items,
+    Item, iphone_model, merge_physical_order, physical_brand_label,
+    physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
 )
 from publisher import Publisher
 from supplier import SupplierReader
@@ -201,6 +201,21 @@ class SyncService:
                 return index
         raise ValueError("Неизвестный источник")
 
+    def source_items(self, source, items):
+        # Source 1 is HI, including its account-2 price comparison. Apply the
+        # restriction before merging so an outdated HI price cannot win for
+        # Samsung or another non-Apple product. Other suppliers stay unrestricted.
+        if self.source_index(source) != 0:
+            return list(items)
+        result = []
+        for item in items:
+            block = item.block
+            if block in {"CPO", "ASIS"}:
+                block = iphone_model(item.title) or product_block(item.title)
+            if not item.accessory and physical_brand_label(block) in {"Apple", "iPhone"}:
+                result.append(item)
+        return result
+
     def cached_items(self, include_closed=False):
         cache = self.state.get("sources", {})
         groups = []
@@ -212,7 +227,7 @@ class SyncService:
                 if value.get("status") == "closed" and not include_closed:
                     continue
                 if value.get("items"):
-                    groups.append([Item.from_dict(item) for item in value.get("items", [])])
+                    groups.append(self.source_items(source, [Item.from_dict(item) for item in value["items"]]))
         return merge_lowest(groups)
 
     async def render(self, closed=False, items=None):
@@ -298,18 +313,22 @@ class SyncService:
                         result = await asyncio.wait_for(reader.fetch(), timeout=budget)
                         previous = cache.get(key, {})
                         status = "closed" if result.closed else "open"
+                        eligible = self.source_items(reader.source, result.items)
+                        retained = self.source_items(reader.source, [
+                            Item.from_dict(item) for item in previous.get("items", [])
+                        ]) if result.closed else eligible
                         fresh_by_source[index].append(status)
                         cache[key] = {
                             "status": status,
                             "checked": timestamp(),
-                            "items": previous.get("items", []) if result.closed else [i.to_dict() for i in result.items],
+                            "items": [item.to_dict() for item in retained],
                             "rejected": result.rejected[:200],
                             "rejected_count": len(result.rejected),
                             "error": None,
                             "account": slot,
                         }
                         if status == "open":
-                            fresh_open_groups.append(result.items)
+                            fresh_open_groups.append(eligible)
                     except (errors.AuthKeyDuplicatedError, errors.UnauthorizedError) as exc:
                         if slot == 1:
                             raise LoginRequired("Сессия Telegram отозвана; выполни /login 1 заново") from exc
