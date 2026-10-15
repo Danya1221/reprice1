@@ -22,7 +22,9 @@ PRICE = re.compile(
     re.I,
 )
 ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|кабел[ья]|кабель|адаптер|[АA]dapter|переходник|зарядк|"
-                       r"ремеш|бампер|case\b|charger\b|cable\b", re.I)
+                       r"ремеш|бампер|case\b|charger\b|cable\b|"
+                       r"\b(?:tempered\s+glass|screen\s+protector)\b|"
+                       r"\bgadgess\b.*\bglass\b|^\s*(?:premium\s+)?corning\s+glass\b", re.I)
 ASIS = re.compile(r"\bAS[\s-]?IS\b|\bASIS\b|асис", re.I)
 CPO = re.compile(r"\bCPO\b", re.I)
 PACKAGING_NOTE = r"ориг(?:инальная)?\.?\s*упак(?:овка)?\.?"
@@ -36,6 +38,7 @@ IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max
 SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini|air))?)\s+(?=\d{1,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
 BRANDS = (
     ("Ray-Ban Meta", r"ray[\s-]?ban|wayfarer|skyler"),
+    ("Oakley Meta", r"\boakley\b"),
     ("Oura Ring", r"\boura(?:\s+ring)?\b"),
     ("LEGO", r"\blego\b|лего"),
     ("Dyson", r"\bdyson\b|дайсон"),
@@ -43,15 +46,19 @@ BRANDS = (
     ("Rode", r"\br(?:o|ø)de\b"),
     ("COROS", r"\bcoros\b"),
     ("DJI / Insta360", r"\bdji\b|\binsta\s*360\b"),
-    ("Kodak / Fujifilm", r"\bkodak\b|\bfujifilm\b"),
+    ("Kodak / Fujifilm", r"\bkodak\b|\bfujifilm\b|\binstax\b"),
     ("Bowers & Wilkins", r"bowers|b&w|\bpx[78]\b"),
     ("Harman Kardon / Bose", r"harman\s*kardon|\bbose\b|\baura\s+studio\b|\bonyx\b|soundsticks"),
+    ("Sennheiser", r"\bsennheiser\b"),
+    ("PLAUD", r"\bplaud\b"),
+    ("Яндекс", r"\bяндекс\b|\byandex\b"),
     ("Google", r"\bgoogle\b|\bpixel\b|\bfitbit\b"),
     ("Samsung", r"\bsamsung\b|\bgalaxy\b|самсунг"),
     ("Apple", r"\bapple\b|\biphone\b|айфон|\bipad\b|\bmacbook\b|\bairpods\b|\bimac\b|"
               r"\bmac\s+mini\b|\bmac\s+studio\b|\bapple\s*tv\b|\bairtag\b|apple\s*watch"),
     ("Sony", r"\bsony\b"),
-    ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b|^\s*(?:redmi\s+)?note\s+\d{1,2}[a-z]*\b"),
+    ("Xiaomi", r"\bxiaomi\b|\bredmi\b|\bpoco\b|^\s*(?:redmi\s+)?note\s+\d{1,2}[a-z]*\b|"
+               r"^\s*x8\s+pro\s+max\.?\s+\d{1,2}\s*/\s*\d{2,4}\b"),
     ("Huawei", r"\bhuawei\b"),
     ("Honor", r"\bhonor\b"),
     ("Realme", r"\brealme\b|реалми"),
@@ -63,7 +70,7 @@ BRANDS = (
     ("Nothing", r"\bnothing\b|\bcmf\b"),
     ("Nubia", r"\bnubia\b|red\s*magic"),
     ("Garmin", r"\bgarmin\b"),
-    ("GoPro", r"\bgopro\b"),
+    ("GoPro", r"\bgopro\b|^\s*hero\s*\d{1,2}\s+black\b"),
     ("Marshall", r"\bmarshall\b"),
     ("Anker", r"\banker\b|\bsoundcore\b"),
     ("JBL", r"\bjbl\b"),
@@ -294,6 +301,8 @@ def apple_computer_block(title):
 def apple_accessory_block(title):
     """Apple power adapters / MacBook transitions belong to the common Apple post."""
     plain = FLAGS.sub("", clean(title)).strip()
+    if re.search(r"^(?:Apple\s+)?Magic\s+(?:Mouse|Keyboard|Trackpad)\b", plain, re.I):
+        return "Apple Accessories"
     mixed_adapter = r"(?:Adapter|Аdapter|адаптер)"
     if "" in title and re.search(mixed_adapter, plain, re.I):
         return "Apple Accessories"
@@ -347,13 +356,16 @@ def normal_title(title, context=""):
     title = strip_decoration(title)
     title = re.sub(r"\bSM-[A-Za-z0-9/]+\b", "", title, flags=re.I)
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
+    # Supplier rows may use Cyrillic Е instead of Latin e in iPhone 16e/17e.
+    # Restrict the substitution to the model prefix, not product descriptions.
+    title = re.sub(r"^((?:iPhone\s*:?\s*)?\d{1,2})\s*[eе]\b", r"\1e", title, flags=re.I)
     plain = FLAGS.sub("", title).strip()
     if SHORT_IPHONE.match(plain):
         # A flag in the middle means the flag-free text is not a substring.
         # Insert before the model, never at find()'s -1 position near the end.
         pos = re.search(r"\d", title).start()
         title = title[:pos] + "iPhone " + title[pos:]
-    elif context and not brand_of(title) and not apple_ipad_block(title) and not apple_computer_block(title) and not apple_accessory_block(title):
+    elif context and not brand_of(title) and not apple_ipad_block(title) and not apple_computer_block(title) and not apple_accessory_block(title) and not ACCESSORY.search(title):
         # Samsung block labels are navigation names, not product-name prefixes.
         # Prefix bare A/S/Tab rows with the brand only, otherwise rows become e.g.
         # "Samsung A + S25 S25 ...".
@@ -415,10 +427,14 @@ class Item:
     def from_dict(cls, value):
         data = {**value, "price": Decimal(value["price"])}
         data["title"] = normal_title(data["title"])
-        if data.get("block") not in {"ASIS", "CPO", "Аксессуары"}:
+        if data.get("block") not in {"ASIS", "CPO"}:
             model = iphone_model(data["title"])
             known = iphone_publish_block(model) if model else product_block(data["title"])
-            if known:
+            if known == "Apple Accessories":
+                data.update(block=known, accessory=False)
+            elif ACCESSORY.search(data["title"]):
+                data.update(block="Аксессуары", accessory=True)
+            elif known and data.get("block") != "Аксессуары":
                 data["block"] = known
         return cls(**data)
 
