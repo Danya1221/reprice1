@@ -25,6 +25,18 @@ ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|к�
                        r"ремеш|бампер|case\b|charger\b|cable\b|"
                        r"\b(?:tempered\s+glass|screen\s+protector)\b|"
                        r"\bgadgess\b.*\bglass\b|^\s*(?:premium\s+)?corning\s+glass\b", re.I)
+DJI_MIC_KIT = re.compile(
+    r"^\s*DJI\s+Mic\b.*?(?P<bundle>\((?=[^)]*\b\d+\s*TX\b)(?=[^)]*\b\d+\s*RX\b)[^)]*\))",
+    re.I,
+)
+PIXEL_WATCH_CONFIGURATION = re.compile(
+    r"^\s*(?:Google\s+)?Pixel\s+Watch\s+\d+\b(?=[^\n]*\b\d{2}\s*mm\b)"
+    r"(?=[^\n]*\bCase\s*/[^\n]*\bBand\b)", re.I,
+)
+WATCH_BODY_CASE = re.compile(
+    r"\b(?:Aluminum|Aluminium|Titanium|Stainless\s+Steel|Steel|Silver|Gold|Ceramic|Polymer)\s+Case\b",
+    re.I,
+)
 ASIS = re.compile(r"\bAS[\s-]?IS\b|\bASIS\b|асис", re.I)
 CPO = re.compile(r"\bCPO\b", re.I)
 PACKAGING_NOTE = r"ориг(?:инальная)?\.?\s*упак(?:овка)?\.?"
@@ -32,7 +44,8 @@ ORIGINAL_PACKAGING = re.compile(
     r"\(\s*" + PACKAGING_NOTE + r"(?:\s*iphone)?\s*\)|\b" + PACKAGING_NOTE + r"(?!\w)", re.I,
 )
 INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activated|не[\s-]*активирован\w*", re.I)
-ACTIVE = re.compile(r"\bактив\w*|\bactive\b|\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
+ACTIVE = re.compile(r"\bактив\w*|\bactive\b(?![\s-]+(?:band|strap|noise)\b)|"
+                    r"\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
 IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max\b|pro\b|"
                     r"plus\b|mini\b|air\b)?|air\b|se(?:\s*\d)?)", re.I)
 SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini|air))?)\s+(?=\d{1,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
@@ -94,6 +107,18 @@ CONDITION_ORDER = {"inactive": 0, "active": 1, "unknown": 2}
 
 def clean(text):
     return SPACE.sub(" ", unicodedata.normalize("NFKC", text).replace("\u200b", "")).strip()
+
+
+def is_accessory(title):
+    # A TX/RX kit is a microphone system. Its included Charging Case does not
+    # turn it into an accessory; a case sold on its own still is an accessory.
+    kit = DJI_MIC_KIT.search(title)
+    if kit:
+        title = title[:kit.start("bundle")] + title[kit.end("bundle"):]
+    if PIXEL_WATCH_CONFIGURATION.search(title):
+        # In a watch size/case/band configuration, Case describes the housing.
+        title = WATCH_BODY_CASE.sub("", title)
+    return bool(ACCESSORY.search(title))
 
 
 def strip_decoration(text):
@@ -365,7 +390,7 @@ def normal_title(title, context=""):
         # Insert before the model, never at find()'s -1 position near the end.
         pos = re.search(r"\d", title).start()
         title = title[:pos] + "iPhone " + title[pos:]
-    elif context and not brand_of(title) and not apple_ipad_block(title) and not apple_computer_block(title) and not apple_accessory_block(title) and not ACCESSORY.search(title):
+    elif context and not brand_of(title) and not apple_ipad_block(title) and not apple_computer_block(title) and not apple_accessory_block(title) and not is_accessory(title):
         # Samsung block labels are navigation names, not product-name prefixes.
         # Prefix bare A/S/Tab rows with the brand only, otherwise rows become e.g.
         # "Samsung A + S25 S25 ...".
@@ -430,9 +455,10 @@ class Item:
         if data.get("block") not in {"ASIS", "CPO"}:
             model = iphone_model(data["title"])
             known = iphone_publish_block(model) if model else product_block(data["title"])
-            if known == "Apple Accessories":
+            complete_device = DJI_MIC_KIT.search(data["title"]) or PIXEL_WATCH_CONFIGURATION.search(data["title"])
+            if known == "Apple Accessories" or (known and complete_device and not is_accessory(data["title"])):
                 data.update(block=known, accessory=False)
-            elif ACCESSORY.search(data["title"]):
+            elif is_accessory(data["title"]):
                 data.update(block="Аксессуары", accessory=True)
             elif known and data.get("block") != "Аксессуары":
                 data["block"] = known
@@ -494,9 +520,9 @@ def parse_documents(documents, default_currency="RUB"):
             brand = product_block(line)
             special = special_block(line)
             is_header = len(line) <= 80 and not re.search(r"https?://|@\w+|[-—=]\s*\d{3}", line)
-            if is_header and (model or brand or ACCESSORY.search(line) or special):
+            if is_header and (model or brand or is_accessory(line) or special):
                 context = model or (brand if brand != "Apple" else line.strip(":"))
-                if ACCESSORY.search(line):
+                if is_accessory(line):
                     section = "Аксессуары"
                 elif special:
                     section = special
@@ -512,7 +538,7 @@ def parse_documents(documents, default_currency="RUB"):
         title = normal_title(title, context)
         own_brand = product_block(title)
         apple_accessory = own_brand == "Apple Accessories"
-        accessory = (bool(ACCESSORY.search(title)) or (section == "Аксессуары" and not own_brand)) and not apple_accessory
+        accessory = (is_accessory(title) or (section == "Аксессуары" and not own_brand)) and not apple_accessory
         model = iphone_model(title)
         special = special_block(title)
         if not special and section in {"ASIS", "CPO"}:

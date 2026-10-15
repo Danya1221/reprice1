@@ -3,7 +3,7 @@ import unittest
 from collections import Counter
 
 from config import Settings
-from prices import Item, parse_documents, render_blocks, select_items
+from prices import Item, activation_state, parse_documents, render_blocks, select_items
 
 
 SAMPLE = """Meta Oakley HSTN S51 (F Black, L Clear) 00W8002🇺🇸 — 30 300
@@ -44,6 +44,64 @@ EXPECTED_BLOCKS = (
 
 
 class SupplierCategoryTests(unittest.TestCase):
+    def test_dji_microphone_kit_is_visible_with_accessories_disabled(self):
+        title = "DJI Mic Mini (2TX+1RX+Charging Case)"
+        fresh = parse_documents([title + " — 6 900"]).items[0]
+        cached = Item.from_dict({**fresh.to_dict(), "block": "Аксессуары", "accessory": True})
+        for item in (fresh, cached):
+            with self.subTest(item=item):
+                self.assertEqual((item.title, item.block, item.accessory),
+                                 (title, "DJI / Insta360", False))
+                self.assertEqual(str(item.price), "6900")
+                self.assertEqual(select_items([item], Settings(allow_accessories=False)), [item])
+
+    def test_separately_sold_microphone_cases_remain_accessories(self):
+        for title in (
+            "DJI Mic Mini Charging Case",
+            "Charging Case for DJI Mic Mini",
+            "DJI Mic Mini (Charging Case)",
+            "DJI Mic Mini Case (2TX+1RX)",
+            "Чехол DJI Mic Mini (2TX+1RX+Charging Case)",
+        ):
+            with self.subTest(title=title):
+                fresh = parse_documents([title + " — 2000"]).items[0]
+                cached = Item.from_dict(fresh.to_dict())
+                for item in (fresh, cached):
+                    self.assertEqual((item.block, item.accessory), ("Аксессуары", True))
+                    self.assertEqual(select_items([item], Settings(allow_accessories=False)), [])
+
+    def test_pixel_watch_case_and_active_band_are_device_descriptions(self):
+        sample = """Google Pixel Watch 5 WI-FI 41mm Matte Black Aluminum Case / Obsidian Active Band (2nd gen)🇺🇸 — 33 100
+Google Pixel Watch 5 WI-FI 41mm Polished Silver Aluminum Case / Fog Active Band (2nd gen)🇺🇸 — 33 100
+Google Pixel Watch 5 WI-FI 41mm Satin Pyrite Aluminum Case / Olive Active Band (2nd gen)🇺🇸 — 33 100
+Google Pixel Watch 5 WI-FI 45mm Black Aluminum Case / Obsidian Active Band (2nd gen)🇺🇸 — 34 600
+Google Pixel Watch 5 WI-FI 45mm Polished Silver Case / Fog Active Band🇺🇸 — 34 600
+Google Pixel Watch 5 WI-FI 45mm Satin Pyrite Aluminum Case / Olive Active Band (2nd gen)🇺🇸 — 34 600"""
+        fresh = parse_documents([sample]).items
+        cached = [Item.from_dict({**item.to_dict(), "block": "Аксессуары", "accessory": True}) for item in fresh]
+        for items in (fresh, cached):
+            self.assertEqual(len(items), 6)
+            for item in items:
+                self.assertEqual((item.block, item.accessory), ("Google", False))
+                self.assertEqual(activation_state(item.title), "unknown")
+            selected = select_items(items, Settings(allow_accessories=False))
+            self.assertEqual(len(selected), 6)
+            self.assertEqual([str(item.price) for item in selected], ["33100"] * 3 + ["34600"] * 3)
+            text = "\n".join(render_blocks(selected, Settings()).values())
+            self.assertNotIn("<b>— Актив —</b>", text)
+            self.assertEqual(text.count("Active Band"), 6)
+
+    def test_explicit_activation_markers_still_win_over_band_description(self):
+        title = "Google Pixel Watch 5 WI-FI 41mm Aluminum Case / Obsidian Active Band"
+        for marker in ("Актив", "Active", "Activated", "Pre-activated"):
+            with self.subTest(marker=marker):
+                self.assertEqual(activation_state(title + " · " + marker), "active")
+        for marker in ("Не актив", "Не активирован", "Inactive", "Not activated"):
+            with self.subTest(marker=marker):
+                self.assertEqual(activation_state(title + " · " + marker), "inactive")
+        accessory = parse_documents(["Чехол для Google Pixel Watch 5 41mm Aluminum Case — 2000"]).items[0]
+        self.assertTrue(accessory.accessory)
+
     def test_all_reported_rows_get_categories_without_price_or_country_loss(self):
         result = parse_documents(["Товары\n" + SAMPLE])
         self.assertFalse(result.rejected)
