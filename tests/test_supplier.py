@@ -75,6 +75,32 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
             await self.reader.collect_action(action)
         self.assertEqual(self.client.handlers, [])
 
+    async def test_feed_ignores_photo_and_video_with_price_captions(self):
+        self.reader.source = Source("@supplier", mode="feed")
+        photo = message(2, "Dyson HS09 — 10000")
+        photo.photo = SimpleNamespace(id=101)
+        video = message(3, "Dyson HS10 — 12000")
+        video.document = SimpleNamespace(
+            size=8 * 1024 * 1024, mime_type="video/mp4",
+            attributes=[SimpleNamespace(file_name="pretend_price.xlsx")])
+        self.client.rows = [message(1, "Dyson HS08 — 40000"), photo, video]
+        result = await self.reader.fetch()
+        self.assertEqual([item.price for item in result.items], [40000])
+        self.assertEqual(self.reader.last_read_stats["messages"], 3)
+        self.assertEqual(self.reader.last_read_stats["ignored_media"], 2)
+        self.assertEqual(self.reader.last_read_stats["price_files"], 0)
+
+    async def test_video_file_is_never_downloaded_as_spreadsheet(self):
+        self.reader.source = Source("@supplier", mode="feed")
+        video = message(1, "Dyson HS10 — 12000")
+        video.document = SimpleNamespace(size=12 * 1024 * 1024, mime_type="video/mp4",
+            attributes=[SimpleNamespace(file_name="fake.xlsx")])
+        self.client.download_media = AsyncMock(side_effect=AssertionError("Do not download media"))
+        self.client.rows = [video, message(2, "Dyson HS08 — 40000")]
+        result = await self.reader.fetch()
+        self.assertEqual(len(result.items), 1)
+        self.client.download_media.assert_not_awaited()
+
     def test_button_labels_ignore_emoji(self):
         self.assertEqual(button_label("📦 Прайс"), button_label("Прайс"))
 
