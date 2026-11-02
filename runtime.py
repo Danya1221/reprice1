@@ -58,7 +58,7 @@ class SyncService:
         self._load_channel_sources()
         self.clients = {}
         self.reader_groups = {
-            1: [SupplierReader(client, settings, source) for source in settings.sources]
+            1: [SupplierReader(client, settings, source) for source in self._slot_sources(1)]
         }
         self.readers = self.reader_groups[1]  # backward-compatible primary readers
         if client is not None:
@@ -76,28 +76,44 @@ class SyncService:
         self.reload_requested = False
 
     def _load_channel_sources(self):
-        channels = self.state.get("supplier_channels", [])
-        added = tuple(Source(item["peer"], mode="feed", label="Канал: " + item["title"])
-                      for item in channels if isinstance(item, dict) and item.get("peer") and item.get("title"))
-        self.settings.sources = self.base_sources + added
+        self.channel_sources = {1: [], 2: []}
+        for item in self.state.get("supplier_channels", []):
+            if not isinstance(item, dict) or not item.get("peer") or not item.get("title"):
+                continue
+            # Previously saved channels belong to account 1 for compatibility.
+            slot = item.get("slot", 1)
+            if slot not in (1, 2):
+                slot = 1
+            source = Source(item["peer"], mode="feed", label="Канал: " + item["title"])
+            self.channel_sources[slot].append(source)
+        self.settings.sources = self.base_sources + tuple(
+            source for slot in (1, 2) for source in self.channel_sources[slot]
+        )
 
     def _replace_channel_readers(self):
-        previous = {reader.source: reader for reader in self.reader_groups.get(1, [])}
-        client = self.clients.get(1)
-        readers = [previous.get(source) or SupplierReader(client, self.settings, source)
-                   for source in self._slot_sources(1)]
-        self.reader_groups[1] = readers
-        self.readers = readers
+        for slot in (1, 2):
+            if slot == 2 and slot not in self.reader_groups and slot not in self.clients:
+                continue
+            previous = {reader.source: reader for reader in self.reader_groups.get(slot, [])}
+            client = self.clients.get(slot)
+            readers = [previous.get(source) or SupplierReader(client, self.settings, source)
+                       for source in self._slot_sources(slot)]
+            self.reader_groups[slot] = readers
+            if slot == 1:
+                self.readers = readers
         self.last_attempt = 0
         self.wake.set()
 
-    async def list_available_supplier_channels(self):
-        """Show broadcast channels visible to the same account that reads prices."""
-        client = self.clients.get(1)
-        if client is None or not self.ready:
-            raise ValueError("Сначала подключи Telegram-аккаунт 1 через /login 1")
-        if not await self.connect_account(1):
-            raise LoginRequired("Аккаунт 1 недоступен. Выполни /login 1")
+    async def list_available_supplier_channels(self, slot=1):
+        """Show broadcast channels visible to the selected Telegram account."""
+        slot = int(slot)
+        if slot not in (1, 2):
+            raise ValueError("Неизвестный Telegram-аккаунт")
+        client = self.clients.get(slot)
+        if client is None or (slot == 1 and not self.ready):
+            raise ValueError(f"Сначала подключи Telegram-аккаунт {slot} через /login {slot}")
+        if not await self.connect_account(slot):
+            raise LoginRequired(f"Аккаунт {slot} недоступен. Выполни /login {slot}")
         me = await client.get_me()
         account_name = (
             "@" + me.username if getattr(me, "username", None)
@@ -116,12 +132,16 @@ class SyncService:
         available.sort(key=lambda item: item["title"].casefold())
         return account_name, available
 
-    async def add_supplier_channel(self, value):
+    async def add_supplier_channel(self, value, slot=1):
+        slot = int(slot)
+        if slot not in (1, 2):
+            raise ValueError("Неизвестный Telegram-аккаунт")
         async with self.lock:
-            client = self.clients.get(1)
-            if not client or not self.ready:
-                raise ValueError("Сначала подключи Telegram-аккаунт 1 через /login 1")
-            await self.connect_account(1)
+            client = self.clients.get(slot)
+            if not client or (slot == 1 and not self.ready):
+                raise ValueError(f"Сначала подключи Telegram-аккаунт {slot} через /login {slot}")
+            if not await self.connect_account(slot):
+                raise LoginRequired(f"Аккаунт {slot} недоступен. Выполни /login {slot}")
             resolved = await resolve_input_peer(client, value, label="Канал", expected="channel")
             entity = await client.get_entity(resolved)
             if not getattr(entity, "broadcast", False):
@@ -140,16 +160,20 @@ class SyncService:
             # Public usernames can be resolved again after a StringSession restart,
             # even when the account is not subscribed and the dialog cache is empty.
             peer = "@" + username if username else channel_id
-            channels.append({"peer": peer, "id": channel_id, "title": title})
+            channels.append({"peer": peer, "id": channel_id, "title": title, "slot": slot})
             self.state.set("supplier_channels", channels)
             self._load_channel_sources()
             self._replace_channel_readers()
             return title
 
-    async def remove_supplier_channel(self, peer):
+    async def remove_supplier_channel(self, peer, slot=1):
+        slot = int(slot)
+        if slot not in (1, 2):
+            raise ValueError("Неизвестный Telegram-аккаунт")
         async with self.lock:
             channels = self.state.get("supplier_channels", [])
-            remaining = [item for item in channels if str(item.get("peer")) != str(peer)]
+            remaining = [item for item in channels
+                         if not (str(item.get("peer")) == str(peer) and item.get("slot", 1) == slot)]
             if len(remaining) == len(channels):
                 raise ValueError("Канал уже удалён")
             self.state.set("supplier_channels", remaining)
@@ -157,12 +181,14 @@ class SyncService:
             self._replace_channel_readers()
 
     def _slot_sources(self, slot):
-        sources = tuple(self.settings.sources)
         if int(slot) == 1:
-            return sources
-        # Account 2 exists only to compare the account-specific HI price.
-        # Never query the remaining suppliers from the second Telegram account.
-        return self.base_sources[:1]
+            return self.base_sources + tuple(self.channel_sources[1])
+        # Preserve the second account's independent HI comparison; other
+        # predefined suppliers remain on account 1. Dynamic channels are
+        # read only by the account explicitly selected when adding them.
+        if int(slot) == 2:
+            return self.base_sources[:1] + tuple(self.channel_sources[2])
+        raise ValueError("Неизвестный Telegram-аккаунт")
 
     def attach_client(self, client, slot=1):
         slot = int(slot)
