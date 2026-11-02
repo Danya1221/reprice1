@@ -662,9 +662,9 @@ def item_sort(item):
 
 
 DYSON_SECTIONS = (
-    "Фены", "Стайлеры", "Выпрямители", "Беспроводные пылесосы",
+    "", "Фены", "Стайлеры", "Выпрямители", "Беспроводные пылесосы",
     "Проводные пылесосы", "Моющая техника", "Роботы-пылесосы",
-    "Очистители и увлажнители", "Сушилки для рук", "Другие товары Dyson",
+    "Очистители и увлажнители", "Сушилки для рук",
 )
 
 
@@ -689,7 +689,7 @@ def dyson_section(title):
         return "Беспроводные пылесосы"
     if re.search(r"\b(?:(?:TP|BP)\s*\d{2}|PH\s*\d{1,2}[A-Z]?|purifier|humidify)\b|очистител|увлажнител", text, re.I):
         return "Очистители и увлажнители"
-    return "Другие товары Dyson"
+    return ""
 
 
 def samsung_a_s25_sort(item):
@@ -931,10 +931,11 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
             if block == "Dyson":
                 current_section = dyson_section(item.title)
                 if current_section != last_dyson_section:
-                    if lines and lines[-1] != "":
+                    if current_section:
+                        if lines and lines[-1] != "":
+                            lines.append("")
+                        lines.append("<b>— " + html.escape(current_section) + " —</b>")
                         lines.append("")
-                    lines.append("<b>— " + html.escape(current_section) + " —</b>")
-                    lines.append("")
                     last_dyson_section = current_section
 
             if block == "Samsung A + S25":

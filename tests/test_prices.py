@@ -78,8 +78,10 @@ class PriceTests(unittest.TestCase):
         content = "\n".join(pages.values())
         for heading in ["Фены", "Стайлеры", "Выпрямители", "Беспроводные пылесосы",
                         "Проводные пылесосы", "Моющая техника", "Роботы-пылесосы",
-                        "Очистители и увлажнители", "Сушилки для рук", "Другие товары Dyson"]:
+                        "Очистители и увлажнители", "Сушилки для рук"]:
             self.assertIn("<b>— " + heading + " —</b>", content)
+        self.assertNotIn("Другие товары Dyson", content)
+        self.assertLess(content.index("Неизвестная модель Z99"), content.index("<b>— Фены —</b>"))
         self.assertEqual(content.count("<code>"), len(rows))
         self.assertEqual(len(pages), 1)
         self.assertTrue(next(iter(pages.values())).startswith("<b>Dyson</b>"))
