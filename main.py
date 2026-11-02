@@ -66,11 +66,11 @@ async def prepare_supplier(service, settings, controller=None):
                 try:
                     await reader.resolve()
                 except Exception as exc:
-                    if slot == 1:
+                    if slot == 1 and reader.source in service.base_sources:
                         raise
                     log.warning(
-                        "Аккаунт 2 не видит %s: %s: %s",
-                        reader.source.label, type(exc).__name__, exc,
+                        "Аккаунт %s не видит %s: %s: %s",
+                        slot, reader.source.label, type(exc).__name__, exc,
                     )
                     reader.entity = None
 

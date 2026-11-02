@@ -5,14 +5,16 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from telethon import errors
+from telethon import errors, utils
+
+from config import Source
 
 from prices import (
     Item, iphone_model, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
 )
 from publisher import Publisher
-from supplier import SupplierReader
+from supplier import SupplierReader, resolve_input_peer
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +54,8 @@ class SyncService:
         self.client = client
         self.settings = settings
         self.state = state
+        self.base_sources = tuple(settings.sources)
+        self._load_channel_sources()
         self.clients = {}
         self.reader_groups = {
             1: [SupplierReader(client, settings, source) for source in settings.sources]
@@ -71,13 +75,69 @@ class SyncService:
         self.account_errors = {}
         self.reload_requested = False
 
+    def _load_channel_sources(self):
+        channels = self.state.get("supplier_channels", [])
+        added = tuple(Source(item["peer"], mode="feed", label="Канал: " + item["title"])
+                      for item in channels if isinstance(item, dict) and item.get("peer") and item.get("title"))
+        self.settings.sources = self.base_sources + added
+
+    def _replace_channel_readers(self):
+        previous = {reader.source: reader for reader in self.reader_groups.get(1, [])}
+        client = self.clients.get(1)
+        readers = [previous.get(source) or SupplierReader(client, self.settings, source)
+                   for source in self._slot_sources(1)]
+        self.reader_groups[1] = readers
+        self.readers = readers
+        self.last_attempt = 0
+        self.wake.set()
+
+    async def add_supplier_channel(self, value):
+        async with self.lock:
+            client = self.clients.get(1)
+            if not client or not self.ready:
+                raise ValueError("Сначала подключи Telegram-аккаунт 1 через /login 1")
+            await self.connect_account(1)
+            resolved = await resolve_input_peer(client, value, label="Канал", expected="channel")
+            entity = await client.get_entity(resolved)
+            if not getattr(entity, "broadcast", False):
+                raise ValueError("Это не канал. Выбери именно канал с прайсом")
+            await client.get_messages(resolved, limit=1)
+            channel_id = utils.get_peer_id(resolved)
+            username = (getattr(entity, "username", None) or "").casefold()
+            channels = self.state.get("supplier_channels", [])
+            if any(str(item.get("id", item.get("peer"))) == str(channel_id) for item in channels):
+                raise ValueError("Этот канал уже добавлен как источник")
+            for source in self.settings.sources:
+                current = str(source.peer).strip().lower().lstrip("@")
+                if current == str(channel_id) or (username and current in {username, "https://t.me/" + username, "t.me/" + username}):
+                    raise ValueError("Этот канал уже добавлен как источник")
+            title = str(getattr(entity, "title", "") or username or channel_id)[:100]
+            # Public usernames can be resolved again after a StringSession restart,
+            # even when the account is not subscribed and the dialog cache is empty.
+            peer = "@" + username if username else channel_id
+            channels.append({"peer": peer, "id": channel_id, "title": title})
+            self.state.set("supplier_channels", channels)
+            self._load_channel_sources()
+            self._replace_channel_readers()
+            return title
+
+    async def remove_supplier_channel(self, peer):
+        async with self.lock:
+            channels = self.state.get("supplier_channels", [])
+            remaining = [item for item in channels if str(item.get("peer")) != str(peer)]
+            if len(remaining) == len(channels):
+                raise ValueError("Канал уже удалён")
+            self.state.set("supplier_channels", remaining)
+            self._load_channel_sources()
+            self._replace_channel_readers()
+
     def _slot_sources(self, slot):
         sources = tuple(self.settings.sources)
         if int(slot) == 1:
             return sources
         # Account 2 exists only to compare the account-specific HI price.
         # Never query the remaining suppliers from the second Telegram account.
-        return sources[:1]
+        return self.base_sources[:1]
 
     def attach_client(self, client, slot=1):
         slot = int(slot)
@@ -205,7 +265,7 @@ class SyncService:
         # Source 1 is HI, including its account-2 price comparison. Apply the
         # restriction before merging so an outdated HI price cannot win for
         # Samsung or another non-Apple product. Other suppliers stay unrestricted.
-        if self.source_index(source) != 0:
+        if not self.base_sources or source != self.base_sources[0]:
             return list(items)
         result = []
         for item in items:
@@ -282,7 +342,7 @@ class SyncService:
         return "error"
 
     def _both_fresh_open(self, source_statuses):
-        return len(self.settings.sources) >= 2 and all(status == "open" for status in source_statuses)
+        return len(self.base_sources) >= 2 and all(status == "open" for status in source_statuses[:len(self.base_sources)])
 
     async def sync(self, force=False):
         async with self.lock:

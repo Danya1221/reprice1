@@ -2,7 +2,7 @@
 import asyncio
 import hashlib
 
-from control_first import FirstMessageController
+from control_channels import ChannelController
 from bot_publisher import is_missing_message_error
 from prices import merge_physical_order, physical_page_labels, render_blocks, select_items
 
@@ -11,7 +11,7 @@ def block_id(block):
     return hashlib.sha256(block.encode()).hexdigest()[:16]
 
 
-class CatalogController(FirstMessageController):
+class CatalogController(ChannelController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.order_selected = {}
