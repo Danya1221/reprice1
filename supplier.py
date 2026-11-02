@@ -127,7 +127,7 @@ async def resolve_input_peer(
     value,
     *,
     label="Telegram peer",
-    dialog_limit=1000,
+    dialog_limit=None,
     expected="any",
 ):
     """Resolve a configured peer without relying on StringSession entity cache.
