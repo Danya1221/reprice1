@@ -77,6 +77,7 @@ class SyncService:
 
     def _load_channel_sources(self):
         self.channel_sources = {1: [], 2: []}
+        self.channel_visibility = {}
         for item in self.state.get("supplier_channels", []):
             if not isinstance(item, dict) or not item.get("peer") or not item.get("title"):
                 continue
@@ -86,6 +87,7 @@ class SyncService:
                 slot = 1
             source = Source(item["peer"], mode="feed", label="Канал: " + item["title"])
             self.channel_sources[slot].append(source)
+            self.channel_visibility[(slot, str(source.peer))] = item.get("visible", True) is not False
         self.settings.sources = self.base_sources + tuple(
             source for slot in (1, 2) for source in self.channel_sources[slot]
         )
@@ -165,6 +167,29 @@ class SyncService:
             self._load_channel_sources()
             self._replace_channel_readers()
             return title
+
+    def source_visible(self, source, slot=1):
+        """Dynamic sources are always read, but can be excluded from publication."""
+        return self.channel_visibility.get((int(slot), str(source.peer)), True)
+
+    async def set_supplier_channel_visibility(self, peer, slot=1, visible=True):
+        slot = int(slot)
+        if slot not in (1, 2):
+            raise ValueError("Неизвестный Telegram-аккаунт")
+        async with self.lock:
+            channels = self.state.get("supplier_channels", [])
+            match = next((item for item in channels if str(item.get("peer")) == str(peer)
+                          and item.get("slot", 1) == slot), None)
+            if match is None:
+                raise ValueError("Канал не найден")
+            match["visible"] = bool(visible)
+            self.state.set("supplier_channels", channels)
+            self._load_channel_sources()
+        # Refresh from cached prices without a new Telegram request.
+        # Do not lock recursively: refresh_format acquires the same lock.
+        if self.ready:
+            await self.refresh_format()
+        return bool(visible)
 
     async def remove_supplier_channel(self, peer, slot=1):
         slot = int(slot)
@@ -334,6 +359,8 @@ class SyncService:
             if slot == 2 and not self.account_configured(2):
                 continue
             for source in self._slot_sources(slot):
+                if not self.source_visible(source, slot):
+                    continue
                 value = cache.get(self.source_cache_key(source, slot), {})
                 if value.get("status") == "closed" and not include_closed:
                     continue
@@ -432,13 +459,16 @@ class SyncService:
                         cache[key] = {
                             "status": status,
                             "checked": timestamp(),
+                            "last_success": timestamp(),
+                            "messages_count": (getattr(reader, "last_read_stats", None) or {}).get("messages"),
+                            "parsed_count": len(result.items),
                             "items": [item.to_dict() for item in retained],
                             "rejected": result.rejected[:200],
                             "rejected_count": len(result.rejected),
                             "error": None,
                             "account": slot,
                         }
-                        if status == "open":
+                        if status == "open" and self.source_visible(reader.source, slot):
                             fresh_open_groups.append(eligible)
                     except (errors.AuthKeyDuplicatedError, errors.UnauthorizedError) as exc:
                         if slot == 1:
@@ -460,10 +490,13 @@ class SyncService:
                     except Exception as exc:
                         log.warning("Не удалось прочитать %s: %s", label, type(exc).__name__)
                         old = cache.get(key, {})
+                        stats = getattr(reader, "last_read_stats", None) or {}
                         cache[key] = {
                             **old,
                             "error": f"{type(exc).__name__}: {exc}",
                             "checked": timestamp(),
+                            "messages_count": stats.get("messages"),
+                            "parsed_count": stats.get("parsed"),
                             "account": slot,
                         }
                         fresh_by_source[index].append("error")
