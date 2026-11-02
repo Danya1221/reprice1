@@ -481,7 +481,11 @@ class SupplierReader:
                     continue
                 self.last_read_stats["price_files"] += 1
                 documents.append(await self.document_text(message))
-        result = parse_documents(documents, self.settings.currency)
+        fallback_block = (
+            "Dyson" if self.source.mode == "feed"
+            and re.search(r"\\bdyson\\b", self.source.label, re.I) else ""
+        )
+        result = parse_documents(documents, self.settings.currency, fallback_block=fallback_block)
         # The parser merges repeated SKU rows. Record both counts so a
         # small catalog can be distinguished from a small number of prices.
         self.last_read_stats["price_rows"] = sum(
