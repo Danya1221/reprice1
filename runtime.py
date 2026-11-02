@@ -91,6 +91,31 @@ class SyncService:
         self.last_attempt = 0
         self.wake.set()
 
+    async def list_available_supplier_channels(self):
+        """Show broadcast channels visible to the same account that reads prices."""
+        client = self.clients.get(1)
+        if client is None or not self.ready:
+            raise ValueError("Сначала подключи Telegram-аккаунт 1 через /login 1")
+        if not await self.connect_account(1):
+            raise LoginRequired("Аккаунт 1 недоступен. Выполни /login 1")
+        me = await client.get_me()
+        account_name = (
+            "@" + me.username if getattr(me, "username", None)
+            else " ".join(filter(None, (
+                getattr(me, "first_name", None), getattr(me, "last_name", None)
+            ))) or "аккаунт 1"
+        )
+        available = []
+        async for dialog in client.iter_dialogs(limit=None):
+            entity = dialog.entity
+            if getattr(entity, "broadcast", False):
+                available.append({
+                    "id": utils.get_peer_id(entity),
+                    "title": str(getattr(entity, "title", "") or dialog.name or "Без названия"),
+                })
+        available.sort(key=lambda item: item["title"].casefold())
+        return account_name, available
+
     async def add_supplier_channel(self, value):
         async with self.lock:
             client = self.clients.get(1)
