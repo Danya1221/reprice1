@@ -41,6 +41,19 @@ class ChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(restarted.settings.sources), 2)
         self.assertEqual(StateStore(self.state.path).get("supplier_channels"), [])
 
+    async def test_lists_only_broadcast_channels_of_account_one(self):
+        self.client.get_me = AsyncMock(return_value=SimpleNamespace(username="pricing"))
+        async def dialogs(**kwargs):
+            self.assertIsNone(kwargs["limit"])
+            yield SimpleNamespace(entity=SimpleNamespace(broadcast=True, title="Прайс А"), name="Прайс А")
+            yield SimpleNamespace(entity=SimpleNamespace(broadcast=False, title="Группа"), name="Группа")
+
+        self.client.iter_dialogs = dialogs
+        with patch("runtime.utils.get_peer_id", return_value=-100123):
+            account, channels = await self.service.list_available_supplier_channels()
+        self.assertEqual(account, "@pricing")
+        self.assertEqual(channels, [{"id": -100123, "title": "Прайс А"}])
+
     async def test_unreadable_channel_is_not_saved(self):
         self.client.get_messages.side_effect = PermissionError("no access")
         with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())):
@@ -76,6 +89,8 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.state = StateStore(Path(self.temp.name) / "state.json")
         self.service = SimpleNamespace(state=self.state, add_supplier_channel=AsyncMock(return_value="Опт"),
+                                       list_available_supplier_channels=AsyncMock(
+                                           return_value=("@pricing", [{"id": -100123, "title": "Опт"}])),
                                        remove_supplier_channel=AsyncMock(), publisher=SimpleNamespace(bind_group=AsyncMock()))
         self.controller = CatalogController("token", self.service, [42])
         self.controller.send = AsyncMock()
@@ -101,6 +116,37 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
         self.controller.channel_waiting.add(42)
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat, "text": "/cancel"})
         self.assertNotIn(42, self.controller.channel_waiting)
+
+    async def test_select_channel_from_account_dialogs(self):
+        await self.controller.handle_callback({"id": "1", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_callback({"id": "2", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:list:0"})
+        self.service.list_available_supplier_channels.assert_awaited_once()
+        self.assertIn("Опт", str(self.controller.send.await_args))
+        await self.controller.handle_callback({"id": "3", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:pick:-100123"})
+        self.service.add_supplier_channel.assert_awaited_once_with(-100123)
+        self.assertNotIn(42, self.controller.channel_waiting)
+
+    async def test_unlisted_channel_cannot_be_picked(self):
+        await self.controller.handle_callback({"id": "1", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_callback({"id": "2", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:list:0"})
+        await self.controller.handle_callback({"id": "3", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:pick:-100987"})
+        self.service.add_supplier_channel.assert_not_awaited()
+
+    async def test_forward_resolution_failure_offers_channel_picker(self):
+        self.service.add_supplier_channel.side_effect = RuntimeError("Не найден access_hash")
+        await self.controller.handle_callback({"id": "1", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat,
+            "forward_origin": {"type": "channel", "chat": {"id": -100123, "type": "channel"}}})
+        markup = self.controller.send.await_args.args[2]
+        self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "channels:list:0")
+        self.assertIn(42, self.controller.channel_waiting)
 
     async def test_other_user_cannot_add_channel(self):
         await self.controller.handle_callback({"id": "1", "from": {"id": 99},
