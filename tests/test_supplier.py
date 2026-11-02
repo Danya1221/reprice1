@@ -132,6 +132,15 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reader.last_read_stats["ignored_media"], 2)
         self.client.download_media.assert_not_awaited()
 
+    async def test_dyson_feed_categorizes_shorthand_models(self):
+        self.reader.source = Source("@dyson", mode="feed", label="Канал: R Dyson")
+        self.client.rows = [message(1, "🇬🇧 V15 SV47 Detect Absolute Yellow/Nickel 52500 📷"),
+                            message(2, "🇪🇺 HS07 Corrale Copper/Nickel с чехлом 38000 📷")]
+        result = await self.reader.fetch()
+        self.assertEqual(len(result.items), 2)
+        self.assertEqual([item.block for item in result.items], ["Dyson", "Dyson"])
+        self.assertEqual(self.reader.last_read_stats["price_rows"], 2)
+
     async def test_video_file_is_never_downloaded_as_spreadsheet(self):
         self.reader.source = Source("@supplier", mode="feed")
         video = message(1, "Dyson HS10 — 12000")
