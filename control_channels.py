@@ -81,6 +81,8 @@ class ChannelController(FirstMessageController):
         await self.answer_callback(callback["id"])
         chat_id = chat.get("id")
         if data.startswith("channels:show:"):
+            self.channel_waiting.discard(user_id)
+            self.channel_choices.pop(user_id, None)
             try:
                 page = int(data.rsplit(":", 1)[1])
             except ValueError:
