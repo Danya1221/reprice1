@@ -123,7 +123,9 @@ class ChannelController(FirstMessageController):
             f"Строк с ценой до объединения: {cached.get('price_rows_count') if cached.get('price_rows_count') is not None else '—'}\n"
             f"Пропущено фото: {cached.get('ignored_photo_posts_count') if cached.get('ignored_photo_posts_count') is not None else '—'}\n"
             f"Пропущено видео: {cached.get('ignored_video_posts_count') if cached.get('ignored_video_posts_count') is not None else '—'}\n"
-            f"С медиа было подписей (не читаем): {cached.get('ignored_caption_posts_count') if cached.get('ignored_caption_posts_count') is not None else '—'}\n"
+            f"Подписи фото/видео: {'✅ читаем текст' if item.get('read_captions', False) else '⛔ не читаем'}\n"
+            f"Пропущено подписей: {cached.get('ignored_caption_posts_count') if cached.get('ignored_caption_posts_count') is not None else '—'}\n"
+            f"Прочитано подписей: {cached.get('read_caption_posts_count') if cached.get('read_caption_posts_count') is not None else '—'}\n"
         )
         if cached.get("error"):
             text += "\n❌ Ошибка: " + str(cached["error"])[:550] + "\n"
@@ -151,6 +153,8 @@ class ChannelController(FirstMessageController):
         await self.send(chat_id, text[:3800], {"inline_keyboard": [
             [{"text": "✅ Показывать товары" if not item.get("visible", True) else "👁 Скрыть товары",
               "callback_data": "channels:toggle:" + token}],
+            [{"text": "📝 Отключить чтение подписей" if item.get("read_captions", False) else
+                      "📝 Читать только текст подписей", "callback_data": "channels:captions:" + token}],
             [{"text": "🔄 Проверить чтение", "callback_data": "channels:check"}],
             [{"text": "⚙️ Категории прайса", "callback_data": "blocks:0"}],
             [{"text": "⬅️ К списку каналов", "callback_data": "channels:show:0"}],
@@ -276,7 +280,7 @@ class ChannelController(FirstMessageController):
         elif data == "channels:check":
             await self.request_sync(chat_id)
             await self.send(chat_id, "После проверки открой «Каналы поставщиков», чтобы увидеть результат.")
-        elif data.startswith(("channels:details:", "channels:toggle:")):
+        elif data.startswith(("channels:details:", "channels:toggle:", "channels:captions:")):
             token = data.rsplit(":", 1)[1]
             item = next((candidate for candidate in self.service.state.get("supplier_channels", [])
                          if channel_token(candidate["peer"], candidate.get("slot", 1)) == token), None)
@@ -285,6 +289,22 @@ class ChannelController(FirstMessageController):
                 return
             if data.startswith("channels:details:"):
                 await self.show_channel_details(chat_id, item)
+            elif data.startswith("channels:captions:"):
+                enabled = not item.get("read_captions", False)
+                try:
+                    await self.service.set_supplier_channel_captions(
+                        item["peer"], slot=item.get("slot", 1), enabled=enabled)
+                except Exception as exc:
+                    await self.send(chat_id, "Не удалось изменить чтение подписей: " + str(exc)[:300])
+                    return
+                if enabled:
+                    await self.send(chat_id,
+                        "✅ Теперь PriceB читает ТОЛЬКО ТЕКСТ подписей к фото/видео в этом канале. "
+                        "Сами медиа не скачиваются и не распознаются. Обновляю прайс.")
+                else:
+                    await self.send(chat_id,
+                        "⛔ Подписи к фото и видео больше не читаются. Обновляю прайс.")
+                await self.request_sync(chat_id)
             else:
                 visible = not item.get("visible", True)
                 try:
