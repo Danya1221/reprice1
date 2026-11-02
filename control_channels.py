@@ -119,6 +119,11 @@ class ChannelController(FirstMessageController):
             f"Не распознано строк: {cached.get('rejected_count', 0)}\n"
             f"Пропущено фото/видео/других медиа: {cached.get('ignored_media_count') if cached.get('ignored_media_count') is not None else '—'}\n"
             f"Прочитано файлов прайса: {cached.get('price_files_count') if cached.get('price_files_count') is not None else '—'}\n"
+            f"Текстовых сообщений: {cached.get('text_posts_count') if cached.get('text_posts_count') is not None else '—'}\n"
+            f"Строк с ценой до объединения: {cached.get('price_rows_count') if cached.get('price_rows_count') is not None else '—'}\n"
+            f"Пропущено фото: {cached.get('ignored_photo_posts_count') if cached.get('ignored_photo_posts_count') is not None else '—'}\n"
+            f"Пропущено видео: {cached.get('ignored_video_posts_count') if cached.get('ignored_video_posts_count') is not None else '—'}\n"
+            f"С медиа было подписей (не читаем): {cached.get('ignored_caption_posts_count') if cached.get('ignored_caption_posts_count') is not None else '—'}\n"
         )
         if cached.get("error"):
             text += "\n❌ Ошибка: " + str(cached["error"])[:550] + "\n"
@@ -128,6 +133,14 @@ class ChannelController(FirstMessageController):
             text += "\nПоказ товаров этого канала отключён. Чтение продолжается.\n"
         if items and not after_filters:
             text += "\nТовары отфильтрованы. Проверь настройки категорий, SIM и аксессуаров.\n"
+        price_rows = cached.get("price_rows_count")
+        parsed_count = cached.get("parsed_count")
+        if price_rows is not None and parsed_count is not None and price_rows > parsed_count:
+            text += f"\nОдинаковые позиции объединены: {price_rows - parsed_count}.\n"
+        caption_posts = cached.get("ignored_caption_posts_count")
+        if caption_posts:
+            text += (f"\n⚠️ {caption_posts} сообщений с фото/видео содержали текстовую подпись. "
+                     "По настройке подписи НЕ читаются, даже если в них есть цены.\n")
         if len(after_filters) > 0:
             text += "\nЭто число до объединения цен поставщиков: в общем прайсе может быть меньше позиций.\n"
         rejected = cached.get("rejected") or []
