@@ -17,6 +17,22 @@ class SupplierTimeout(RuntimeError):
     pass
 
 
+PRICE_DOCUMENT_EXTENSIONS = (".txt", ".csv", ".xlsx")
+# Keep a bounded download and Excel decompression budget. Ordinary Telegram
+# photo/video/audio attachments are not price files and are never downloaded.
+MAX_PRICE_DOCUMENT_BYTES = 30 * 1024 * 1024
+
+
+def price_document_name(document):
+    """Return the filename only for recognized price documents."""
+    if not document:
+        return None
+    name = next((getattr(attr, "file_name", "") for attr in (getattr(document, "attributes", None) or [])
+                 if getattr(attr, "file_name", None)), "")
+    name = name.strip()
+    return name if name.lower().endswith(PRICE_DOCUMENT_EXTENSIONS) else None
+
+
 def signature(message):
     buttons = tuple(tuple(b.text for b in row) for row in (message.buttons or []))
     document = getattr(message, "document", None)
@@ -367,12 +383,21 @@ class SupplierReader:
         document = getattr(message, "document", None)
         if not document:
             return ""
-        if document.size > 5 * 1024 * 1024:
-            raise RuntimeError("Файл прайса больше 5 МБ")
-        name = next((a.file_name for a in document.attributes if hasattr(a, "file_name")), "").lower()
-        if not name.endswith((".txt", ".csv", ".xlsx")):
-            raise RuntimeError("Поддерживаются текстовые прайсы, TXT, CSV и XLSX; получен другой файл")
+        name = price_document_name(document)
+        if name is None:
+            # Channels commonly contain photo/video/audio alongside price posts.
+            # These are not spreadsheet files; keep the caption and ignore media.
+            return ""
+        size = getattr(document, "size", None)
+        if size is not None and size > MAX_PRICE_DOCUMENT_BYTES:
+            mb = size / (1024 * 1024)
+            raise RuntimeError(
+                f"Файл прайса «{name}» ({mb:.1f} МБ) превышает лимит 30 МБ; "
+                "остальные товары не публикуются из неполного прайса"
+            )
         payload = await self.client.download_media(message, file=bytes)
+        if len(payload or b"") > MAX_PRICE_DOCUMENT_BYTES:
+            raise RuntimeError(f"Скачанный файл прайса «{name}» превышает лимит 30 МБ")
         if not payload:
             raise RuntimeError("Не удалось скачать файл прайса")
         if name.endswith(".xlsx"):
@@ -406,12 +431,20 @@ class SupplierReader:
     async def fetch(self):
         self.last_read_stats = None
         messages = await self.expand_catalog(await self.messages())
-        self.last_read_stats = {"messages": len(messages), "parsed": None}
+        self.last_read_stats = {
+            "messages": len(messages), "parsed": None,
+            "ignored_media": 0, "price_files": 0,
+        }
         documents = []
         for message in messages:
             if message.raw_text:
                 documents.append(message.raw_text)
-            if message.document:
+            document = getattr(message, "document", None)
+            if document:
+                if price_document_name(document) is None:
+                    self.last_read_stats["ignored_media"] += 1
+                    continue
+                self.last_read_stats["price_files"] += 1
                 documents.append(await self.document_text(message))
         result = parse_documents(documents, self.settings.currency)
         self.last_read_stats["parsed"] = len(result.items)
