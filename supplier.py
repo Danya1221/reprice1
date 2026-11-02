@@ -10,7 +10,7 @@ from telethon import events, functions, utils
 from telethon.errors import BotResponseTimeoutError
 from telethon.tl import types
 
-from prices import CLOSED, parse_documents, clean, brand_of, ACCESSORY
+from prices import CLOSED, parse_documents, price_lines, split_price, clean, brand_of, ACCESSORY
 
 
 class SupplierTimeout(RuntimeError):
@@ -448,8 +448,10 @@ class SupplierReader:
         self.last_read_stats = None
         messages = await self.expand_catalog(await self.messages())
         self.last_read_stats = {
-            "messages": len(messages), "parsed": None,
-            "ignored_media": 0, "price_files": 0,
+            "messages": len(messages), "parsed": None, "price_rows": None,
+            "text_posts": 0, "ignored_media": 0,
+            "ignored_caption_posts": 0, "ignored_photo_posts": 0,
+            "ignored_video_posts": 0, "price_files": 0,
         }
         documents = []
         for message in messages:
@@ -457,8 +459,15 @@ class SupplierReader:
                 # Ignore both the media and its caption, even if it looks
                 # like a price line. Pure text posts are processed below.
                 self.last_read_stats["ignored_media"] += 1
+                if getattr(message, "raw_text", ""):
+                    self.last_read_stats["ignored_caption_posts"] += 1
+                if getattr(message, "photo", None) is not None:
+                    self.last_read_stats["ignored_photo_posts"] += 1
+                else:
+                    self.last_read_stats["ignored_video_posts"] += 1
                 continue
             if message.raw_text:
+                self.last_read_stats["text_posts"] += 1
                 documents.append(message.raw_text)
             document = getattr(message, "document", None)
             if document:
@@ -468,6 +477,12 @@ class SupplierReader:
                 self.last_read_stats["price_files"] += 1
                 documents.append(await self.document_text(message))
         result = parse_documents(documents, self.settings.currency)
+        # The parser merges repeated SKU rows. Record both counts so a
+        # small catalog can be distinguished from a small number of prices.
+        self.last_read_stats["price_rows"] = sum(
+            split_price(line, self.settings.currency) is not None
+            for line in price_lines(documents)
+        )
         self.last_read_stats["parsed"] = len(result.items)
         if not result.items and any(self.is_closed_text(text) for text in documents):
             result.closed = True
