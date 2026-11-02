@@ -85,7 +85,8 @@ class SyncService:
             slot = item.get("slot", 1)
             if slot not in (1, 2):
                 slot = 1
-            source = Source(item["peer"], mode="feed", label="Канал: " + item["title"])
+            source = Source(item["peer"], mode="feed", label="Канал: " + item["title"],
+                            read_captions=item.get("read_captions", False) is True)
             self.channel_sources[slot].append(source)
             self.channel_visibility[(slot, str(source.peer))] = item.get("visible", True) is not False
         self.settings.sources = self.base_sources + tuple(
@@ -190,6 +191,25 @@ class SyncService:
         if self.ready:
             await self.refresh_format()
         return bool(visible)
+
+    async def set_supplier_channel_captions(self, peer, slot=1, enabled=False):
+        """Opt in to parsing caption text; photos/videos themselves stay unread."""
+        slot = int(slot)
+        if slot not in (1, 2):
+            raise ValueError("Неизвестный Telegram-аккаунт")
+        async with self.lock:
+            channels = self.state.get("supplier_channels", [])
+            match = next((item for item in channels if str(item.get("peer")) == str(peer)
+                          and item.get("slot", 1) == slot), None)
+            if match is None:
+                raise ValueError("Канал не найден")
+            match["read_captions"] = bool(enabled)
+            self.state.set("supplier_channels", channels)
+            self._load_channel_sources()
+            self._replace_channel_readers()
+            # This is a parser change, not a publication-only toggle.
+            # Full Telegram feed must be read again; cached items cannot help.
+        return bool(enabled)
 
     async def remove_supplier_channel(self, peer, slot=1):
         slot = int(slot)
@@ -465,6 +485,7 @@ class SyncService:
                             "price_rows_count": (getattr(reader, "last_read_stats", None) or {}).get("price_rows"),
                             "text_posts_count": (getattr(reader, "last_read_stats", None) or {}).get("text_posts"),
                             "ignored_caption_posts_count": (getattr(reader, "last_read_stats", None) or {}).get("ignored_caption_posts"),
+                            "read_caption_posts_count": (getattr(reader, "last_read_stats", None) or {}).get("read_caption_posts"),
                             "ignored_photo_posts_count": (getattr(reader, "last_read_stats", None) or {}).get("ignored_photo_posts"),
                             "ignored_video_posts_count": (getattr(reader, "last_read_stats", None) or {}).get("ignored_video_posts"),
                             "ignored_media_count": (getattr(reader, "last_read_stats", None) or {}).get("ignored_media"),
@@ -507,6 +528,7 @@ class SyncService:
                             "price_rows_count": stats.get("price_rows"),
                             "text_posts_count": stats.get("text_posts"),
                             "ignored_caption_posts_count": stats.get("ignored_caption_posts"),
+                            "read_caption_posts_count": stats.get("read_caption_posts"),
                             "ignored_photo_posts_count": stats.get("ignored_photo_posts"),
                             "ignored_video_posts_count": stats.get("ignored_video_posts"),
                             "ignored_media_count": stats.get("ignored_media"),
