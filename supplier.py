@@ -400,7 +400,7 @@ class SupplierReader:
             raise RuntimeError(f"Скачанный файл прайса «{name}» превышает лимит 30 МБ")
         if not payload:
             raise RuntimeError("Не удалось скачать файл прайса")
-        if name.endswith(".xlsx"):
+        if name.lower().endswith(".xlsx"):
             from openpyxl import load_workbook
             import zipfile
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
@@ -418,7 +418,7 @@ class SupplierReader:
                 break
         if text is None:
             raise RuntimeError("Не удалось прочитать кодировку TXT/CSV")
-        if name.endswith(".csv"):
+        if name.lower().endswith(".csv"):
             import csv
             try:
                 dialect = csv.Sniffer().sniff(text[:4096], delimiters=";,\t")
