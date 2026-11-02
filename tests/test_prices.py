@@ -25,6 +25,40 @@ class PriceTests(unittest.TestCase):
         self.assertEqual(result.items[0].price, Decimal("58800"))
         self.assertEqual(marked_price(result.items[0], Settings(markup=Decimal(500))), Decimal(59300))
 
+    def test_dyson_text_price_after_camera_and_delivery_emojis(self):
+        result = self.parse("""🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
+🇬🇧 Gen5 SV23 Detect Absolute Purple 62000 📷
+🇭🇰 Dyson Robot Vis Nav 360 - 75000 📷
+🇪🇺 Dyson Big Ball Absolute CY28 2 наша вилка 🔌 45000 📷(синий)
+🇬🇧 V8 SV25 Advanced Silver/Nickel 📷🏎
+🇪🇺 Dyson Big Ball Absolute CY26 2 наша вилка 🔌 (красный)
+🇪🇺 Dyson TP10 White/Silver 38000📷
+""")
+        self.assertEqual(len(result.items), 5)
+        self.assertEqual([item.price for item in result.items],
+                         [Decimal("63000"), Decimal("62000"), Decimal("75000"),
+                          Decimal("45000"), Decimal("38000")])
+        self.assertIn("(синий)", result.items[3].title)
+        self.assertNotIn("📷", result.items[0].title)
+
+    def test_price_on_next_line_accepts_camera_marker(self):
+        result = self.parse("""Dyson V15 SV47 Detect Absolute Yellow/Nickel
+52500 📷""")
+        self.assertEqual(len(result.items), 1)
+        self.assertEqual(result.items[0].price, Decimal("52500"))
+
+    def test_dyson_fallback_category_only_applies_when_requested(self):
+        doc = """🇬🇧 V15 SV47 Detect Absolute Yellow/Nickel (4 насадок) 52500 📷
+🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
+🇰🇷 AirStrait HT01 Apricot Topaz с кейсом 40000 📷
+🇪🇺 Dyson TP10 White/Silver 38000 📷"""
+        normal = parse_documents([doc])
+        dyson = parse_documents([doc], fallback_block="Dyson")
+        self.assertEqual(len(normal.items), 4)
+        self.assertEqual(len(dyson.items), 4)
+        self.assertEqual([item.block for item in dyson.items], ["Dyson"] * 4)
+        self.assertTrue(any(item.block != "Dyson" for item in normal.items))
+
     def test_pro_max_is_separate_from_base(self):
         items = self.parse("iPhone 17 256 Black — 60000\niPhone 17 Pro Max 256 Black — 90000").items
         self.assertEqual([i.block for i in items], ["iPhone 17", "iPhone 17 Pro Max"])
