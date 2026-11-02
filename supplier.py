@@ -483,7 +483,7 @@ class SupplierReader:
                 documents.append(await self.document_text(message))
         fallback_block = (
             "Dyson" if self.source.mode == "feed"
-            and re.search(r"\\bdyson\\b", self.source.label, re.I) else ""
+            and re.search(r"\bdyson\b", self.source.label, re.I) else ""
         )
         result = parse_documents(documents, self.settings.currency, fallback_block=fallback_block)
         # The parser merges repeated SKU rows. Record both counts so a
