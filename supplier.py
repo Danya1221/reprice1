@@ -23,6 +23,20 @@ PRICE_DOCUMENT_EXTENSIONS = (".txt", ".csv", ".xlsx")
 MAX_PRICE_DOCUMENT_BYTES = 30 * 1024 * 1024
 
 
+def is_photo_or_video(message):
+    """Do not parse photo/video attachments or their captions as prices."""
+    if getattr(message, "photo", None) is not None:
+        return True
+    document = getattr(message, "document", None)
+    if document is None:
+        return False
+    mime = str(getattr(document, "mime_type", "") or "").casefold()
+    if mime.startswith(("image/", "video/")):
+        return True
+    return any(isinstance(attr, types.DocumentAttributeVideo)
+               for attr in (getattr(document, "attributes", None) or []))
+
+
 def price_document_name(document):
     """Return the filename only for recognized price documents."""
     if not document:
@@ -383,6 +397,8 @@ class SupplierReader:
         document = getattr(message, "document", None)
         if not document:
             return ""
+        if is_photo_or_video(message):
+            return ""
         name = price_document_name(document)
         if name is None:
             # Channels commonly contain photo/video/audio alongside price posts.
@@ -437,6 +453,11 @@ class SupplierReader:
         }
         documents = []
         for message in messages:
+            if is_photo_or_video(message):
+                # Ignore both the media and its caption, even if it looks
+                # like a price line. Pure text posts are processed below.
+                self.last_read_stats["ignored_media"] += 1
+                continue
             if message.raw_text:
                 documents.append(message.raw_text)
             document = getattr(message, "document", None)
