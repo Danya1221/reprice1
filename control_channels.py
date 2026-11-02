@@ -5,8 +5,8 @@ import re
 from control_first import FirstMessageController
 
 
-def channel_token(peer):
-    return hashlib.sha256(str(peer).encode()).hexdigest()[:16]
+def channel_token(peer, slot=1):
+    return hashlib.sha256(f"{slot}:{peer}".encode()).hexdigest()[:16]
 
 
 class ChannelController(FirstMessageController):
@@ -14,6 +14,7 @@ class ChannelController(FirstMessageController):
         super().__init__(*args, **kwargs)
         self.channel_waiting = set()
         self.channel_choices = {}
+        self.channel_slots = {}
 
     def menu(self):
         menu = super().menu()
@@ -25,8 +26,9 @@ class ChannelController(FirstMessageController):
         page = max(0, min(page, max(0, (len(channels) - 1) // 8)))
         rows = []
         for item in channels[page * 8:page * 8 + 8]:
-            rows.append([{"text": "🗑 " + item["title"][:55],
-                          "callback_data": "channels:remove:" + channel_token(item["peer"])}])
+            slot = item.get("slot", 1)
+            rows.append([{"text": f"🗑 [{slot}] " + item["title"][:48],
+                          "callback_data": "channels:remove:" + channel_token(item["peer"], slot)}])
         navigation = []
         if page:
             navigation.append({"text": "⬅️", "callback_data": f"channels:show:{page - 1}"})
@@ -38,34 +40,35 @@ class ChannelController(FirstMessageController):
         rows.append([{"text": "⬅️ Главное меню", "callback_data": "channels:back"}])
         text = ("📥 Каналы поставщиков\n\n"
                 + (f"Подключено: {len(channels)}. Нажми 🗑, чтобы отключить канал." if channels else "Пока нет добавленных каналов.")
-                + "\n\nКаналы читает Telegram-аккаунт 1. Бот читает доступную историю, "
-                  "поэтому старые объявления с ценами тоже могут попасть в прайс.")
+                + "\n\n[1] / [2] — аккаунт, читающий источник. "
+                  "Бот читает доступную историю, поэтому старые цены тоже могут попасть в прайс.")
         await self.send(chat_id, (notice + "\n\n" if notice else "") + text, {"inline_keyboard": rows})
 
-    async def show_channel_choices(self, chat_id, user_id, page=0):
-        if user_id not in self.channel_choices or page == 0:
-            account_name, channels = await self.service.list_available_supplier_channels()
-            self.channel_choices[user_id] = (account_name, channels)
-        account_name, channels = self.channel_choices[user_id]
+    async def show_channel_choices(self, chat_id, user_id, slot, page=0):
+        selected = self.channel_choices.get(user_id)
+        if selected is None or selected[0] != slot or page == 0:
+            account_name, channels = await self.service.list_available_supplier_channels(slot=slot)
+            self.channel_choices[user_id] = (slot, account_name, channels)
+        _, account_name, channels = self.channel_choices[user_id]
         page = max(0, min(page, max(0, (len(channels) - 1) // 8)))
         rows = [
-            [{"text": item["title"][:55], "callback_data": f"channels:pick:{item['id']}"}]
+            [{"text": item["title"][:55], "callback_data": f"channels:pick:{slot}:{item['id']}"}]
             for item in channels[page * 8:page * 8 + 8]
         ]
         nav = []
         if page:
-            nav.append({"text": "⬅️", "callback_data": f"channels:list:{page - 1}"})
+            nav.append({"text": "⬅️", "callback_data": f"channels:list:{slot}:{page - 1}"})
         if (page + 1) * 8 < len(channels):
-            nav.append({"text": "➡️", "callback_data": f"channels:list:{page + 1}"})
+            nav.append({"text": "➡️", "callback_data": f"channels:list:{slot}:{page + 1}"})
         if nav:
             rows.append(nav)
-        rows.append([{"text": "⬅️ К каналам поставщиков", "callback_data": "channels:show:0"}])
+        rows.append([{"text": "⬅️ Выбрать другой аккаунт", "callback_data": "channels:add"}])
         notice = (
-            f"📋 Каналы Telegram-аккаунта 1 ({account_name})\n"
+            f"📋 Каналы Telegram-аккаунта {slot} ({account_name})\n"
             f"Найдено: {len(channels)}. Выбери канал с прайсом."
             if channels else
-            f"📋 У Telegram-аккаунта 1 ({account_name}) нет доступных каналов.\n"
-            "Проверь, что подписан на канал именно этим аккаунтом, или подключи нужный через /login 1."
+            f"📋 У Telegram-аккаунта {slot} ({account_name}) нет доступных каналов.\n"
+            f"Проверь подписку этим аккаунтом или подключи его через /login {slot}."
         )
         await self.send(chat_id, notice, {"inline_keyboard": rows})
 
@@ -83,58 +86,94 @@ class ChannelController(FirstMessageController):
         if data.startswith("channels:show:"):
             self.channel_waiting.discard(user_id)
             self.channel_choices.pop(user_id, None)
+            self.channel_slots.pop(user_id, None)
             try:
                 page = int(data.rsplit(":", 1)[1])
             except ValueError:
                 page = 0
             await self.show_channels(chat_id, page)
         elif data == "channels:add":
-            self.channel_waiting.add(user_id)
+            self.channel_waiting.discard(user_id)
             self.channel_choices.pop(user_id, None)
+            self.channel_slots.pop(user_id, None)
             self.first_message_waiting.discard(user_id)
             getattr(self, "order_selected", {}).pop(user_id, None)
-            await self.send(chat_id, "Выбери канал из списка аккаунта 1, перешли сообщение из канала или отправь @username / публичную ссылку.\n\n"
+            await self.send(chat_id, "С какого Telegram-аккаунта читать канал?", {"inline_keyboard": [
+                [{"text": "👤 Аккаунт 1", "callback_data": "channels:account:1"},
+                 {"text": "👤 Аккаунт 2", "callback_data": "channels:account:2"}],
+                [{"text": "⬅️ Назад", "callback_data": "channels:show:0"}],
+            ]})
+        elif data.startswith("channels:account:"):
+            try:
+                slot = int(data.rsplit(":", 1)[1])
+            except ValueError:
+                slot = 0
+            if slot not in (1, 2):
+                await self.send(chat_id, "Выбери аккаунт 1 или 2.")
+                return
+            self.channel_waiting.add(user_id)
+            self.channel_slots[user_id] = slot
+            self.channel_choices.pop(user_id, None)
+            await self.send(chat_id,
+                            f"Аккаунт {slot}. Выбери канал из списка или перешли сообщение "
+                            "из канала / отправь @username или публичную ссылку.\n"
                             "Для отмены отправь /cancel.", {"inline_keyboard": [
-                                [{"text": "📋 Выбрать из моих каналов", "callback_data": "channels:list:0"}],
-                                [{"text": "⬅️ Назад", "callback_data": "channels:show:0"}],
+                                [{"text": f"📋 Каналы аккаунта {slot}", "callback_data": f"channels:list:{slot}:0"}],
+                                [{"text": "⬅️ Выбрать другой аккаунт", "callback_data": "channels:add"}],
                             ]})
         elif data.startswith("channels:list:"):
             try:
-                page = int(data.rsplit(":", 1)[1])
-                await self.show_channel_choices(chat_id, user_id, page)
+                _, _, slot_text, page_text = data.split(":")
+                slot, page = int(slot_text), int(page_text)
+            except ValueError:
+                await self.send(chat_id, "Выбери аккаунт заново через «Добавить канал».")
+                return
+            if (user_id not in self.channel_waiting or
+                    self.channel_slots.get(user_id) != slot):
+                await self.send(chat_id, "Сначала выбери Telegram-аккаунт через «Добавить канал».")
+                return
+            try:
+                await self.show_channel_choices(chat_id, user_id, slot, page)
             except Exception as exc:
-                await self.send(chat_id, "Не удалось загрузить каналы аккаунта 1: " + str(exc)[:250])
+                await self.send(chat_id, f"Не удалось загрузить каналы аккаунта {slot}: " + str(exc)[:250])
         elif data.startswith("channels:pick:"):
             try:
-                peer_id = int(data.rsplit(":", 1)[1])
+                _, _, slot_text, peer_text = data.split(":")
+                slot, peer_id = int(slot_text), int(peer_text)
             except ValueError:
                 await self.send(chat_id, "Некорректный канал. Открой список заново.")
                 return
-            candidates = self.channel_choices.get(user_id, ("", []))[1]
-            if user_id not in self.channel_waiting or not any(item["id"] == peer_id for item in candidates):
+            selected = self.channel_choices.get(user_id)
+            if (user_id not in self.channel_waiting or
+                    self.channel_slots.get(user_id) != slot or
+                    selected is None or selected[0] != slot or
+                    not any(item["id"] == peer_id for item in selected[2])):
                 await self.send(chat_id, "Список устарел. Нажми «Добавить канал» ещё раз.")
                 return
             try:
-                title = await self.service.add_supplier_channel(peer_id)
+                title = await self.service.add_supplier_channel(peer_id, slot=slot)
             except Exception as exc:
                 await self.send(chat_id, "Не удалось подключить выбранный канал: " + str(exc)[:300],
-                                {"inline_keyboard": [[{"text": "📋 Повторить выбор", "callback_data": "channels:list:0"}]]})
+                                {"inline_keyboard": [[{"text": "📋 Повторить выбор",
+                                                      "callback_data": f"channels:list:{slot}:0"}]]})
                 return
             self.channel_waiting.discard(user_id)
             self.channel_choices.pop(user_id, None)
-            await self.show_channels(chat_id, notice=f"✅ Канал «{title}» добавлен. Он будет прочитан при ближайшем обновлении.")
+            self.channel_slots.pop(user_id, None)
+            await self.show_channels(chat_id, notice=f"✅ Канал «{title}» подключён к аккаунту {slot}.")
         elif data.startswith("channels:remove:"):
             token = data.rsplit(":", 1)[1]
             channel = next((item for item in self.service.state.get("supplier_channels", [])
-                            if channel_token(item["peer"]) == token), None)
+                            if channel_token(item["peer"], item.get("slot", 1)) == token), None)
             if channel is None:
                 await self.show_channels(chat_id, notice="Этот канал уже отключён.")
                 return
-            await self.service.remove_supplier_channel(channel["peer"])
+            await self.service.remove_supplier_channel(channel["peer"], slot=channel.get("slot", 1))
             await self.show_channels(chat_id, notice=f"✅ Канал «{channel['title']}» отключён. Изменение применится при следующем обновлении прайса.")
         elif data == "channels:back":
             self.channel_waiting.discard(user_id)
             self.channel_choices.pop(user_id, None)
+            self.channel_slots.pop(user_id, None)
             await self.send(chat_id, "🛠 Управление прайсом", self.menu())
 
     async def handle_message(self, message):
@@ -149,6 +188,7 @@ class ChannelController(FirstMessageController):
         if text.startswith("/"):
             self.channel_waiting.discard(user_id)
             self.channel_choices.pop(user_id, None)
+            self.channel_slots.pop(user_id, None)
             if text.split()[0].lower().split("@")[0] == "/cancel":
                 await self.send(chat_id, "Добавление канала отменено.", self.menu())
                 return
@@ -167,13 +207,17 @@ class ChannelController(FirstMessageController):
                 return
             value = "@" + match.group(1)
         try:
-            title = await self.service.add_supplier_channel(value)
+            slot = self.channel_slots.get(user_id, 1)
+            title = await self.service.add_supplier_channel(value, slot=slot)
         except Exception as exc:
+            slot = self.channel_slots.get(user_id, 1)
             await self.send(chat_id,
-                            "Канал не найден в Telegram-аккаунте 1. Проверь, что он открыт именно там, "
+                            f"Канал не найден в Telegram-аккаунте {slot}. Проверь, что он открыт именно там, "
                             "или выбери его из списка.\n\n" + str(exc)[:350],
-                            {"inline_keyboard": [[{"text": "📋 Выбрать доступный канал", "callback_data": "channels:list:0"}]]})
+                            {"inline_keyboard": [[{"text": "📋 Выбрать доступный канал",
+                                                  "callback_data": f"channels:list:{slot}:0"}]]})
             return
         self.channel_waiting.discard(user_id)
         self.channel_choices.pop(user_id, None)
-        await self.show_channels(chat_id, notice=f"✅ Канал «{title}» добавлен. Он будет прочитан при ближайшем обновлении.")
+        slot = self.channel_slots.pop(user_id, 1)
+        await self.show_channels(chat_id, notice=f"✅ Канал «{title}» подключён к аккаунту {slot}.")
