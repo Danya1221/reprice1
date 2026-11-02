@@ -90,6 +90,31 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reader.last_read_stats["ignored_media"], 2)
         self.assertEqual(self.reader.last_read_stats["price_files"], 0)
 
+    async def test_diagnostics_count_duplicate_price_rows_and_skipped_captions(self):
+        self.reader.source = Source("@supplier", mode="feed")
+        photo = message(5, "Dyson Airwrap HS08 — 39900")
+        photo.photo = SimpleNamespace(id=55)
+        video = message(6, "Dyson HS09 — 48000")
+        video.document = SimpleNamespace(
+            mime_type="video/mp4", size=9 * 1024 * 1024,
+            attributes=[SimpleNamespace(file_name="video.mp4")],
+        )
+        self.client.rows = [
+            message(1, "Dyson HS08 — 40000"),
+            message(2, "Dyson HS08 — 39000"),
+            message(3, "Dyson HS09 — 42000"),
+            photo, video,
+        ]
+        result = await self.reader.fetch()
+        self.assertEqual(len(result.items), 2)
+        self.assertEqual(self.reader.last_read_stats["messages"], 5)
+        self.assertEqual(self.reader.last_read_stats["text_posts"], 3)
+        self.assertEqual(self.reader.last_read_stats["price_rows"], 3)
+        self.assertEqual(self.reader.last_read_stats["parsed"], 2)
+        self.assertEqual(self.reader.last_read_stats["ignored_caption_posts"], 2)
+        self.assertEqual(self.reader.last_read_stats["ignored_photo_posts"], 1)
+        self.assertEqual(self.reader.last_read_stats["ignored_video_posts"], 1)
+
     async def test_video_file_is_never_downloaded_as_spreadsheet(self):
         self.reader.source = Source("@supplier", mode="feed")
         video = message(1, "Dyson HS10 — 12000")
