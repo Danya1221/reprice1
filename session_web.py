@@ -84,7 +84,7 @@ def create_app(api_id=None, api_hash=None, setup_key=None):
     async def phone(request):
         data, flow = await check(request)
         async with lock:
-            if time.monotonic() - state["last_code"] < 30:
+            if state["last_code"] and time.monotonic() - state["last_code"] < 30:
                 return page(form("phone", flow, "Подожди 30 секунд перед повторным запросом"), 429)
             await disconnect()
             state.update(flow=flow, phone=str(data.get("phone", "")).strip(), hash=None, stage="phone")
