@@ -115,6 +115,48 @@ class ChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "аккаунт 2"):
             await self.service.list_available_supplier_channels(slot=2)
 
+    async def test_source_visibility_hides_prices_without_stopping_reading(self):
+        with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())), patch(
+                "runtime.utils.get_peer_id", return_value=-100123):
+            await self.service.add_supplier_channel("@supplier_channel")
+        phone = Item("Samsung Galaxy S26 256 Black", Decimal("45000"), "RUB", "Samsung")
+        self.service.readers[0].fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        self.service.readers[1].fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        feed = self.service.readers[2]
+        feed.fetch = AsyncMock(return_value=ParseResult([phone], []))
+        self.service.publisher.publish = AsyncMock(return_value=1)
+        with patch("runtime.is_open", return_value=True):
+            await self.service.sync(force=True)
+            self.assertIn("45 000", "\n".join(self.service.publisher.publish.call_args.args[0].values()))
+            await self.service.set_supplier_channel_visibility("@supplier_channel", visible=False)
+            self.assertEqual(self.service.cached_items(), [])
+            self.assertEqual(self.service.publisher.publish.call_args.args[0], {})
+            self.assertFalse(self.state.get("supplier_channels")[0]["visible"])
+            await self.service.sync(force=True)
+            self.assertEqual(feed.fetch.await_count, 2)
+            self.assertEqual(self.state.get("sources")["@supplier_channel"]["status"], "open")
+            await self.service.set_supplier_channel_visibility("@supplier_channel", visible=True)
+            self.assertIn("45 000", "\n".join(self.service.publisher.publish.call_args.args[0].values()))
+        restarted = SyncService(self.client, Settings(sources=self.service.base_sources),
+                                StateStore(self.state.path))
+        self.assertTrue(restarted.source_visible(restarted._slot_sources(1)[-1], 1))
+
+    async def test_failed_parse_records_read_message_count(self):
+        with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())), patch(
+                "runtime.utils.get_peer_id", return_value=-100123):
+            await self.service.add_supplier_channel("@supplier_channel")
+        for reader in self.service.readers[:2]:
+            reader.fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        failing = self.service.readers[2]
+        failing.last_read_stats = {"messages": 12, "parsed": 0}
+        failing.fetch = AsyncMock(side_effect=RuntimeError("Товары не распознаны"))
+        with patch("runtime.is_open", return_value=True):
+            await self.service.sync(force=True)
+        cached = self.state.get("sources")["@supplier_channel"]
+        self.assertEqual(cached["messages_count"], 12)
+        self.assertEqual(cached["parsed_count"], 0)
+        self.assertIn("Товары не распознаны", cached["error"])
+
     async def test_unreadable_channel_is_not_saved(self):
         self.client.get_messages.side_effect = PermissionError("no access")
         with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())):
@@ -248,6 +290,42 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.handle_callback({"id": "4", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:pick:2:-100123"})
         self.service.add_supplier_channel.assert_not_awaited()
+
+    async def test_channel_status_and_visibility_buttons(self):
+        self.state.set("supplier_channels", [{"peer": "@supplier_channel", "id": -100123,
+                                               "title": "Опт", "slot": 2, "visible": True}])
+        self.state.set("sources", {"account2:@supplier_channel": {
+            "checked": "2026-11-02T11:30:00+00:00", "last_success": "2026-11-02T11:30:00+00:00",
+            "status": "open", "items": [], "messages_count": 17, "parsed_count": 0,
+            "rejected_count": 3, "error": None,
+        }})
+        await self.controller.show_channels(42)
+        body = self.controller.send.await_args.args[1]
+        self.assertIn("Сообщений: 17", body)
+        self.assertIn("товаров: 0", body)
+        self.assertIn("Сообщения прочитаны", body)
+        self.service.set_supplier_channel_visibility = AsyncMock(return_value=False)
+        token = __import__("control_channels").channel_token("@supplier_channel", 2)
+        await self.controller.handle_callback({"id": "1", "from": {"id": 42},
+                                               "message": {"chat": self.chat},
+                                               "data": "channels:toggle:" + token})
+        self.service.set_supplier_channel_visibility.assert_awaited_once_with(
+            "@supplier_channel", slot=2, visible=False)
+
+    async def test_details_explain_global_filter_rejection(self):
+        self.state.set("supplier_channels", [{"peer": "@supplier_channel", "id": -100123,
+                                               "title": "Опт", "slot": 1, "visible": True}])
+        product = Item("Samsung Galaxy S26 256 Black", Decimal("45000"), "RUB", "Samsung")
+        self.state.set("sources", {"@supplier_channel": {
+            "checked": "2026-11-02T11:30:00+00:00", "status": "open",
+            "items": [product.to_dict()], "messages_count": 22, "parsed_count": 1}})
+        self.service.source_items = lambda source, items: items
+        self.service.settings = Settings()
+        self.service.options = lambda: {"disabled_blocks": ["Samsung"]}
+        await self.controller.show_channel_details(42, self.state.get("supplier_channels")[0])
+        text = self.controller.send.await_args.args[1]
+        self.assertIn("Прошло общие фильтры: 0", text)
+        self.assertIn("Товары отфильтрованы", text)
 
     async def test_other_user_cannot_add_channel(self):
         await self.controller.handle_callback({"id": "1", "from": {"id": 99},
