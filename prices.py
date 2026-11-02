@@ -661,6 +661,37 @@ def item_sort(item):
     return size, plain
 
 
+DYSON_SECTIONS = (
+    "Фены", "Стайлеры", "Выпрямители", "Беспроводные пылесосы",
+    "Проводные пылесосы", "Моющая техника", "Роботы-пылесосы",
+    "Очистители и увлажнители", "Сушилки для рук", "Другие товары Dyson",
+)
+
+
+def dyson_section(title):
+    """Group known product families; leave unrecognized models in a safe bucket."""
+    text = FLAGS.sub("", clean(title))
+    if re.search(r"\b(?:airblade|HU\s*0?2)\b|сушилк[аи]\s+для\s+рук", text, re.I):
+        return "Сушилки для рук"
+    if re.search(r"\b(?:robot|vis\s*nav)\b|робот", text, re.I):
+        return "Роботы-пылесосы"
+    if re.search(r"\b(?:big\s*ball|CY\s*\d{2})\b", text, re.I):
+        return "Проводные пылесосы"
+    if re.search(r"\b(?:clean\s*\+\s*wash|spot\s*\+\s*scrub|wash\s*g1|g1\s*wash)\b", text, re.I):
+        return "Моющая техника"
+    if re.search(r"\b(?:supersonic|HD\s*\d{2})\b|\bфен(?:ы|а|ов)?\b", text, re.I):
+        return "Фены"
+    if re.search(r"\b(?:airstrait|corrale|HS\s*0?7|HT\s*0?[123])\b|выпрямител", text, re.I):
+        return "Выпрямители"
+    if re.search(r"\b(?:airwrap|HS\s*0?5)\b|стайлер", text, re.I):
+        return "Стайлеры"
+    if re.search(r"\b(?:gen\s*5|pencilvac|v\s*(?:8|10|11|12|15|16)s?)\b", text, re.I):
+        return "Беспроводные пылесосы"
+    if re.search(r"\b(?:(?:TP|BP)\s*\d{2}|PH\s*\d{1,2}[A-Z]?|purifier|humidify)\b|очистител|увлажнител", text, re.I):
+        return "Очистители и увлажнители"
+    return "Другие товары Dyson"
+
+
 def samsung_a_s25_sort(item):
     plain = FLAGS.sub("", clean(item.title)).strip()
     a = re.search(r"\bA\s*(17|27|37|57)\b", plain, re.I)
@@ -884,16 +915,28 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
 
         last_sim = None
         last_samsung_section = None
+        last_dyson_section = None
         last_model_key = None
         last_storage = None
         sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
 
         def full_sort(item):
+            if block == "Dyson":
+                return (DYSON_SECTIONS.index(dyson_section(item.title)), item_sort(item))
             if iphone_model(item.title):
                 return (SIM_ORDER.get(item.sim, 99), iphone_storage_rank(item), sorter(item))
             return (SIM_ORDER.get(item.sim, 99), 0, sorter(item))
 
         for item in sorted(status_items, key=full_sort):
+            if block == "Dyson":
+                current_section = dyson_section(item.title)
+                if current_section != last_dyson_section:
+                    if lines and lines[-1] != "":
+                        lines.append("")
+                    lines.append("<b>— " + html.escape(current_section) + " —</b>")
+                    lines.append("")
+                    last_dyson_section = current_section
+
             if block == "Samsung A + S25":
                 samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
                 if samsung_section != last_samsung_section:
@@ -954,11 +997,21 @@ def section_chunks(title, lines, limit=3200):
     for line in lines:
         line_size = units(line) + 1
         if chunk and size + line_size > limit:
+            # Keep a Dyson category heading with its first product when the
+            # Telegram message limit falls between the heading and that row.
+            tail = []
+            if title == "Dyson" and line.startswith("<code>"):
+                last = len(chunk) - 1
+                while last >= 0 and chunk[last] == "":
+                    last -= 1
+                if last > 0 and chunk[last].startswith("<b>— "):
+                    tail = chunk[last:]
+                    chunk = chunk[:last]
             while chunk and chunk[-1] == "":
                 chunk.pop()
             result.append({"title": title, "body": "\n".join(chunk), "part": len(result)})
-            chunk = []
-            size = 0
+            chunk = tail
+            size = sum(units(value) + 1 for value in chunk)
         chunk.append(line)
         size += line_size
     if chunk:

@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from config import Settings
 from prices import (Item, amount_value, merge_sources, parse_documents, render_blocks,
-                    select_items, units, marked_price)
+                    select_items, units, marked_price, section_chunks)
 
 
 class PriceTests(unittest.TestCase):
@@ -58,6 +58,41 @@ class PriceTests(unittest.TestCase):
         self.assertEqual(len(dyson.items), 4)
         self.assertEqual([item.block for item in dyson.items], ["Dyson"] * 4)
         self.assertTrue(any(item.block != "Dyson" for item in normal.items))
+
+    def test_dyson_products_are_grouped_under_readable_headings(self):
+        rows = [
+            "🇬🇧 V15 SV47 Detect Absolute — 52500",
+            "Dyson HD16 Supersonic — 40000",
+            "Dyson HS05 Airwrap — 50000",
+            "Dyson HT01 Airstrait — 41000",
+            "Dyson Big Ball CY28 — 45000",
+            "Dyson G1 Wash — 60000",
+            "Dyson Robot Vis Nav 360 — 75000",
+            "Dyson TP10 White/Silver — 38000",
+            "Dyson Airblade V HU02 — 80000",
+            "Dyson Неизвестная модель Z99 — 12000",
+        ]
+        items = parse_documents(["\n".join(rows)], fallback_block="Dyson").items
+        self.assertEqual(len(items), len(rows))
+        pages = render_blocks(items, Settings())
+        content = "\n".join(pages.values())
+        for heading in ["Фены", "Стайлеры", "Выпрямители", "Беспроводные пылесосы",
+                        "Проводные пылесосы", "Моющая техника", "Роботы-пылесосы",
+                        "Очистители и увлажнители", "Сушилки для рук", "Другие товары Dyson"]:
+            self.assertIn("<b>— " + heading + " —</b>", content)
+        self.assertEqual(content.count("<code>"), len(rows))
+        self.assertEqual(len(pages), 1)
+        self.assertTrue(next(iter(pages.values())).startswith("<b>Dyson</b>"))
+        self.assertEqual(select_items(items, Settings(), {"disabled_blocks": ["Dyson"]}), [])
+
+    def test_dyson_page_break_keeps_heading_with_first_product(self):
+        lines = ["<b>— Фены —</b>", "", "<code>HD16 — 40000</code>", "",
+                 "<b>— Стайлеры —</b>", "", "<code>HS05 — 50000</code>"]
+        chunks = section_chunks("Dyson", lines, limit=75)
+        self.assertEqual(len(chunks), 2)
+        self.assertNotIn("Стайлеры", chunks[0]["body"])
+        self.assertIn("Стайлеры", chunks[1]["body"])
+        self.assertIn("HS05", chunks[1]["body"])
 
     def test_pro_max_is_separate_from_base(self):
         items = self.parse("iPhone 17 256 Black — 60000\niPhone 17 Pro Max 256 Black — 90000").items
