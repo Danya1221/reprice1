@@ -61,10 +61,10 @@ class ChannelController(FirstMessageController):
             rows.append(nav)
         rows.append([{"text": "⬅️ К каналам поставщиков", "callback_data": "channels:show:0"}])
         notice = (
-            f"📋 Каналы Telegram-аккаунта 1 ({account_name})\\n"
+            f"📋 Каналы Telegram-аккаунта 1 ({account_name})\n"
             f"Найдено: {len(channels)}. Выбери канал с прайсом."
             if channels else
-            f"📋 У Telegram-аккаунта 1 ({account_name}) нет доступных каналов.\\n"
+            f"📋 У Telegram-аккаунта 1 ({account_name}) нет доступных каналов.\n"
             "Проверь, что подписан на канал именно этим аккаунтом, или подключи нужный через /login 1."
         )
         await self.send(chat_id, notice, {"inline_keyboard": rows})
