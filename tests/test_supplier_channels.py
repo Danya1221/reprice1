@@ -54,6 +54,67 @@ class ChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(account, "@pricing")
         self.assertEqual(channels, [{"id": -100123, "title": "Прайс А"}])
 
+    async def test_secondary_channel_is_persisted_and_only_read_by_account_two(self):
+        client2 = SimpleNamespace(is_connected=lambda: True, is_user_authorized=AsyncMock(return_value=True),
+                                  get_entity=AsyncMock(return_value=SimpleNamespace(
+                                      broadcast=True, title="Прайс 2", username="supplier_two")),
+                                  get_messages=AsyncMock(return_value=[]))
+        self.service.attach_client(client2, 2)
+        with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())), patch(
+                "runtime.utils.get_peer_id", return_value=-100456):
+            await self.service.add_supplier_channel("@supplier_two", slot=2)
+        channels = self.state.get("supplier_channels")
+        self.assertEqual(channels[0]["slot"], 2)
+        self.assertEqual([source.peer for source in self.service._slot_sources(1)], ["@hi", "@other"])
+        self.assertEqual([source.peer for source in self.service._slot_sources(2)], ["@hi", "@supplier_two"])
+        self.assertEqual(self.service.source_cache_key(self.service._slot_sources(2)[-1], 2),
+                         "account2:@supplier_two")
+        restarted = SyncService(self.client, Settings(sources=self.service.base_sources),
+                                StateStore(self.state.path))
+        restarted.attach_client(client2, 2)
+        self.assertEqual([source.peer for source in restarted._slot_sources(2)],
+                         ["@hi", "@supplier_two"])
+        await restarted.remove_supplier_channel("@supplier_two", slot=2)
+        self.assertEqual(restarted._slot_sources(2), restarted.base_sources[:1])
+
+    async def test_legacy_channels_stay_on_account_one(self):
+        self.state.set("supplier_channels", [{"peer": "@legacy", "id": -100100,
+                                                "title": "Старый канал"}])
+        restarted = SyncService(self.client, Settings(sources=self.service.base_sources),
+                                StateStore(self.state.path))
+        self.assertEqual([source.peer for source in restarted._slot_sources(1)],
+                         ["@hi", "@other", "@legacy"])
+        self.assertEqual([source.peer for source in restarted._slot_sources(2)], ["@hi"])
+
+    async def test_secondary_channel_publishes_its_products(self):
+        client2 = SimpleNamespace(is_connected=lambda: True, is_user_authorized=AsyncMock(return_value=True),
+                                  get_entity=AsyncMock(return_value=SimpleNamespace(
+                                      broadcast=True, title="Прайс 2", username="supplier_two")),
+                                  get_messages=AsyncMock(return_value=[]))
+        self.service.attach_client(client2, 2)
+        with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())), patch(
+                "runtime.utils.get_peer_id", return_value=-100456):
+            await self.service.add_supplier_channel("@supplier_two", slot=2)
+        self.service.readers_for_slot(1)[0].fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        self.service.readers_for_slot(1)[1].fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        self.service.readers_for_slot(2)[0].fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        self.service.readers_for_slot(2)[1].fetch = AsyncMock(return_value=ParseResult([
+            Item("Samsung Galaxy S26 256 Black", Decimal("45000"), "RUB", "Samsung")], []))
+        self.service.publisher.publish = AsyncMock(return_value=1)
+        with patch("runtime.is_open", return_value=True):
+            await self.service.sync(force=True)
+        cache = self.state.get("sources")
+        self.assertIn("account2:@supplier_two", cache)
+        self.assertNotIn("@supplier_two", cache)
+        body = "\n".join(self.service.publisher.publish.call_args.args[0].values())
+        self.assertIn("45 000", body)
+
+    async def test_secondary_channel_requires_connected_account_two(self):
+        with self.assertRaisesRegex(ValueError, "аккаунт 2"):
+            await self.service.add_supplier_channel("@some", slot=2)
+        with self.assertRaisesRegex(ValueError, "аккаунт 2"):
+            await self.service.list_available_supplier_channels(slot=2)
+
     async def test_unreadable_channel_is_not_saved(self):
         self.client.get_messages.side_effect = PermissionError("no access")
         with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())):
@@ -103,16 +164,18 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_forward_adds_source_without_rebinding_publish_destination(self):
         await self.controller.handle_callback({"id": "1", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_callback({"id": "2", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:account:1"})
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat,
              "forward_origin": {"type": "channel", "chat": {"id": -100123, "type": "channel", "title": "Опт"}}})
-        self.service.add_supplier_channel.assert_awaited_once_with(-100123)
+        self.service.add_supplier_channel.assert_awaited_once_with(-100123, slot=1)
         self.service.publisher.bind_group.assert_not_awaited()
         self.assertNotIn(42, self.controller.channel_waiting)
 
     async def test_username_and_cancel(self):
         self.controller.channel_waiting.add(42)
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat, "text": "https://t.me/supplier_channel"})
-        self.service.add_supplier_channel.assert_awaited_once_with("@supplier_channel")
+        self.service.add_supplier_channel.assert_awaited_once_with("@supplier_channel", slot=1)
         self.controller.channel_waiting.add(42)
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat, "text": "/cancel"})
         self.assertNotIn(42, self.controller.channel_waiting)
@@ -121,32 +184,70 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.handle_callback({"id": "1", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:add"})
         await self.controller.handle_callback({"id": "2", "from": {"id": 42},
-                                               "message": {"chat": self.chat}, "data": "channels:list:0"})
-        self.service.list_available_supplier_channels.assert_awaited_once()
-        self.assertIn("Опт", str(self.controller.send.await_args))
+                                               "message": {"chat": self.chat}, "data": "channels:account:1"})
         await self.controller.handle_callback({"id": "3", "from": {"id": 42},
-                                               "message": {"chat": self.chat}, "data": "channels:pick:-100123"})
-        self.service.add_supplier_channel.assert_awaited_once_with(-100123)
+                                               "message": {"chat": self.chat}, "data": "channels:list:1:0"})
+        self.service.list_available_supplier_channels.assert_awaited_once_with(slot=1)
+        self.assertIn("Опт", str(self.controller.send.await_args))
+        await self.controller.handle_callback({"id": "4", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:pick:1:-100123"})
+        self.service.add_supplier_channel.assert_awaited_once_with(-100123, slot=1)
         self.assertNotIn(42, self.controller.channel_waiting)
 
     async def test_unlisted_channel_cannot_be_picked(self):
         await self.controller.handle_callback({"id": "1", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:add"})
         await self.controller.handle_callback({"id": "2", "from": {"id": 42},
-                                               "message": {"chat": self.chat}, "data": "channels:list:0"})
+                                               "message": {"chat": self.chat}, "data": "channels:account:1"})
         await self.controller.handle_callback({"id": "3", "from": {"id": 42},
-                                               "message": {"chat": self.chat}, "data": "channels:pick:-100987"})
+                                               "message": {"chat": self.chat}, "data": "channels:list:1:0"})
+        await self.controller.handle_callback({"id": "4", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:pick:1:-100987"})
         self.service.add_supplier_channel.assert_not_awaited()
 
     async def test_forward_resolution_failure_offers_channel_picker(self):
         self.service.add_supplier_channel.side_effect = RuntimeError("Не найден access_hash")
         await self.controller.handle_callback({"id": "1", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_callback({"id": "2", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:account:1"})
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat,
             "forward_origin": {"type": "channel", "chat": {"id": -100123, "type": "channel"}}})
         markup = self.controller.send.await_args.args[2]
-        self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "channels:list:0")
+        self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "channels:list:1:0")
         self.assertIn(42, self.controller.channel_waiting)
+
+    async def test_account_two_is_used_for_selected_and_forwarded_channels(self):
+        await self.controller.handle_callback({"id": "1", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_callback({"id": "2", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:account:2"})
+        await self.controller.handle_callback({"id": "3", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:list:2:0"})
+        self.service.list_available_supplier_channels.assert_awaited_once_with(slot=2)
+        await self.controller.handle_callback({"id": "4", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:pick:2:-100123"})
+        self.service.add_supplier_channel.assert_awaited_once_with(-100123, slot=2)
+
+        self.service.add_supplier_channel.reset_mock()
+        await self.controller.handle_callback({"id": "5", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_callback({"id": "6", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:account:2"})
+        await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat,
+            "forward_origin": {"type": "channel", "chat": {"id": -100987, "type": "channel"}}})
+        self.service.add_supplier_channel.assert_awaited_once_with(-100987, slot=2)
+
+    async def test_cannot_pick_channel_from_other_account(self):
+        await self.controller.handle_callback({"id": "1", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:add"})
+        await self.controller.handle_callback({"id": "2", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:account:1"})
+        await self.controller.handle_callback({"id": "3", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:list:1:0"})
+        await self.controller.handle_callback({"id": "4", "from": {"id": 42},
+                                               "message": {"chat": self.chat}, "data": "channels:pick:2:-100123"})
+        self.service.add_supplier_channel.assert_not_awaited()
 
     async def test_other_user_cannot_add_channel(self):
         await self.controller.handle_callback({"id": "1", "from": {"id": 99},
