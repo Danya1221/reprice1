@@ -1,7 +1,11 @@
 """Manage supplier channels separately from the publication destination."""
 import hashlib
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
+from config import Source
+from prices import Item, select_items
 from control_first import FirstMessageController
 
 
@@ -21,28 +25,121 @@ class ChannelController(FirstMessageController):
         menu["inline_keyboard"].append([{"text": "📥 Каналы поставщиков", "callback_data": "channels:show:0"}])
         return menu
 
+    @staticmethod
+    def channel_key(item):
+        slot = item.get("slot", 1)
+        peer = str(item["peer"])
+        return peer if slot == 1 else f"account{slot}:{peer}"
+
+    @staticmethod
+    def msk(value):
+        if not value:
+            return "ещё не было"
+        try:
+            return datetime.fromisoformat(value).astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m %H:%M МСК")
+        except (ValueError, TypeError):
+            return str(value)[:20]
+
+    def channel_diagnostics(self, item):
+        slot = item.get("slot", 1)
+        cached = self.service.state.get("sources", {}).get(self.channel_key(item), {})
+        parsed = cached.get("parsed_count")
+        if parsed is None and cached.get("status") and not cached.get("error"):
+            parsed = len(cached.get("items", []))
+        messages = cached.get("messages_count")
+        visible = item.get("visible", True)
+        if not cached.get("checked"):
+            reading = "⏳ Чтение ещё не проверялось"
+        elif cached.get("error"):
+            reading = "❌ Ошибка чтения / разбора"
+        elif cached.get("status") == "closed":
+            reading = "🌙 Поставщик сообщил о закрытии"
+        elif parsed == 0:
+            reading = "⚠️ Сообщения прочитаны, товаров не найдено"
+        else:
+            reading = "✅ Чтение успешно"
+        stats = f"Сообщений: {messages if messages is not None else '—'} · товаров: {parsed if parsed is not None else '—'}"
+        status = f"Показ в прайсе: {'✅ включён' if visible else '⛔ выключен'}"
+        return cached, reading, stats, status
+
     async def show_channels(self, chat_id, page=0, notice=""):
         channels = self.service.state.get("supplier_channels", [])
-        page = max(0, min(page, max(0, (len(channels) - 1) // 8)))
-        rows = []
-        for item in channels[page * 8:page * 8 + 8]:
+        page = max(0, min(page, max(0, (len(channels) - 1) // 5)))
+        rows, details = [], []
+        for item in channels[page * 5:page * 5 + 5]:
             slot = item.get("slot", 1)
-            rows.append([{"text": f"🗑 [{slot}] " + item["title"][:48],
-                          "callback_data": "channels:remove:" + channel_token(item["peer"], slot)}])
-        navigation = []
+            token = channel_token(item["peer"], slot)
+            cached, reading, stats, status = self.channel_diagnostics(item)
+            details.append(
+                f"📡 [{slot}] {item['title']}\n"
+                f"{reading}\n{stats}\n{status}\n"
+                f"Проверено: {self.msk(cached.get('checked'))}"
+            )
+            rows.append([
+                {"text": "🔎 Причина / детали", "callback_data": "channels:details:" + token},
+                {"text": "👁 Скрыть товары" if item.get("visible", True) else "✅ Показывать товары",
+                 "callback_data": "channels:toggle:" + token},
+            ])
+            rows.append([{"text": "🗑 Удалить " + item["title"][:35],
+                          "callback_data": "channels:remove:" + token}])
+        nav = []
         if page:
-            navigation.append({"text": "⬅️", "callback_data": f"channels:show:{page - 1}"})
-        if (page + 1) * 8 < len(channels):
-            navigation.append({"text": "➡️", "callback_data": f"channels:show:{page + 1}"})
-        if navigation:
-            rows.append(navigation)
+            nav.append({"text": "⬅️", "callback_data": f"channels:show:{page - 1}"})
+        if (page + 1) * 5 < len(channels):
+            nav.append({"text": "➡️", "callback_data": f"channels:show:{page + 1}"})
+        if nav:
+            rows.append(nav)
+        rows.append([{"text": "🔄 Проверить чтение сейчас", "callback_data": "channels:check"}])
+        rows.append([{"text": "⚙️ Категории прайса", "callback_data": "blocks:0"}])
         rows.append([{"text": "➕ Добавить канал", "callback_data": "channels:add"}])
         rows.append([{"text": "⬅️ Главное меню", "callback_data": "channels:back"}])
-        text = ("📥 Каналы поставщиков\n\n"
-                + (f"Подключено: {len(channels)}. Нажми 🗑, чтобы отключить канал." if channels else "Пока нет добавленных каналов.")
-                + "\n\n[1] / [2] — аккаунт, читающий источник. "
-                  "Бот читает доступную историю, поэтому старые цены тоже могут попасть в прайс.")
-        await self.send(chat_id, (notice + "\n\n" if notice else "") + text, {"inline_keyboard": rows})
+        body = (
+            "📥 Каналы поставщиков\n\n"
+            + ("\n\n".join(details) if details else "Пока нет добавленных каналов.")
+            + "\n\nТовары из канала участвуют в прайсе, если распознаны, показ включён "
+              "и они проходят общие фильтры. При совпадении модели выбирается самая низкая цена."
+        )
+        await self.send(chat_id, (notice + "\n\n" if notice else "") + body[:3900],
+                        {"inline_keyboard": rows})
+
+    async def show_channel_details(self, chat_id, item):
+        cached, reading, stats, visibility = self.channel_diagnostics(item)
+        slot = item.get("slot", 1)
+        source = Source(item["peer"], mode="feed", label="Канал: " + item["title"])
+        items = [Item.from_dict(data) for data in cached.get("items", [])]
+        eligible = self.service.source_items(source, items)
+        after_filters = select_items(eligible, self.service.settings, self.service.options())
+        text = (
+            f"🔎 Канал: {item['title']} · аккаунт {slot}\n\n"
+            f"{reading}\n{stats}\n{visibility}\n"
+            f"Последняя проверка: {self.msk(cached.get('checked'))}\n"
+            f"Успешное чтение: {self.msk(cached.get('last_success'))}\n"
+            f"Сохранено позиций: {len(items)}\n"
+            f"Прошло общие фильтры: {len(after_filters)}\n"
+            f"Не распознано строк: {cached.get('rejected_count', 0)}\n"
+        )
+        if cached.get("error"):
+            text += "\n❌ Ошибка: " + str(cached["error"])[:550] + "\n"
+        if cached.get("status") == "closed":
+            text += "\nИсточник прислал сообщение о закрытии. Цены не активны.\n"
+        if not item.get("visible", True):
+            text += "\nПоказ товаров этого канала отключён. Чтение продолжается.\n"
+        if items and not after_filters:
+            text += "\nТовары отфильтрованы. Проверь настройки категорий, SIM и аксессуаров.\n"
+        if len(after_filters) > 0:
+            text += "\nЭто число до объединения цен поставщиков: в общем прайсе может быть меньше позиций.\n"
+        rejected = cached.get("rejected") or []
+        if rejected:
+            text += "\nПримеры нераспознанных строк:\n"
+            text += "\n".join("• " + str(line)[:140] for line in rejected[:4])
+        token = channel_token(item["peer"], slot)
+        await self.send(chat_id, text[:3800], {"inline_keyboard": [
+            [{"text": "✅ Показывать товары" if not item.get("visible", True) else "👁 Скрыть товары",
+              "callback_data": "channels:toggle:" + token}],
+            [{"text": "🔄 Проверить чтение", "callback_data": "channels:check"}],
+            [{"text": "⚙️ Категории прайса", "callback_data": "blocks:0"}],
+            [{"text": "⬅️ К списку каналов", "callback_data": "channels:show:0"}],
+        ]})
 
     async def show_channel_choices(self, chat_id, user_id, slot, page=0):
         selected = self.channel_choices.get(user_id)
@@ -161,6 +258,31 @@ class ChannelController(FirstMessageController):
             self.channel_choices.pop(user_id, None)
             self.channel_slots.pop(user_id, None)
             await self.show_channels(chat_id, notice=f"✅ Канал «{title}» подключён к аккаунту {slot}.")
+        elif data == "channels:check":
+            await self.request_sync(chat_id)
+            await self.send(chat_id, "После проверки открой «Каналы поставщиков», чтобы увидеть результат.")
+        elif data.startswith(("channels:details:", "channels:toggle:")):
+            token = data.rsplit(":", 1)[1]
+            item = next((candidate for candidate in self.service.state.get("supplier_channels", [])
+                         if channel_token(candidate["peer"], candidate.get("slot", 1)) == token), None)
+            if item is None:
+                await self.show_channels(chat_id, notice="Канал не найден.")
+                return
+            if data.startswith("channels:details:"):
+                await self.show_channel_details(chat_id, item)
+            else:
+                visible = not item.get("visible", True)
+                try:
+                    await self.service.set_supplier_channel_visibility(item["peer"],
+                                                                     slot=item.get("slot", 1),
+                                                                     visible=visible)
+                except Exception as exc:
+                    # The setting can be persisted even if re-publishing failed.
+                    await self.show_channels(chat_id, notice="⚠️ Проверь публикацию: " + str(exc)[:220])
+                    return
+                await self.show_channels(chat_id,
+                    notice=(f"✅ Показ товаров «{item['title']}» включён." if visible
+                            else f"⛔ Товары «{item['title']}» скрыты из прайса. Чтение продолжится."))
         elif data.startswith("channels:remove:"):
             token = data.rsplit(":", 1)[1]
             channel = next((item for item in self.service.state.get("supplier_channels", [])
