@@ -321,7 +321,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
             "items": [product.to_dict()], "messages_count": 22, "parsed_count": 1}})
         self.service.source_items = lambda source, items: items
         self.service.settings = Settings()
-        self.service.options = lambda: {"disabled_blocks": [product.block]}
+        self.service.options = lambda: {"disabled_blocks": [Item.from_dict(product.to_dict()).block]}
         await self.controller.show_channel_details(42, self.state.get("supplier_channels")[0])
         text = self.controller.send.await_args.args[1]
         self.assertIn("Прошло общие фильтры: 0", text)
