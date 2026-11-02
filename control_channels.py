@@ -117,6 +117,8 @@ class ChannelController(FirstMessageController):
             f"Сохранено позиций: {len(items)}\n"
             f"Прошло общие фильтры: {len(after_filters)}\n"
             f"Не распознано строк: {cached.get('rejected_count', 0)}\n"
+            f"Пропущено фото/видео/других медиа: {cached.get('ignored_media_count') if cached.get('ignored_media_count') is not None else '—'}\n"
+            f"Прочитано файлов прайса: {cached.get('price_files_count') if cached.get('price_files_count') is not None else '—'}\n"
         )
         if cached.get("error"):
             text += "\n❌ Ошибка: " + str(cached["error"])[:550] + "\n"
