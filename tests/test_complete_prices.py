@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -52,6 +53,39 @@ def message(number, text, buttons=()):
 
 
 class CatalogSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_feed_uses_edit_time_for_duplicate_without_reordering_headers(self):
+        def at(hour):
+            return datetime(2026, 11, 2, hour, tzinfo=timezone.utc)
+
+        header = message(1, "iPhone 17")
+        header.date, header.edit_date = at(7), at(11)
+        edited = message(2, "256GB Black — 55000")
+        edited.date, edited.edit_date = at(8), at(10)
+        newer_post = message(3, "256GB Black — 60000")
+        newer_post.date, newer_post.edit_date = at(9), None
+        reader = SupplierReader(None, Settings(), Source("@channel", mode="feed"))
+        reader.messages = AsyncMock(return_value=[header, edited, newer_post])
+        result = await reader.fetch()
+        self.assertEqual(len(result.items), 1)
+        self.assertEqual(result.items[0].price, Decimal(55000))
+        self.assertIn("iPhone 17", result.items[0].title)
+
+    async def test_new_post_after_edit_wins_and_split_rows_still_parse(self):
+        def at(hour):
+            return datetime(2026, 11, 2, hour, tzinfo=timezone.utc)
+
+        older = message(1, "Samsung Galaxy S26 256 Black — 50000")
+        older.date, older.edit_date = at(7), at(9)
+        title = message(2, "Samsung Galaxy S26 256 Black")
+        title.date, title.edit_date = at(10), None
+        amount = message(3, "55 000")
+        amount.date, amount.edit_date = at(10), None
+        reader = SupplierReader(None, Settings(), Source("@channel", mode="feed"))
+        reader.messages = AsyncMock(return_value=[older, title, amount])
+        result = await reader.fetch()
+        self.assertEqual(len(result.items), 1)
+        self.assertEqual(result.items[0].price, Decimal(55000))
+
     async def test_reused_next_callback_collects_every_page(self):
         next_button = SimpleNamespace(text="Далее", button=types.KeyboardButtonCallback("Далее", b"next"), click=AsyncMock())
         pages = [message(1, f"Realme C{i} — {10000 + i}", [[next_button]] if i < 3 else []) for i in range(4)]

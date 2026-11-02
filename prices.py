@@ -490,10 +490,12 @@ class ParseResult:
     closed: bool = False
 
 
-def price_lines(documents):
-    """Join product titles with a following retail price, including across messages."""
+def _price_lines_with_priority(documents, document_priorities=None):
+    """Join split rows without losing the timestamp of either part."""
     pending = None
-    for document in documents:
+    pending_priority = None
+    for index, document in enumerate(documents):
+        priority = document_priorities[index] if document_priorities is not None else (index,)
         for raw in document.splitlines():
             line = strip_decoration(raw)
             if not line:
@@ -509,24 +511,34 @@ def price_lines(documents):
             candidate, _ = strip_price_status_suffix(candidate)
             if pending and PRICE.fullmatch(candidate) and not UNAVAILABLE.search(line):
                 flags = " ".join(FLAGS.findall(line))
-                yield pending + (" " + flags if flags and flags not in pending else "") + " — " + candidate
+                yield (pending + (" " + flags if flags and flags not in pending else "") + " — " + candidate,
+                       max(pending_priority, priority))
                 pending = None
+                pending_priority = None
             else:
                 if pending is not None:
-                    yield pending
+                    yield pending, pending_priority
                 pending = line
+                pending_priority = priority
     if pending is not None:
-        yield pending
+        yield pending, pending_priority
 
 
-def parse_documents(documents, default_currency="RUB", fallback_block=""):
+def price_lines(documents):
+    """Join product titles with a following retail price, including across messages."""
+    for line, _ in _price_lines_with_priority(documents):
+        yield line
+
+
+def parse_documents(documents, default_currency="RUB", fallback_block="", document_priorities=None):
     items = OrderedDict()
+    item_priorities = {}
     rejected = []
     context = ""
     section = ""
     section_sim = "unknown"
     closed = False
-    for raw_line in price_lines(documents):
+    for raw_line, priority in _price_lines_with_priority(documents, document_priorities):
         line = strip_decoration(raw_line)
         if not line:
             continue
@@ -568,7 +580,9 @@ def parse_documents(documents, default_currency="RUB", fallback_block=""):
         if sim == "unknown":
             sim = section_sim if model else "unknown"
         item = Item(title, amount, currency, block, sim, accessory)
-        items[item.key] = item
+        if item.key not in item_priorities or priority >= item_priorities[item.key]:
+            items[item.key] = item
+            item_priorities[item.key] = priority
     return ParseResult(list(items.values()), rejected, closed and not items)
 
 

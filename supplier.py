@@ -454,7 +454,10 @@ class SupplierReader:
             "ignored_video_posts": 0, "price_files": 0,
         }
         documents = []
-        for message in messages:
+        priorities = []
+        for index, message in enumerate(messages):
+            updated = getattr(message, "edit_date", None) or getattr(message, "date", None)
+            priority = (updated.timestamp() if updated else 0, index)
             if is_photo_or_video(message):
                 # Ignore both the media and its caption, even if it looks
                 # like a price line. Pure text posts are processed below.
@@ -463,6 +466,7 @@ class SupplierReader:
                     if self.source.read_captions:
                         # Only the caption string, not the image/video binary.
                         documents.append(message.raw_text)
+                        priorities.append(priority)
                         self.last_read_stats["read_caption_posts"] += 1
                     else:
                         self.last_read_stats["ignored_caption_posts"] += 1
@@ -474,6 +478,7 @@ class SupplierReader:
             if message.raw_text:
                 self.last_read_stats["text_posts"] += 1
                 documents.append(message.raw_text)
+                priorities.append(priority)
             document = getattr(message, "document", None)
             if document:
                 if price_document_name(document) is None:
@@ -481,11 +486,15 @@ class SupplierReader:
                     continue
                 self.last_read_stats["price_files"] += 1
                 documents.append(await self.document_text(message))
+                priorities.append(priority)
         fallback_block = (
             "Dyson" if self.source.mode == "feed"
             and re.search(r"\bdyson\b", self.source.label, re.I) else ""
         )
-        result = parse_documents(documents, self.settings.currency, fallback_block=fallback_block)
+        # Preserve message order for shared headers and split rows; use Telegram
+        # edit/post time only when choosing between duplicate feed entries.
+        result = parse_documents(documents, self.settings.currency, fallback_block=fallback_block,
+                                 document_priorities=priorities if self.source.mode == "feed" else None)
         # The parser merges repeated SKU rows. Record both counts so a
         # small catalog can be distinguished from a small number of prices.
         self.last_read_stats["price_rows"] = sum(
