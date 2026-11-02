@@ -404,7 +404,9 @@ class SupplierReader:
         return text
 
     async def fetch(self):
+        self.last_read_stats = None
         messages = await self.expand_catalog(await self.messages())
+        self.last_read_stats = {"messages": len(messages), "parsed": None}
         documents = []
         for message in messages:
             if message.raw_text:
@@ -412,6 +414,7 @@ class SupplierReader:
             if message.document:
                 documents.append(await self.document_text(message))
         result = parse_documents(documents, self.settings.currency)
+        self.last_read_stats["parsed"] = len(result.items)
         if not result.items and any(self.is_closed_text(text) for text in documents):
             result.closed = True
         if not result.items and not result.closed:
