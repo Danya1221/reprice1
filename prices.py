@@ -519,7 +519,7 @@ def price_lines(documents):
         yield pending
 
 
-def parse_documents(documents, default_currency="RUB"):
+def parse_documents(documents, default_currency="RUB", fallback_block=""):
     items = OrderedDict()
     rejected = []
     context = ""
@@ -563,7 +563,7 @@ def parse_documents(documents, default_currency="RUB"):
         if not special and section in {"ASIS", "CPO"}:
             special = section
         publish_model = iphone_publish_block(model) if model else ""
-        block = "Аксессуары" if accessory else (special or publish_model or own_brand or section or "Товары")
+        block = "Аксессуары" if accessory else (special or publish_model or own_brand or fallback_block or section or "Товары")
         sim = sim_type(title)
         if sim == "unknown":
             sim = section_sim if model else "unknown"
