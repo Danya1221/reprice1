@@ -78,6 +78,7 @@ class Source:
     buttons: tuple = ()
     label: str = "Поставщик 1"
     closed_text: str = ""
+    read_captions: bool = False
 
 
 @dataclass
