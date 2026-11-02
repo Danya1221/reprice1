@@ -59,11 +59,15 @@ class PriceTests(unittest.TestCase):
         self.assertEqual([item.block for item in dyson.items], ["Dyson"] * 4)
         self.assertTrue(any(item.block != "Dyson" for item in normal.items))
 
-    def test_dyson_products_are_grouped_under_readable_headings(self):
+    def test_dyson_products_are_grouped_by_model(self):
         rows = [
             "🇬🇧 V15 SV47 Detect Absolute — 52500",
+            "Dyson V15 SV51 Detect Absolute — 54000",
             "Dyson HD16 Supersonic — 40000",
             "Dyson HS05 Airwrap — 50000",
+            "Dyson HS08 Airwrap Blue — 51000",
+            "Dyson HS09 Airwrap Red — 52000",
+            "Dyson HS08 Airwrap Gold — 53000",
             "Dyson HT01 Airstrait — 41000",
             "Dyson Big Ball CY28 — 45000",
             "Dyson G1 Wash — 60000",
@@ -76,25 +80,38 @@ class PriceTests(unittest.TestCase):
         self.assertEqual(len(items), len(rows))
         pages = render_blocks(items, Settings())
         content = "\n".join(pages.values())
-        for heading in ["Фены", "Стайлеры", "Выпрямители", "Беспроводные пылесосы",
-                        "Проводные пылесосы", "Моющая техника", "Роботы-пылесосы",
-                        "Очистители и увлажнители", "Сушилки для рук"]:
+        for heading in ["V15", "HD16", "HS05", "HS08", "HS09", "HT01", "CY28",
+                        "G1", "Vis Nav", "TP10", "HU02"]:
             self.assertIn("<b>— " + heading + " —</b>", content)
+        self.assertEqual(content.count("<b>— HS08 —</b>"), 1)
+        hs08 = content.split("<b>— HS08 —</b>", 1)[1].split("<b>— HS09 —</b>", 1)[0]
+        self.assertIn("Blue", hs08)
+        self.assertIn("Gold", hs08)
+        self.assertEqual(content.count("<b>— V15 —</b>"), 1)
+        self.assertNotIn("<b>— SV47 —</b>", content)
         self.assertNotIn("Другие товары Dyson", content)
-        self.assertLess(content.index("Неизвестная модель Z99"), content.index("<b>— Фены —</b>"))
+        self.assertLess(content.index("Неизвестная модель Z99"), content.index("<b>— CY28 —</b>"))
         self.assertEqual(content.count("<code>"), len(rows))
         self.assertEqual(len(pages), 1)
         self.assertTrue(next(iter(pages.values())).startswith("<b>Dyson</b>"))
         self.assertEqual(select_items(items, Settings(), {"disabled_blocks": ["Dyson"]}), [])
 
     def test_dyson_page_break_keeps_heading_with_first_product(self):
-        lines = ["<b>— Фены —</b>", "", "<code>HD16 — 40000</code>", "",
-                 "<b>— Стайлеры —</b>", "", "<code>HS05 — 50000</code>"]
+        lines = ["<b>— HD16 —</b>", "", "<code>HD16 — 40000</code>", "",
+                 "<b>— HS05 —</b>", "", "<code>HS05 — 50000</code>"]
         chunks = section_chunks("Dyson", lines, limit=75)
         self.assertEqual(len(chunks), 2)
-        self.assertNotIn("Стайлеры", chunks[0]["body"])
-        self.assertIn("Стайлеры", chunks[1]["body"])
+        self.assertNotIn("<b>— HS05 —</b>", chunks[0]["body"])
+        self.assertIn("<b>— HS05 —</b>", chunks[1]["body"])
         self.assertIn("HS05", chunks[1]["body"])
+
+    def test_dyson_model_heading_is_repeated_on_continuation_page(self):
+        lines = ["<b>— HS09 —</b>", "", "<code>HS09 A — 40000</code>",
+                 "<code>HS09 B — 42000</code>", "<code>HS09 C — 43000</code>"]
+        chunks = section_chunks("Dyson", lines, limit=75)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all("<b>— HS09 —</b>" in chunk["body"] for chunk in chunks))
+        self.assertEqual(sum(chunk["body"].count("<code>") for chunk in chunks), 3)
 
     def test_pro_max_is_separate_from_base(self):
         items = self.parse("iPhone 17 256 Black — 60000\niPhone 17 Pro Max 256 Black — 90000").items

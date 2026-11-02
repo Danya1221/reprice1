@@ -661,35 +661,37 @@ def item_sort(item):
     return size, plain
 
 
-DYSON_SECTIONS = (
-    "", "Фены", "Стайлеры", "Выпрямители", "Беспроводные пылесосы",
-    "Проводные пылесосы", "Моющая техника", "Роботы-пылесосы",
-    "Очистители и увлажнители", "Сушилки для рук",
-)
-
-
-def dyson_section(title):
-    """Group known product families; leave unrecognized models in a safe bucket."""
+def dyson_model(title):
+    """Identify the model named in a Dyson row, without guessing unknown models."""
     text = FLAGS.sub("", clean(title))
-    if re.search(r"\b(?:airblade|HU\s*0?2)\b|сушилк[аи]\s+для\s+рук", text, re.I):
-        return "Сушилки для рук"
-    if re.search(r"\b(?:robot|vis\s*nav)\b|робот", text, re.I):
-        return "Роботы-пылесосы"
-    if re.search(r"\b(?:big\s*ball|CY\s*\d{2})\b", text, re.I):
-        return "Проводные пылесосы"
-    if re.search(r"\b(?:clean\s*\+\s*wash|spot\s*\+\s*scrub|wash\s*g1|g1\s*wash)\b", text, re.I):
-        return "Моющая техника"
-    if re.search(r"\b(?:supersonic|HD\s*\d{2})\b|\bфен(?:ы|а|ов)?\b", text, re.I):
-        return "Фены"
-    if re.search(r"\b(?:airstrait|corrale|HS\s*0?7|HT\s*0?[123])\b|выпрямител", text, re.I):
-        return "Выпрямители"
-    if re.search(r"\b(?:airwrap|HS\s*0?5)\b|стайлер", text, re.I):
-        return "Стайлеры"
-    if re.search(r"\b(?:gen\s*5|pencilvac|v\s*(?:8|10|11|12|15|16)s?)\b", text, re.I):
-        return "Беспроводные пылесосы"
-    if re.search(r"\b(?:(?:TP|BP)\s*\d{2}|PH\s*\d{1,2}[A-Z]?|purifier|humidify)\b|очистител|увлажнител", text, re.I):
-        return "Очистители и увлажнители"
+    match = re.search(r"\bgen\s*(\d+)\b", text, re.I)
+    if match:
+        return "Gen" + match.group(1)
+    # V15 SV47 is a V15 variant: use the consumer model before its SV code.
+    match = re.search(r"\bV\s*(\d{1,2})(s?)\b", text, re.I)
+    if match:
+        return "V" + match.group(1) + match.group(2).lower()
+    match = re.search(r"\b(HS|HD|HT|TP|BP|PH|HU|CY|SV)\s*(\d{1,2})([A-Z]?)\b", text, re.I)
+    if match:
+        return match.group(1).upper() + match.group(2) + match.group(3).upper()
+    if re.search(r"\bG\s*1\b", text, re.I):
+        return "G1"
+    if re.search(r"\bvis\s*nav\b", text, re.I):
+        return "Vis Nav"
+    if re.search(r"\bpencilvac\b", text, re.I):
+        return "Pencilvac"
+    if re.search(r"\bclean\s*\+\s*wash\b", text, re.I):
+        return "Clean+Wash"
+    if re.search(r"\bspot\s*\+\s*scrub\b", text, re.I):
+        return "Spot+Scrub"
     return ""
+
+
+def dyson_model_sort(title):
+    model = dyson_model(title)
+    natural = tuple(int(part) if part.isdigit() else part.casefold()
+                    for part in re.split(r"(\d+)", model))
+    return (bool(model), natural)
 
 
 def samsung_a_s25_sort(item):
@@ -915,28 +917,28 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
 
         last_sim = None
         last_samsung_section = None
-        last_dyson_section = None
+        last_dyson_model = None
         last_model_key = None
         last_storage = None
         sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
 
         def full_sort(item):
             if block == "Dyson":
-                return (DYSON_SECTIONS.index(dyson_section(item.title)), item_sort(item))
+                return (dyson_model_sort(item.title), item_sort(item))
             if iphone_model(item.title):
                 return (SIM_ORDER.get(item.sim, 99), iphone_storage_rank(item), sorter(item))
             return (SIM_ORDER.get(item.sim, 99), 0, sorter(item))
 
         for item in sorted(status_items, key=full_sort):
             if block == "Dyson":
-                current_section = dyson_section(item.title)
-                if current_section != last_dyson_section:
-                    if current_section:
+                current_model = dyson_model(item.title)
+                if current_model != last_dyson_model:
+                    if current_model:
                         if lines and lines[-1] != "":
                             lines.append("")
-                        lines.append("<b>— " + html.escape(current_section) + " —</b>")
+                        lines.append("<b>— " + html.escape(current_model) + " —</b>")
                         lines.append("")
-                    last_dyson_section = current_section
+                    last_dyson_model = current_model
 
             if block == "Samsung A + S25":
                 samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
@@ -995,7 +997,10 @@ def section_chunks(title, lines, limit=3200):
     result = []
     chunk = []
     size = 0
+    dyson_heading = None
     for line in lines:
+        if title == "Dyson" and line.startswith("<b>— "):
+            dyson_heading = line
         line_size = units(line) + 1
         if chunk and size + line_size > limit:
             # Keep a Dyson category heading with its first product when the
@@ -1008,6 +1013,10 @@ def section_chunks(title, lines, limit=3200):
                 if last > 0 and chunk[last].startswith("<b>— "):
                     tail = chunk[last:]
                     chunk = chunk[:last]
+                elif dyson_heading:
+                    # If one model spans several posts, every continuation
+                    # still identifies the model for the reader.
+                    tail = [dyson_heading, ""]
             while chunk and chunk[-1] == "":
                 chunk.pop()
             result.append({"title": title, "body": "\n".join(chunk), "part": len(result)})
