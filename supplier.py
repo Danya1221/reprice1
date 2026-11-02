@@ -450,7 +450,7 @@ class SupplierReader:
         self.last_read_stats = {
             "messages": len(messages), "parsed": None, "price_rows": None,
             "text_posts": 0, "ignored_media": 0,
-            "ignored_caption_posts": 0, "ignored_photo_posts": 0,
+            "ignored_caption_posts": 0, "read_caption_posts": 0, "ignored_photo_posts": 0,
             "ignored_video_posts": 0, "price_files": 0,
         }
         documents = []
@@ -460,7 +460,12 @@ class SupplierReader:
                 # like a price line. Pure text posts are processed below.
                 self.last_read_stats["ignored_media"] += 1
                 if getattr(message, "raw_text", ""):
-                    self.last_read_stats["ignored_caption_posts"] += 1
+                    if self.source.read_captions:
+                        # Only the caption string, not the image/video binary.
+                        documents.append(message.raw_text)
+                        self.last_read_stats["read_caption_posts"] += 1
+                    else:
+                        self.last_read_stats["ignored_caption_posts"] += 1
                 if getattr(message, "photo", None) is not None:
                     self.last_read_stats["ignored_photo_posts"] += 1
                 else:
