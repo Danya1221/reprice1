@@ -462,6 +462,8 @@ class SyncService:
                             "last_success": timestamp(),
                             "messages_count": (getattr(reader, "last_read_stats", None) or {}).get("messages"),
                             "parsed_count": len(result.items),
+                            "ignored_media_count": (getattr(reader, "last_read_stats", None) or {}).get("ignored_media"),
+                            "price_files_count": (getattr(reader, "last_read_stats", None) or {}).get("price_files"),
                             "items": [item.to_dict() for item in retained],
                             "rejected": result.rejected[:200],
                             "rejected_count": len(result.rejected),
@@ -497,6 +499,8 @@ class SyncService:
                             "checked": timestamp(),
                             "messages_count": stats.get("messages"),
                             "parsed_count": stats.get("parsed"),
+                            "ignored_media_count": stats.get("ignored_media"),
+                            "price_files_count": stats.get("price_files"),
                             "account": slot,
                         }
                         fresh_by_source[index].append("error")
