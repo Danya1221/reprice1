@@ -115,6 +115,23 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reader.last_read_stats["ignored_photo_posts"], 1)
         self.assertEqual(self.reader.last_read_stats["ignored_video_posts"], 1)
 
+    async def test_caption_opt_in_parses_text_without_downloading_media(self):
+        self.reader.source = Source("@supplier", mode="feed", read_captions=True)
+        photo = message(2, "Dyson HS09 — 47000")
+        photo.photo = SimpleNamespace(id=101)
+        video = message(3, "Dyson HS10 — 52000")
+        video.document = SimpleNamespace(
+            size=12 * 1024 * 1024, mime_type="video/mp4",
+            attributes=[SimpleNamespace(file_name="movie.mp4")])
+        self.client.download_media = AsyncMock(side_effect=AssertionError("Media must never download"))
+        self.client.rows = [message(1, "Dyson HS08 — 40000"), photo, video]
+        result = await self.reader.fetch()
+        self.assertEqual(len(result.items), 3)
+        self.assertEqual(self.reader.last_read_stats["read_caption_posts"], 2)
+        self.assertEqual(self.reader.last_read_stats["ignored_caption_posts"], 0)
+        self.assertEqual(self.reader.last_read_stats["ignored_media"], 2)
+        self.client.download_media.assert_not_awaited()
+
     async def test_video_file_is_never_downloaded_as_spreadsheet(self):
         self.reader.source = Source("@supplier", mode="feed")
         video = message(1, "Dyson HS10 — 12000")
