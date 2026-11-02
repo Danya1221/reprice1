@@ -113,6 +113,48 @@ class PriceTests(unittest.TestCase):
         self.assertTrue(all("<b>— HS09 —</b>" in chunk["body"] for chunk in chunks))
         self.assertEqual(sum(chunk["body"].count("<code>") for chunk in chunks), 3)
 
+    def test_dyson_named_models_and_accessories_from_supplier(self):
+        rows = """Dyson 🇪🇺 Pencil Wash наша вилка🔌 — 37 500
+🇪🇺 Dyson Big Ball Multifloor 2 наша вилка 🔌 — 41 500
+🇪🇺 Dyson Big Ball Parquet 2 наша вилка 🔌 — 41 500
+Dyson Crest(гребень) — 5 000
+Dyson Full Complete Paddle Pale Rose — 13 000
+Dyson Hair Clips — 9 000
+Dyson Hair Clips+Crest+Brush Rose — 14 000
+Dyson Hair Clips+Crest+Paddle Fuchsia — 15 000
+Dyson Hair Clips+Crest+Paddle Prussian — 15 000
+Dyson Hair Clips+Crest+Paddle Rose+Brush Rose — 20 000
+🇭🇰 Dyson HushJet Black/Teal — 34 500
+🇰🇷 Dyson HushJet Black/Teal ру вилка — 36 000
+🇰🇷 Dyson HushJet White/Silver ру вилка — 35 500
+Dyson Paddle Brush Pale Rose+Crest(гребень) — 9 000
+Dyson Paddle Fuchsia Nickel — 8 000
+Dyson Paddle Fuchsia Nickel+Crest(гребень) — 9 000
+Dyson Round Brush 45mm Nickel Black — 8 500
+Dyson Round Brush Pale Rose — 7 000
+Dyson Round Brush Pale Rose + Detangling Comb — 8 000
+Dyson Round Brush Prussian 45/35мм — 6 500
+Dyson Round Pale Rose — 8 000
+Dyson Round Prussian+Crest(гребень) — 10 000
+Dyson Travel Bag Black/Fuchsia с магнитом — 6 000
+Dyson Насадка Large Volumizing Brush 45/30мм — 6 000
+Dyson Насадка для животных Pet Grooming — 15 500
+Dyson Подставка для фенов(никель,фуксия,синий) — 8 000
+Dyson Фильтры на Очистители Увлажнители — 14 500
+Отдельно насадка фен Dyson (1 шт) — 7 500"""
+        items = parse_documents([rows], fallback_block="Dyson").items
+        self.assertEqual(len(items), len(rows.splitlines()))
+        content = "\n".join(render_blocks(items, Settings()).values())
+        for heading in ("Pencil Wash", "Big Ball", "HushJet", "Расчёски", "Щётки Paddle", "Заколки",
+                        "Наборы аксессуаров", "Круглые щётки", "Сумки", "Насадки", "Подставки", "Фильтры"):
+            self.assertIn("<b>— " + heading + " —</b>", content)
+        self.assertEqual(content.count("<code>"), len(items))
+        self.assertNotIn("Другие товары Dyson", content)
+        pencil = content.split("<b>— Pencil Wash —</b>", 1)[1].split("<b>— ", 1)[0]
+        self.assertIn("37 500", pencil)
+        accessories = content.split("<b>— Насадки —</b>", 1)[1].split("<b>— ", 1)[0]
+        self.assertIn("Отдельно насадка фен Dyson", accessories)
+
     def test_pro_max_is_separate_from_base(self):
         items = self.parse("iPhone 17 256 Black — 60000\niPhone 17 Pro Max 256 Black — 90000").items
         self.assertEqual([i.block for i in items], ["iPhone 17", "iPhone 17 Pro Max"])

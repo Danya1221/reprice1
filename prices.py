@@ -664,6 +664,16 @@ def item_sort(item):
 def dyson_model(title):
     """Identify the model named in a Dyson row, without guessing unknown models."""
     text = FLAGS.sub("", clean(title))
+    # Explicitly sold parts and accessories can mention the compatible model;
+    # keep them under their product type rather than with the appliance itself.
+    if re.search(r"насадк|\battachment\b", text, re.I):
+        return "Насадки"
+    if re.search(r"подставк|\b(?:stand|dock)\b", text, re.I):
+        return "Подставки"
+    if re.search(r"фильтр|\bfilters?\b", text, re.I):
+        return "Фильтры"
+    if re.search(r"\b(?:travel\s+bag|storage\s+bag)\b|сумк", text, re.I):
+        return "Сумки"
     match = re.search(r"\bgen\s*(\d+)\b", text, re.I)
     if match:
         return "Gen" + match.group(1)
@@ -684,6 +694,23 @@ def dyson_model(title):
         return "Clean+Wash"
     if re.search(r"\bspot\s*\+\s*scrub\b", text, re.I):
         return "Spot+Scrub"
+    if re.search(r"\bpencil\s*wash\b", text, re.I):
+        return "Pencil Wash"
+    if re.search(r"\bbig\s*ball\b", text, re.I):
+        return "Big Ball"
+    if re.search(r"\bhush\s*jet\b", text, re.I):
+        return "HushJet"
+    accessory_names = r"hair\s*clips?|crest|comb|brush|paddle|гребен|расч[её]ск|щ[её]тк"
+    if "+" in text and len(re.findall(accessory_names, text, re.I)) >= 2:
+        return "Наборы аксессуаров"
+    if re.search(r"\bhair\s*clips?\b|заколк", text, re.I):
+        return "Заколки"
+    if re.search(r"\bround\b.*(?:brush)?|кругл\w*\s+щ[её]тк", text, re.I):
+        return "Круглые щётки"
+    if re.search(r"\bpaddle\b|\bbrush\b|щ[её]тк", text, re.I):
+        return "Щётки Paddle" if re.search(r"\bpaddle\b", text, re.I) else "Щётки"
+    if re.search(r"\b(?:crest|comb)\b|гребен|расч[её]ск", text, re.I):
+        return "Расчёски"
     return ""
 
 
