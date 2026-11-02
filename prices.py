@@ -25,10 +25,9 @@ PRICE = re.compile(
 # These are textual markers, not media; ignore them when extracting the price.
 # A parenthesized note after 📷 (e.g. colour) is preserved in the item title.
 PRICE_STATUS_SUFFIX = re.compile(
-    r"(?:\\s*(?:📷|📸|📹|🎥|🏎️?|🚛|🔌)\\s*)+"
-    r"(?P<note>\\([^()\\n]{1,60}\\))?\\s*$"
+    r"(?:\s*(?:📷|📸|📹|🎥|🏎️?|🚛|🔌)\s*)+"
+    r"(?P<note>\([^()\n]{1,60}\))?\s*$"
 )
-
 
 def strip_price_status_suffix(value):
     match = PRICE_STATUS_SUFFIX.search(value)
