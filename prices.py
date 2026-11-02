@@ -21,6 +21,22 @@ PRICE = re.compile(
     r"\s*(?P<flags>(?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)[✅🔥‼️!]*$",
     re.I,
 )
+# Supplier texts often end a numeric price with a camera/availability marker.
+# These are textual markers, not media; ignore them when extracting the price.
+# A parenthesized note after 📷 (e.g. colour) is preserved in the item title.
+PRICE_STATUS_SUFFIX = re.compile(
+    r"(?:\\s*(?:📷|📸|📹|🎥|🏎️?|🚛|🔌)\\s*)+"
+    r"(?P<note>\\([^()\\n]{1,60}\\))?\\s*$"
+)
+
+
+def strip_price_status_suffix(value):
+    match = PRICE_STATUS_SUFFIX.search(value)
+    if match is None:
+        return value, ""
+    return value[:match.start()].rstrip(), (match.group("note") or "").strip()
+
+
 ACCESSORY = re.compile(r"акс(?:ессуар|ис)|чехол|стекло|кабел[ья]|кабель|адаптер|[АA]dapter|переходник|зарядк|"
                        r"ремеш|бампер|case\b|charger\b|cable\b|"
                        r"\b(?:tempered\s+glass|screen\s+protector)\b|"
@@ -141,6 +157,7 @@ def amount_value(value):
 
 def split_price(line, default_currency):
     original = strip_decoration(line)
+    original, trailing_note = strip_price_status_suffix(original)
     if UNAVAILABLE.search(original) or IPHONE.fullmatch(original):
         return None
     wholesale = WHOLESALE.search(original)
@@ -155,6 +172,8 @@ def split_price(line, default_currency):
     if not separated and not (match["currency"] or match["prefix"]) and amount < 1000:
         return None
     title = title.rstrip(" -—–=:|")
+    if trailing_note:
+        title += " " + trailing_note
     if not title or not re.search(r"[A-Za-zА-Яа-яЁё]", title):
         return None
     if re.search(r"https?://|@\w+|доставка|гарантия|телефон:|заказ(?:ы|ов)?\s*:|"
@@ -488,6 +507,7 @@ def price_lines(documents):
             else:
                 line = re.sub(r"\b(?:от|from)\s*1\s*(?:шт|штук|pcs)\b", "", line, flags=re.I)
             candidate = FLAGS.sub("", line).strip(" —-–=:•")
+            candidate, _ = strip_price_status_suffix(candidate)
             if pending and PRICE.fullmatch(candidate) and not UNAVAILABLE.search(line):
                 flags = " ".join(FLAGS.findall(line))
                 yield pending + (" " + flags if flags and flags not in pending else "") + " — " + candidate
