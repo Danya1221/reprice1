@@ -664,9 +664,14 @@ def item_sort(item):
 def dyson_model(title):
     """Identify the model named in a Dyson row, without guessing unknown models."""
     text = FLAGS.sub("", clean(title))
-    # Explicitly sold parts and accessories can mention the compatible model;
-    # keep them under their product type rather than with the appliance itself.
-    if re.search(r"насадк|\battachment\b", text, re.I):
+    # A part's product name starts with "насадка" (possibly after Dyson and a
+    # modifier). Words in the middle can describe a complete appliance's kit,
+    # e.g. "HD18 ... (насадки)" or "V15s ... без лазерной насадки".
+    if re.search(
+        r"^\s*(?:(?:отдельно|отдельная)\s+)?(?:dyson\s+)?"
+        r"(?:(?:щелев\w*|лазерн\w*|сменн\w*|дополнительн\w*)\s+)?"
+        r"(?:насадк\w*|attachments?\b|nozzles?\b)", text, re.I,
+    ):
         return "Насадки"
     if re.search(r"подставк|\b(?:stand|dock)\b", text, re.I):
         return "Подставки"
@@ -677,11 +682,15 @@ def dyson_model(title):
     match = re.search(r"\bgen\s*(\d+)\b", text, re.I)
     if match:
         return "Gen" + match.group(1)
+    # HS09 V2 is an HS09 variant, not a V2 vacuum cleaner.
+    match = re.search(r"\b(HS|HD|HT|TP|BP|PH|HU|CY)\s*(\d{1,2})([A-Z]?)\b", text, re.I)
+    if match:
+        return match.group(1).upper() + match.group(2) + match.group(3).upper()
     # V15 SV47 is a V15 variant: use the consumer model before its SV code.
     match = re.search(r"\bV\s*(\d{1,2})(s?)\b", text, re.I)
     if match:
         return "V" + match.group(1) + match.group(2).lower()
-    match = re.search(r"\b(HS|HD|HT|TP|BP|PH|HU|CY|SV)\s*(\d{1,2})([A-Z]?)\b", text, re.I)
+    match = re.search(r"\b(SV)\s*(\d{1,2})([A-Z]?)\b", text, re.I)
     if match:
         return match.group(1).upper() + match.group(2) + match.group(3).upper()
     if re.search(r"\bG\s*1\b", text, re.I):

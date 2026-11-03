@@ -3,7 +3,7 @@ import unittest
 from decimal import Decimal
 
 from config import Settings
-from prices import (Item, amount_value, merge_sources, parse_documents, render_blocks,
+from prices import (Item, amount_value, dyson_model, merge_sources, parse_documents, render_blocks,
                     select_items, units, marked_price, section_chunks)
 
 
@@ -154,6 +154,37 @@ Dyson Фильтры на Очистители Увлажнители — 14 500
         self.assertIn("37 500", pencil)
         accessories = content.split("<b>— Насадки —</b>", 1)[1].split("<b>— ", 1)[0]
         self.assertIn("Отдельно насадка фен Dyson", accessories)
+
+    def test_dyson_appliances_with_attachment_mentions_stay_with_their_models(self):
+        titles = {
+            "Dyson 🇰🇷 HD18 Supersonic R Pro Vinca Blue/Topaz Orange наша вилка (гонк насадки) 🔌": "HD18",
+            "Dyson 🇪🇺 V12s Slim Absolute Detected Submarin Yellow/Nickel(без лазерной насадки)": "V12s",
+            "Dyson 🇪🇺 V15s Detect Submarine Yellow/Nickel SV47 наша вилка 🔌 (без лазерной насадки)": "V15s",
+            "🇭🇰 Dyson HS09 V2 Attachment Ceramic Pink": "HS09",
+            "🇭🇰 Dyson HS09 V2 Attachment Jusper Plum": "HS09",
+            "Dyson Насадка Large Volumizing Brush 45/30мм": "Насадки",
+            "Dyson Насадка для животных Pet Grooming": "Насадки",
+            "Dyson Насадка-лазер для V15": "Насадки",
+            "Dyson Щелевая насадка для V15": "Насадки",
+            "Отдельно насадка Dyson HS09 (1 шт)": "Насадки",
+            "Dyson Attachment for HS09": "Насадки",
+        }
+        for title, expected in titles.items():
+            with self.subTest(title=title):
+                self.assertEqual(dyson_model(title), expected)
+
+        rows = "\n".join(f"{title} — {10000 + index * 1000}"
+                         for index, title in enumerate(titles))
+        items = parse_documents([rows], fallback_block="Dyson").items
+        self.assertEqual(len(items), len(titles))
+        content = "\n".join(render_blocks(items, Settings()).values())
+        for model in ("HD18", "V12s", "V15s", "HS09"):
+            self.assertIn("<b>— " + model + " —</b>", content)
+        accessories = content.split("<b>— Насадки —</b>", 1)[1].split("<b>— ", 1)[0]
+        self.assertEqual(accessories.count("<code>"), 6)
+        for appliance in ("HD18 Supersonic", "V12s Slim", "V15s Detect", "HS09 V2"):
+            self.assertNotIn(appliance, accessories)
+        self.assertEqual(content.count("<code>"), len(titles))
 
     def test_pro_max_is_separate_from_base(self):
         items = self.parse("iPhone 17 256 Black — 60000\niPhone 17 Pro Max 256 Black — 90000").items
