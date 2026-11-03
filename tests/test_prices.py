@@ -186,6 +186,24 @@ Dyson Фильтры на Очистители Увлажнители — 14 500
             self.assertNotIn(appliance, accessories)
         self.assertEqual(content.count("<code>"), len(titles))
 
+    def test_dyson_bp_air_purifiers_share_one_heading(self):
+        rows = """🇪🇺 Dyson BP02 White/Silver — 86 500
+🇭🇰 Dyson BP03 Prussian/Gold — 86 500
+🇪🇺 Dyson BP04 Prussian/Gold — 94 500
+🇭🇰 Dyson BP04 Prussian/Gold — 90 500
+🇭🇰 Dyson BP06 White/Silver — 86 500"""
+        items = parse_documents([rows], fallback_block="Dyson").items
+        self.assertEqual(len(items), 5)
+        content = "\n".join(render_blocks(items, Settings()).values())
+        self.assertEqual(content.count("<b>— Очистители воздуха —</b>"), 1)
+        self.assertEqual(content.count("<code>"), 5)
+        for model in ("BP02", "BP03", "BP04", "BP06"):
+            self.assertIn(model, content)
+            self.assertNotIn("<b>— " + model + " —</b>", content)
+        self.assertIn("94 500", content)
+        self.assertIn("90 500", content)
+        self.assertEqual(dyson_model("Dyson Фильтр для BP04"), "Фильтры")
+
     def test_pro_max_is_separate_from_base(self):
         items = self.parse("iPhone 17 256 Black — 60000\niPhone 17 Pro Max 256 Black — 90000").items
         self.assertEqual([i.block for i in items], ["iPhone 17", "iPhone 17 Pro Max"])

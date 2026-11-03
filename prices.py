@@ -685,6 +685,8 @@ def dyson_model(title):
     # HS09 V2 is an HS09 variant, not a V2 vacuum cleaner.
     match = re.search(r"\b(HS|HD|HT|TP|BP|PH|HU|CY)\s*(\d{1,2})([A-Z]?)\b", text, re.I)
     if match:
+        if match.group(1).upper() == "BP" and match.group(2) in {"02", "03", "04", "06"}:
+            return "Очистители воздуха"
         return match.group(1).upper() + match.group(2) + match.group(3).upper()
     # V15 SV47 is a V15 variant: use the consumer model before its SV code.
     match = re.search(r"\bV\s*(\d{1,2})(s?)\b", text, re.I)
