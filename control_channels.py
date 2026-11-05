@@ -37,7 +37,8 @@ class ChannelController(FirstMessageController):
         file_time = snapshot.get("file_time") if snapshot.get("slot") == slot else None
         when = (datetime.fromtimestamp(file_time, ZoneInfo("Europe/Moscow")).strftime("%d.%m %H:%M МСК")
                 if file_time else "ещё не получен")
-        status = f"Подключён аккаунт {slot}" if enabled else "Не подключён"
+        identity = await self.account_identity(slot) if enabled else ""
+        status = (f"Подключён аккаунт {slot}" + (f" — {identity}" if identity else "")) if enabled else "Не подключён"
         text = (f"🌟 Supernova\n\n{status}\nАвтообновление: {'✅ включено' if auto_enabled else '⏸ выключено'}\nПоследний Excel: {when}\n"
                 f"Активных позиций: {len(fresh)}\n\n"
                 "При автообновлении PriceB открывает Mini App, запрашивает Excel и ждёт файл в чате Supernova. "
@@ -59,6 +60,7 @@ class ChannelController(FirstMessageController):
             rows.append([{"text": "⏸ Выключить авто" if auto_enabled else "▶️ Включить авто",
                           "callback_data": "supernova:auto:off" if auto_enabled else "supernova:auto:on"}])
             rows.append([{"text": "🔄 Запросить Excel сейчас", "callback_data": "supernova:request"}])
+            rows.append([{"text": "📊 Обновить статус", "callback_data": "supernova:show"}])
             rows.append([{"text": "⏹ Отключить Supernova", "callback_data": "supernova:disable"}])
         rows.append([{"text": "⬅️ Главное меню", "callback_data": "supernova:back"}])
         await self.send(chat_id, (notice + "\n\n" if notice else "") + text, {"inline_keyboard": rows})

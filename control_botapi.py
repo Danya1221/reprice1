@@ -107,15 +107,39 @@ class BotAPIController:
             with suppress(Exception):
                 await client.disconnect()
 
+    async def account_identity(self, slot):
+        """Show an operator enough information to distinguish connected accounts."""
+        client = getattr(self.service, "clients", {}).get(slot)
+        if client is None:
+            return ""
+        try:
+            me = await asyncio.wait_for(client.get_me(), timeout=3)
+        except Exception:
+            return "данные аккаунта временно недоступны"
+        if me is None:
+            return "данные аккаунта временно недоступны"
+        name = " ".join(str(value).strip() for value in
+                        (getattr(me, "first_name", None), getattr(me, "last_name", None)) if value)
+        username = getattr(me, "username", None)
+        phone = str(getattr(me, "phone", "") or "")
+        details = [part for part in (name, "@" + username if username else "",
+                                     "телефон ••••" + phone[-4:] if len(phone) >= 4 else "") if part]
+        if getattr(me, "id", None):
+            details.append("ID " + str(me.id))
+        return " · ".join(details) or "имя аккаунта недоступно"
+
     async def accounts_menu(self, chat_id):
         connected_1 = bool(1 in getattr(self.service, "clients", {}) and self.service.ready)
         connected_2 = bool(2 in getattr(self.service, "clients", {}))
         saved_1 = bool(self.service.state.get("session_string", "") or self.service.settings.session)
         saved_2 = bool(self.service.state.get("session_string_2", "") or getattr(self.service.settings, "session_2", ""))
+        identity_1, identity_2 = await asyncio.gather(self.account_identity(1), self.account_identity(2))
+        detail_1 = " — " + identity_1 if identity_1 else ""
+        detail_2 = " — " + identity_2 if identity_2 else ""
         text = (
             "👥 Telegram-аккаунты поставщиков\n\n"
-            f"1. {'🟢 подключён' if connected_1 else ('🟡 сохранён' if saved_1 else '⚪ не подключён')}\n"
-            f"2. {'🟢 подключён' if connected_2 else ('🟡 сохранён' if saved_2 else '⚪ не подключён')}\n\n"
+            f"1. {'🟢 подключён' if connected_1 else ('🟡 сохранён' if saved_1 else '⚪ не подключён')}{detail_1}\n"
+            f"2. {'🟢 подключён' if connected_2 else ('🟡 сохранён' if saved_2 else '⚪ не подключён')}{detail_2}\n\n"
             "Аккаунт 1 читает все источники. Аккаунт 2 читает только HI (Поставщик 1). "
             "Если цена HI отличается, в итоговый прайс попадёт меньшая закупочная цена."
         )

@@ -192,6 +192,26 @@ class SupernovaServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("60 000", content)
         self.assertNotIn("По запросу", content)
 
+    async def test_accounts_and_supernova_show_connected_account_identity(self):
+        self.client.get_me.return_value = SimpleNamespace(id=42, bot=False, first_name="Кирилл",
+                                                           last_name="Тест", username="pricing",
+                                                           phone="79991234567")
+        self.service.clients[2] = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(
+            id=43, first_name="Второй", username="second", phone="78887654321")))
+        controller = CatalogController("token", self.service, [42])
+        controller.send = AsyncMock()
+        await controller.accounts_menu(42)
+        text = controller.send.await_args.args[1]
+        self.assertIn("Кирилл Тест · @pricing · телефон ••••4567 · ID 42", text)
+        self.assertIn("Второй · @second · телефон ••••4321 · ID 43", text)
+        self.assertNotIn("79991234567", text)
+        await controller.show_supernova(42)
+        text = controller.send.await_args.args[1]
+        self.assertIn("Подключён аккаунт 1 — Кирилл Тест", text)
+        markup = controller.send.await_args.args[2]
+        self.assertTrue(any(button.get("callback_data") == "supernova:show"
+                            for row in markup["inline_keyboard"] for button in row))
+
     async def test_admin_can_choose_account_in_control_bot(self):
         controller = CatalogController("token", self.service, [42])
         controller.send = AsyncMock()
