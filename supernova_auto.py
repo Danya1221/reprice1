@@ -94,23 +94,31 @@ async def supernova_webview(client, bot):
     return url
 
 
-async def page_markers(page):
-    """Collect only fixed booleans, never page content or Telegram credentials."""
+async def page_markers(page, diagnostics=None):
+    """Collect fixed indicators only; never collect text, URLs or Telegram credentials."""
     try:
         markers = await page.evaluate("""() => {
           const text = document.body ? document.body.innerText : '';
-          return {
-            price: /прайс/i.test(text), excel: /excel|xlsx/i.test(text),
-            init: Boolean(window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData)
-          };
+          const known = ['web_app_open_popup', 'web_app_request_phone', 'web_app_open_invoice',
+            'web_app_open_link', 'web_app_open_tg_link', 'web_app_invoke_custom_method', 'web_app_data_send'];
+          const event = known.includes(window.__supernovaBlockedEvent) ? window.__supernovaBlockedEvent : '';
+          return {length: text.trim().length, loading: /загруз|loading/i.test(text),
+            error: /ошибк|error|не удалось/i.test(text), login: /авторизац|войти|вход|log.?in|sign.?in/i.test(text),
+            frames: document.querySelectorAll('iframe').length, event};
         }""")
-        flag = lambda key: "есть" if markers.get(key) else "нет"
-        return f"На странице: прайс — {flag('price')}, Excel — {flag('excel')}; Telegram-параметры — {flag('init')}"
+        diagnostics = diagnostics or {}
+        event = markers.get("event") or "нет"
+        return (f"Текст: {min(markers.get('length', 0), 9999)} симв.; "
+                f"загрузка/ошибка/вход: {int(markers.get('loading', False))}/"
+                f"{int(markers.get('error', False))}/{int(markers.get('login', False))}; "
+                f"iframe: {markers.get('frames', 0)}; Telegram: {event}; "
+                f"сеть/401-403/5xx/JS: {diagnostics.get('failed', 0)}/{diagnostics.get('auth', 0)}/"
+                f"{diagnostics.get('server', 0)}/{diagnostics.get('js', 0)}")
     except Exception:
-        return "Не удалось проверить содержимое страницы"
+        return "Не удалось проверить страницу"
 
 
-async def click_export_page(page):
+async def click_export_page(page, diagnostics=None):
     """Click only the known price navigation and Excel-export controls."""
     export = page.get_by_text(DOWNLOAD_LABEL).filter(visible=True).first
     try:
@@ -121,11 +129,11 @@ async def click_export_page(page):
             await price.wait_for(state="visible", timeout=15000)
             await price.click(timeout=5000)
         except Exception as exc:
-            raise SupernovaAutoError("Не найдена или не открылась кнопка «Прайс». " + await page_markers(page)) from exc
+            raise SupernovaAutoError("Не найдена или не открылась кнопка «Прайс». " + await page_markers(page, diagnostics)) from exc
         try:
             await export.wait_for(state="visible", timeout=15000)
         except Exception as exc:
-            raise SupernovaAutoError("Открыл «Прайс», но не нашёл кнопку Excel. " + await page_markers(page)) from exc
+            raise SupernovaAutoError("Открыл «Прайс», но не нашёл кнопку Excel. " + await page_markers(page, diagnostics)) from exc
     if await page.evaluate("Boolean(window.__supernovaBlockedEvent)"):
         raise SupernovaAutoError("Mini App запросил дополнительное подтверждение в Telegram")
     try:
@@ -156,12 +164,29 @@ async def request_supernova_export(client, bot, wait_for_delivery, progress=None
                 )
                 await context.add_init_script(WEBVIEW_BRIDGE)
                 page = await context.new_page()
+                diagnostics = {"failed": 0, "auth": 0, "server": 0, "js": 0}
+
+                def request_failed(_):
+                    diagnostics["failed"] += 1
+
+                def response_received(response):
+                    if response.status in (401, 403):
+                        diagnostics["auth"] += 1
+                    elif 500 <= response.status < 600:
+                        diagnostics["server"] += 1
+
+                def page_error(_):
+                    diagnostics["js"] += 1
+
+                page.on("requestfailed", request_failed)
+                page.on("response", response_received)
+                page.on("pageerror", page_error)
                 progress("Открываю Mini App")
                 await page.goto(url, wait_until="domcontentloaded", timeout=25000)
                 if urlsplit(page.url).scheme != "https":
                     raise SupernovaAutoError("Mini App открыл небезопасный адрес")
                 progress("Ищу кнопки прайса и Excel")
-                await click_export_page(page)
+                await click_export_page(page, diagnostics)
                 progress("Кнопка нажата, жду Excel в чате")
                 # Keep the page alive until the bot has actually sent the file;
                 # closing it early can cancel the app's pending export request.

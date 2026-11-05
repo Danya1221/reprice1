@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from telethon import functions, types
 
-from supernova_auto import WEBVIEW_BRIDGE, SupernovaAutoError, click_export_page, supernova_webview
+from supernova_auto import WEBVIEW_BRIDGE, SupernovaAutoError, click_export_page, page_markers, supernova_webview
 import test_supernova as fixtures
 
 
@@ -103,6 +103,21 @@ class BrowserFixtureTests(unittest.IsolatedAsyncioTestCase):
                 await click_export_page(page)
                 self.assertTrue(await page.evaluate("window.exportClicked === true"))
                 self.assertFalse(await page.evaluate("window.orderClicked === true"))
+            finally:
+                await browser.close()
+
+    async def test_diagnostics_report_only_safe_indicators(self):
+        from playwright.async_api import async_playwright
+        html = "<body>Ошибка входа: SECRET-TELEGRAM-INIT-DATA <iframe></iframe></body>"
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+            try:
+                page = await browser.new_page()
+                await page.goto("data:text/html;charset=utf-8," + quote(html))
+                result = await page_markers(page, {"failed": 1, "auth": 2, "server": 3, "js": 4})
+                self.assertIn("загрузка/ошибка/вход: 0/1/1", result)
+                self.assertIn("сеть/401-403/5xx/JS: 1/2/3/4", result)
+                self.assertNotIn("SECRET", result)
             finally:
                 await browser.close()
 
