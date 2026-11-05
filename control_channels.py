@@ -29,18 +29,24 @@ class ChannelController(FirstMessageController):
     async def show_supernova(self, chat_id, notice=""):
         settings = self.service.state.get("supernova_settings", {})
         snapshot = self.service.state.get("supernova_snapshot", {})
+        auto = self.service.state.get("supernova_auto", {}) or {}
         enabled = settings.get("enabled", False)
         slot = settings.get("slot")
+        auto_enabled = auto.get("enabled", False) and auto.get("slot") == slot
         fresh = self.service.supernova_items() if enabled else []
         file_time = snapshot.get("file_time") if snapshot.get("slot") == slot else None
         when = (datetime.fromtimestamp(file_time, ZoneInfo("Europe/Moscow")).strftime("%d.%m %H:%M МСК")
                 if file_time else "ещё не получен")
         status = f"Подключён аккаунт {slot}" if enabled else "Не подключён"
-        text = (f"🌟 Supernova\n\n{status}\nПоследний Excel: {when}\n"
+        text = (f"🌟 Supernova\n\n{status}\nАвтообновление: {'✅ включено' if auto_enabled else '⏸ выключено'}\nПоследний Excel: {when}\n"
                 f"Активных позиций: {len(fresh)}\n\n"
-                "На выбранном аккаунте открой @supernova_bot → Mini App → «Прайс» → скачай Excel. "
-                "Когда файл придёт в чат с Supernova, PriceB прочитает его автоматически. "
+                "При автообновлении PriceB открывает Mini App, запрашивает Excel и ждёт файл в чате Supernova. "
+                f"Расписание: {self.service.settings.open_hour:02d}:00–{self.service.settings.close_hour:02d}:00 ({self.service.settings.timezone}), примерно раз в 8 минут. "
                 "Цены используются до 10 минут с момента получения; затем нужен свежий Excel.")
+        if enabled and auto.get("status"):
+            text += "\n\nАвтозапрос: " + str(auto["status"])[:120]
+        if enabled and auto.get("error"):
+            text += "\n⚠️ " + str(auto["error"])[:240]
         error = self.service.state.get("supernova_error", "")
         if enabled and error:
             text += "\n\n⚠️ " + error[:300]
@@ -50,6 +56,9 @@ class ChannelController(FirstMessageController):
             [{"text": "Открыть Supernova", "url": "https://t.me/supernova_bot"}],
         ]
         if enabled:
+            rows.append([{"text": "⏸ Выключить авто" if auto_enabled else "▶️ Включить авто",
+                          "callback_data": "supernova:auto:off" if auto_enabled else "supernova:auto:on"}])
+            rows.append([{"text": "🔄 Запросить Excel сейчас", "callback_data": "supernova:request"}])
             rows.append([{"text": "⏹ Отключить Supernova", "callback_data": "supernova:disable"}])
         rows.append([{"text": "⬅️ Главное меню", "callback_data": "supernova:back"}])
         await self.send(chat_id, (notice + "\n\n" if notice else "") + text, {"inline_keyboard": rows})
@@ -234,6 +243,18 @@ class ChannelController(FirstMessageController):
             elif data == "supernova:disable":
                 await self.service.configure_supernova(None)
                 await self.show_supernova(chat_id, "✅ Supernova отключена.")
+            elif data in {"supernova:auto:on", "supernova:auto:off"}:
+                try:
+                    await self.service.set_supernova_auto(data.endswith(":on"))
+                    await self.show_supernova(chat_id, "✅ Настройка автообновления сохранена.")
+                except ValueError as exc:
+                    await self.show_supernova(chat_id, str(exc))
+            elif data == "supernova:request":
+                try:
+                    started = self.service.start_supernova_export(force=True)
+                    await self.show_supernova(chat_id, "⏳ Запрашиваю Excel. Вернись в этот раздел, чтобы увидеть результат." if started else "⏳ Запрос уже выполняется.")
+                except ValueError as exc:
+                    await self.show_supernova(chat_id, str(exc))
             elif data in {"supernova:account:1", "supernova:account:2"}:
                 slot = int(data.rsplit(":", 1)[1])
                 try:

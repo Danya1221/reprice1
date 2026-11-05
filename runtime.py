@@ -17,6 +17,7 @@ from prices import (
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
 from supernova import FRESH_SECONDS, MAX_BYTES, parse_supernova
+from supernova_auto import SupernovaAutoError, request_supernova_export
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +80,8 @@ class SyncService:
         self.supernova_verified_account = None
         self.supernova_last_view = None
         self.supernova_retry_at = 0.0
+        self.supernova_auto_task = None
+        self.supernova_wake = asyncio.Event()
 
     def supernova_items(self, now=None):
         now = time.time() if now is None else now
@@ -110,11 +113,114 @@ class SyncService:
             if slot is not None and (slot not in self.clients or not self.account_configured(slot)):
                 raise ValueError(f"Сначала подключи Telegram-аккаунт {slot} через /login {slot}")
             self.state.set("supernova_settings", {"enabled": slot is not None, "slot": slot})
+            if previous.get("slot") != slot:
+                self.state.set("supernova_auto", {"enabled": slot is not None, "slot": slot, "next_attempt": 0})
             self.supernova_verified_account = None
             self.supernova_last_view = None
             self.wake.set()
+        if previous.get("slot") != slot:
+            await self.cancel_supernova_export()
         if previous.get("enabled") and previous.get("slot") != slot and self.ready and self.enabled() and self.state.get("sources", {}):
             await self.refresh_format()
+
+    def supernova_working_time(self, now=None):
+        now = now or datetime.now(timezone.utc)
+        local = now.astimezone(ZoneInfo(self.settings.timezone))
+        return self.settings.open_hour <= local.hour < self.settings.close_hour
+
+    async def set_supernova_auto(self, enabled):
+        config = self.state.get("supernova_settings", {})
+        slot = config.get("slot")
+        if enabled and (not config.get("enabled") or slot not in self.clients):
+            raise ValueError("Сначала выбери подключённый аккаунт Supernova")
+        current = self.state.get("supernova_auto", {})
+        self.state.set("supernova_auto", {**current, "enabled": bool(enabled), "slot": slot,
+                                        "next_attempt": current.get("next_attempt", 0),
+                                        "status": "Автообновление включено" if enabled else "Автообновление остановлено",
+                                        "error": ""})
+        if not enabled:
+            await self.cancel_supernova_export()
+        elif self.ready and self.enabled() and self.supernova_working_time():
+            self.start_supernova_export()
+
+    async def cancel_supernova_export(self):
+        task = self.supernova_auto_task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.supernova_auto_task = None
+
+    def start_supernova_export(self, force=False):
+        config = self.state.get("supernova_settings", {})
+        slot = config.get("slot")
+        if not config.get("enabled") or slot not in self.clients or not self.ready:
+            raise ValueError("Сначала подключи Telegram-аккаунт Supernova")
+        if not self.enabled():
+            raise ValueError("Сначала запусти синхронизацию")
+        if time.monotonic() < self.supernova_retry_at:
+            if force:
+                raise ValueError("Telegram попросил подождать перед следующим запросом")
+            return False
+        if self.supernova_auto_task and not self.supernova_auto_task.done():
+            return False
+        auto = self.state.get("supernova_auto", {})
+        if force and time.time() - auto.get("last_attempt", 0) < 60:
+            raise ValueError("Подожди минуту перед повторным запросом")
+        if not force and (not auto.get("enabled") or auto.get("slot") != slot or not self.supernova_working_time()
+                          or time.time() < auto.get("next_attempt", 0)):
+            return False
+        started = time.time()
+        self.state.set("supernova_auto", {**auto, "slot": slot, "last_attempt": started,
+                                        "next_attempt": started + 300, "status": "Запрос запущен", "error": ""})
+        self.supernova_auto_task = asyncio.create_task(self._perform_supernova_export(slot), name="supernova-export")
+        return True
+
+    async def _perform_supernova_export(self, slot):
+        try:
+            client = self.clients.get(slot)
+            if client is None:
+                raise SupernovaAutoError("Выбранный Telegram-аккаунт отключён")
+            me = await client.get_me()
+            peer = await client.get_entity("@supernova_bot")
+            if not getattr(peer, "bot", False) or not getattr(me, "id", None):
+                raise SupernovaAutoError("Не удалось проверить аккаунт и бота Supernova")
+            before = await client.get_messages(peer, limit=1)
+            baseline = max((message.id for message in before), default=0)
+            async def wait_for_delivery():
+                while True:
+                    config = self.state.get("supernova_settings", {})
+                    if not config.get("enabled") or config.get("slot") != slot or self.clients.get(slot) is not client:
+                        raise SupernovaAutoError("Аккаунт Supernova изменился во время запроса")
+                    snapshot = self.state.get("supernova_snapshot", {})
+                    if (snapshot.get("slot") == slot and snapshot.get("account_id") == me.id
+                            and snapshot.get("message_id", 0) > baseline):
+                        return
+                    self.supernova_wake.set()
+                    await asyncio.sleep(5)
+
+            # Telegram's webview request is valid without prolongation for less
+            # than one minute; the separate reader checks the chat every 30 sec.
+            await asyncio.wait_for(request_supernova_export(client, peer, wait_for_delivery), timeout=55)
+            now = time.time()
+            current = self.state.get("supernova_auto", {})
+            self.state.set("supernova_auto", {**current, "last_success": now,
+                                            "next_attempt": now + 480,
+                                            "status": "Excel получен и прочитан", "error": ""})
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Do not log arbitrary exception text: webview URLs contain initData.
+            log.warning("Автообновление Supernova не завершено: %s", type(exc).__name__)
+            if isinstance(exc, errors.FloodWaitError):
+                message = f"Telegram просит подождать {exc.seconds} сек."
+                delay = max(300, exc.seconds + 1)
+            else:
+                message = str(exc) if isinstance(exc, SupernovaAutoError) else "Не удалось открыть Mini App или получить Excel"
+                delay = 300
+            current = self.state.get("supernova_auto", {})
+            self.state.set("supernova_auto", {**current, "status": "Ошибка обновления", "error": message[:240],
+                                            "next_attempt": time.time() + delay})
 
     async def poll_supernova(self):
         config = self.state.get("supernova_settings", {})
@@ -830,9 +936,21 @@ class SyncService:
 
     async def run_supernova(self):
         """Poll separately so a slow supplier does not block receiving the XLSX."""
-        while not self.stop_event.is_set() and not self.reload_requested:
-            await self.poll_supernova()
-            try:
-                await asyncio.wait_for(self.stop_event.wait(), timeout=30)
-            except asyncio.TimeoutError:
-                pass
+        try:
+            while not self.stop_event.is_set() and not self.reload_requested:
+                self.supernova_wake.clear()
+                await self.poll_supernova()
+                config = self.state.get("supernova_settings", {})
+                if config.get("enabled") and self.state.get("supernova_auto") is None:
+                    self.state.set("supernova_auto", {"enabled": True, "slot": config.get("slot"), "next_attempt": 0})
+                if self.state.get("supernova_auto", {}).get("enabled") and self.ready and self.enabled():
+                    try:
+                        self.start_supernova_export()
+                    except ValueError:
+                        pass
+                try:
+                    await asyncio.wait_for(self.supernova_wake.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            await self.cancel_supernova_export()
