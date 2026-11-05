@@ -113,7 +113,7 @@ class SupernovaAutomaticTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_only_new_verified_file_completes_automatic_request(self):
         self.client.get_messages.side_effect = [[SimpleNamespace(id=9)], [self.msg]]
-        async def receive_during_open(client, peer, wait_for_delivery):
+        async def receive_during_open(client, peer, wait_for_delivery, progress):
             await self.service.poll_supernova()
             await wait_for_delivery()
         request = AsyncMock(side_effect=receive_during_open)
@@ -141,6 +141,39 @@ class SupernovaAutomaticTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECRET", str(status))
         self.assertEqual(status["next_attempt"], 2000000301)
         self.assertEqual(self.state.get("supernova_snapshot"), previous)
+
+    async def test_failure_reports_stage_without_sensitive_exception_text(self):
+        self.client.get_entity.side_effect = RuntimeError("secret auth data")
+        self.service.start_supernova_export(force=True)
+        await self.service.supernova_auto_task
+        status = self.state.get("supernova_auto")
+        self.assertEqual(status["status"], "Ошибка обновления")
+        self.assertIn("Подключаюсь к боту Supernova", status["error"])
+        self.assertIn("RuntimeError", status["error"])
+        self.assertNotIn("secret", status["error"])
+
+    async def test_enabling_auto_keeps_previous_error_when_no_new_request_starts(self):
+        self.state.set("supernova_auto", {"slot": 1, "enabled": False, "next_attempt": 9999999999,
+                                          "status": "Ошибка обновления", "error": "не удалось открыть"})
+        await self.service.set_supernova_auto(True)
+        status = self.state.get("supernova_auto")
+        self.assertEqual(status["status"], "Ошибка обновления")
+        self.assertEqual(status["error"], "не удалось открыть")
+
+    async def test_manual_request_sends_error_after_it_finishes(self):
+        from control_catalog import CatalogController
+        self.client.get_entity.side_effect = RuntimeError("sensitive")
+        controller = CatalogController("token", self.service, [42])
+        controller.send = AsyncMock()
+        controller.answer_callback = AsyncMock()
+        callback = {"id": "1", "from": {"id": 42},
+                    "message": {"chat": {"id": 42, "type": "private"}},
+                    "data": "supernova:request"}
+        await controller.handle_callback(callback)
+        await asyncio.gather(*list(controller.supernova_notifications))
+        texts = [call.args[1] for call in controller.send.await_args_list]
+        self.assertTrue(any("Ошибка обновления" in text and "RuntimeError" in text for text in texts))
+        self.assertTrue(all("sensitive" not in text for text in texts))
 
     async def test_disable_auto_cancels_inflight_request(self):
         entered = asyncio.Event()

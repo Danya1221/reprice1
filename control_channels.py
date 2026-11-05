@@ -1,5 +1,7 @@
 """Manage supplier channels separately from the publication destination."""
+import asyncio
 import hashlib
+import logging
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -7,6 +9,8 @@ from zoneinfo import ZoneInfo
 from config import Source
 from prices import Item, select_items
 from control_first import FirstMessageController
+
+log = logging.getLogger(__name__)
 
 
 def channel_token(peer, slot=1):
@@ -19,6 +23,29 @@ class ChannelController(FirstMessageController):
         self.channel_waiting = set()
         self.channel_choices = {}
         self.channel_slots = {}
+        self.supernova_notifications = set()
+
+    async def _notify_supernova_result(self, chat_id, task, slot):
+        try:
+            await asyncio.shield(task)
+            if self.closed or self.service.state.get("supernova_settings", {}).get("slot") != slot:
+                return
+            auto = self.service.state.get("supernova_auto", {})
+            status = auto.get("status", "Результат неизвестен")
+            error = auto.get("error", "")
+            message = "🌟 Supernova: " + status + ("\n⚠️ " + error if error else "")
+            await self.send(chat_id, message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("Не удалось отправить результат запроса Supernova")
+
+    async def close(self):
+        for task in self.supernova_notifications:
+            task.cancel()
+        if self.supernova_notifications:
+            await asyncio.gather(*self.supernova_notifications, return_exceptions=True)
+        await super().close()
 
     def menu(self):
         menu = super().menu()
@@ -254,7 +281,13 @@ class ChannelController(FirstMessageController):
             elif data == "supernova:request":
                 try:
                     started = self.service.start_supernova_export(force=True)
-                    await self.show_supernova(chat_id, "⏳ Запрашиваю Excel. Вернись в этот раздел, чтобы увидеть результат." if started else "⏳ Запрос уже выполняется.")
+                    if started:
+                        slot = self.service.state.get("supernova_settings", {}).get("slot")
+                        notification = asyncio.create_task(self._notify_supernova_result(
+                            chat_id, self.service.supernova_auto_task, slot))
+                        self.supernova_notifications.add(notification)
+                        notification.add_done_callback(self.supernova_notifications.discard)
+                    await self.show_supernova(chat_id, "⏳ Запрашиваю Excel. Сообщу результат." if started else "⏳ Запрос уже выполняется.")
                 except ValueError as exc:
                     await self.show_supernova(chat_id, str(exc))
             elif data in {"supernova:account:1", "supernova:account:2"}:

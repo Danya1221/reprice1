@@ -141,10 +141,16 @@ class SyncService:
         if enabled and (not config.get("enabled") or slot not in self.clients):
             raise ValueError("Сначала выбери подключённый аккаунт Supernova")
         current = self.state.get("supernova_auto", {})
+        if not enabled:
+            status = "Автообновление остановлено"
+        elif current.get("error"):
+            status = "Ошибка обновления"
+        elif self.supernova_auto_task and not self.supernova_auto_task.done():
+            status = current.get("status", "Запрос запущен")
+        else:
+            status = "Автообновление включено"
         self.state.set("supernova_auto", {**current, "enabled": bool(enabled), "slot": slot,
-                                        "next_attempt": current.get("next_attempt", 0),
-                                        "status": "Автообновление включено" if enabled else "Автообновление остановлено",
-                                        "error": ""})
+                                        "next_attempt": current.get("next_attempt", 0), "status": status})
         if not enabled:
             await self.cancel_supernova_export()
         elif self.ready and self.enabled() and self.supernova_working_time():
@@ -183,15 +189,27 @@ class SyncService:
         return True
 
     async def _perform_supernova_export(self, slot):
+        stage = "Проверяю аккаунт"
+
+        def set_stage(value):
+            nonlocal stage
+            stage = value
+            current = self.state.get("supernova_auto", {})
+            if current.get("slot") == slot:
+                self.state.set("supernova_auto", {**current, "status": value})
+
         try:
+            set_stage(stage)
             client = self.clients.get(slot)
             if client is None:
                 raise SupernovaAutoError("Выбранный Telegram-аккаунт отключён")
-            me = await client.get_me()
-            peer = await client.get_entity(SUPERNOVA_BOT)
+            me = await asyncio.wait_for(client.get_me(), timeout=15)
+            set_stage("Подключаюсь к боту Supernova")
+            peer = await asyncio.wait_for(client.get_entity(SUPERNOVA_BOT), timeout=15)
             if not getattr(peer, "bot", False) or not getattr(me, "id", None):
                 raise SupernovaAutoError("Не удалось проверить аккаунт и бота Supernova")
-            before = await client.get_messages(peer, limit=1)
+            set_stage("Проверяю чат Supernova")
+            before = await asyncio.wait_for(client.get_messages(peer, limit=1), timeout=15)
             baseline = max((message.id for message in before), default=0)
             async def wait_for_delivery():
                 while True:
@@ -207,7 +225,7 @@ class SyncService:
 
             # Telegram's webview request is valid without prolongation for less
             # than one minute; the separate reader checks the chat every 30 sec.
-            await asyncio.wait_for(request_supernova_export(client, peer, wait_for_delivery), timeout=55)
+            await asyncio.wait_for(request_supernova_export(client, peer, wait_for_delivery, set_stage), timeout=55)
             now = time.time()
             current = self.state.get("supernova_auto", {})
             self.state.set("supernova_auto", {**current, "last_success": now,
@@ -222,8 +240,12 @@ class SyncService:
             if isinstance(exc, errors.FloodWaitError):
                 message = f"Telegram просит подождать {exc.seconds} сек."
                 delay = max(300, exc.seconds + 1)
+            elif isinstance(exc, asyncio.TimeoutError):
+                message = f"Превышено время ожидания. Этап: {stage}"
+                delay = 300
             else:
-                message = str(exc) if isinstance(exc, SupernovaAutoError) else "Не удалось открыть Mini App или получить Excel"
+                detail = str(exc) if isinstance(exc, SupernovaAutoError) else type(exc).__name__
+                message = f"{stage}: {detail}"
                 delay = 300
             current = self.state.get("supernova_auto", {})
             self.state.set("supernova_auto", {**current, "status": "Ошибка обновления", "error": message[:240],

@@ -116,12 +116,15 @@ async def click_export_page(page):
         raise SupernovaAutoError("Mini App запросил дополнительное подтверждение в Telegram")
 
 
-async def request_supernova_export(client, bot, wait_for_delivery):
+async def request_supernova_export(client, bot, wait_for_delivery, progress=None):
     """Use an ephemeral browser; no session URL, cookies or screenshots are saved."""
+    progress = progress or (lambda value: None)
+    progress("Получаю адрес Mini App через Telegram")
     url = await supernova_webview(client, bot)
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
+            progress("Запускаю браузер")
             browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
             try:
                 context = await browser.new_context(
@@ -132,10 +135,13 @@ async def request_supernova_export(client, bot, wait_for_delivery):
                 )
                 await context.add_init_script(WEBVIEW_BRIDGE)
                 page = await context.new_page()
+                progress("Открываю Mini App")
                 await page.goto(url, wait_until="domcontentloaded", timeout=25000)
                 if urlsplit(page.url).scheme != "https":
                     raise SupernovaAutoError("Mini App открыл небезопасный адрес")
+                progress("Ищу кнопки прайса и Excel")
                 await click_export_page(page)
+                progress("Кнопка нажата, жду Excel в чате")
                 # Keep the page alive until the bot has actually sent the file;
                 # closing it early can cancel the app's pending export request.
                 await wait_for_delivery()
@@ -147,4 +153,4 @@ async def request_supernova_export(client, bot, wait_for_delivery):
         raise
     except Exception as exc:
         # Browser exceptions may contain the full URL with Telegram initData.
-        raise SupernovaAutoError("Не удалось открыть Mini App Supernova") from exc
+        raise SupernovaAutoError("Ошибка браузера (" + type(exc).__name__ + ")") from exc
