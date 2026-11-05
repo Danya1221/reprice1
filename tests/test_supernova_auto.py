@@ -88,6 +88,24 @@ class BrowserFixtureTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await browser.close()
 
+    async def test_price_row_with_counter_and_excel_label_are_recognized(self):
+        from playwright.async_api import async_playwright
+        html = """<button onclick="document.getElementById('excel').hidden=false">🛒 Прайс 314 ›</button>
+        <button id="excel" hidden onclick="window.exportClicked=true">Скачать прайс-лист в Excel</button>
+        <button onclick="window.orderClicked=true">Сделать заказ</button>"""
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+            try:
+                context = await browser.new_context()
+                await context.add_init_script(WEBVIEW_BRIDGE)
+                page = await context.new_page()
+                await page.goto("data:text/html;charset=utf-8," + quote(html))
+                await click_export_page(page)
+                self.assertTrue(await page.evaluate("window.exportClicked === true"))
+                self.assertFalse(await page.evaluate("window.orderClicked === true"))
+            finally:
+                await browser.close()
+
     async def test_confirmation_request_is_never_accepted_automatically(self):
         from playwright.async_api import async_playwright
         html = "<button onclick='window.exportClicked=true'>Скачать прайс-лист (Excel)</button>"

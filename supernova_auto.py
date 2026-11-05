@@ -10,8 +10,11 @@ class SupernovaAutoError(RuntimeError):
     pass
 
 
-DOWNLOAD_LABEL = re.compile(r"скачать\s+прайс[-\s]*лист\s*\(\s*excel\s*\)", re.I)
-PRICE_LABEL = re.compile(r"^\s*(?:🛒\s*)?прайс\s*$", re.I)
+DOWNLOAD_LABEL = re.compile(
+    r"скачать\s+(?:прайс[\s\-–—]*лист\s*(?:\(\s*(?:excel|xlsx)\s*\)|(?:в\s+)?(?:excel|xlsx))"
+    r"|(?:excel|xlsx)(?:\s+прайс[\s\-–—]*лист)?)", re.I,
+)
+PRICE_LABEL = re.compile(r"^\s*(?:🛒\s*)?прайс(?:\s*\d[\d\s]*)?\s*[›❯>→]?\s*$", re.I)
 
 # Minimal Telegram mobile WebView bridge. It supplies viewport/theme events but
 # never accepts popups, payments, permissions, external links, or custom actions.
@@ -91,24 +94,42 @@ async def supernova_webview(client, bot):
     return url
 
 
+async def page_markers(page):
+    """Collect only fixed booleans, never page content or Telegram credentials."""
+    try:
+        markers = await page.evaluate("""() => {
+          const text = document.body ? document.body.innerText : '';
+          return {
+            price: /прайс/i.test(text), excel: /excel|xlsx/i.test(text),
+            init: Boolean(window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData)
+          };
+        }""")
+        flag = lambda key: "есть" if markers.get(key) else "нет"
+        return f"На странице: прайс — {flag('price')}, Excel — {flag('excel')}; Telegram-параметры — {flag('init')}"
+    except Exception:
+        return "Не удалось проверить содержимое страницы"
+
+
 async def click_export_page(page):
-    """Click only the two known Supernova labels; never guess a different action."""
-    export = page.get_by_text(DOWNLOAD_LABEL).first
+    """Click only the known price navigation and Excel-export controls."""
+    export = page.get_by_text(DOWNLOAD_LABEL).filter(visible=True).first
     try:
         await export.wait_for(state="visible", timeout=4000)
     except Exception:
-        price = page.get_by_text(PRICE_LABEL).first
+        price = page.get_by_text(PRICE_LABEL).filter(visible=True).first
         try:
             await price.wait_for(state="visible", timeout=15000)
             await price.click(timeout=5000)
+        except Exception as exc:
+            raise SupernovaAutoError("Не найдена или не открылась кнопка «Прайс». " + await page_markers(page)) from exc
+        try:
             await export.wait_for(state="visible", timeout=15000)
         except Exception as exc:
-            raise SupernovaAutoError("Не найдены кнопки «Прайс» или «Скачать прайс-лист (Excel)»") from exc
+            raise SupernovaAutoError("Открыл «Прайс», но не нашёл кнопку Excel. " + await page_markers(page)) from exc
     if await page.evaluate("Boolean(window.__supernovaBlockedEvent)"):
         raise SupernovaAutoError("Mini App запросил дополнительное подтверждение в Telegram")
     try:
         await export.click(timeout=5000)
-        # Allow the app's asynchronous export request to reach its server.
         await page.wait_for_timeout(1500)
     except Exception as exc:
         raise SupernovaAutoError("Не удалось нажать скачивание прайса") from exc
