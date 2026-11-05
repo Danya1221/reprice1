@@ -1019,7 +1019,9 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                         last_storage = storage
                 last_model_key = model_key
 
-            row = display_title(item) + " — " + price_text(marked_price(item, settings, overrides), item.currency)
+            value = ("По запросу" if item.key in overrides.get("_request_only_keys", set())
+                     else price_text(marked_price(item, settings, overrides), item.currency))
+            row = display_title(item) + " — " + value
             line = "<code>" + html.escape(row) + "</code>"
             if units(line) > 3000:
                 raise ValueError("Слишком длинное наименование товара")

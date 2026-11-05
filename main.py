@@ -108,6 +108,7 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
     while not service.stop_event.is_set():
         service.ready = False
         service.reload_requested = False
+        supernova_task = None
         try:
             stored = service.state.get("session_string", "")
             stored_2 = service.state.get("session_string_2", "")
@@ -116,6 +117,14 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
             if stored_2:
                 settings.session_2 = stored_2
             await asyncio.wait_for(prepare_supplier(service, settings, controller), timeout=180)
+            if service.state.get("supernova_settings", {}).get("enabled"):
+                # Verify the selected account and restore a recent snapshot
+                # before a normal supplier refresh can re-render the catalog.
+                try:
+                    await asyncio.wait_for(service.poll_supernova(), timeout=30)
+                except asyncio.TimeoutError:
+                    log.warning("Проверка Supernova задерживается; другие поставщики продолжают работу")
+            supernova_task = asyncio.create_task(service.run_supernova(), name="supernova-reader")
             await service.run()
             if service.stop_event.is_set():
                 return
@@ -134,6 +143,9 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
                 service.startup_error,
             )
         finally:
+            if supernova_task is not None:
+                supernova_task.cancel()
+                await asyncio.gather(supernova_task, return_exceptions=True)
             await service.disconnect_clients()
 
         if service.reload_requested:

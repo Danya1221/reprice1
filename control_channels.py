@@ -23,7 +23,36 @@ class ChannelController(FirstMessageController):
     def menu(self):
         menu = super().menu()
         menu["inline_keyboard"].append([{"text": "📥 Каналы поставщиков", "callback_data": "channels:show:0"}])
+        menu["inline_keyboard"].append([{"text": "🌟 Supernova", "callback_data": "supernova:show"}])
         return menu
+
+    async def show_supernova(self, chat_id, notice=""):
+        settings = self.service.state.get("supernova_settings", {})
+        snapshot = self.service.state.get("supernova_snapshot", {})
+        enabled = settings.get("enabled", False)
+        slot = settings.get("slot")
+        fresh = self.service.supernova_items() if enabled else []
+        file_time = snapshot.get("file_time") if snapshot.get("slot") == slot else None
+        when = (datetime.fromtimestamp(file_time, ZoneInfo("Europe/Moscow")).strftime("%d.%m %H:%M МСК")
+                if file_time else "ещё не получен")
+        status = f"Подключён аккаунт {slot}" if enabled else "Не подключён"
+        text = (f"🌟 Supernova\n\n{status}\nПоследний Excel: {when}\n"
+                f"Активных позиций: {len(fresh)}\n\n"
+                "На выбранном аккаунте открой @supernova_bot → Mini App → «Прайс» → скачай Excel. "
+                "Когда файл придёт в чат с Supernova, PriceB прочитает его автоматически. "
+                "Цены используются до 10 минут с момента получения; затем нужен свежий Excel.")
+        error = self.service.state.get("supernova_error", "")
+        if enabled and error:
+            text += "\n\n⚠️ " + error[:300]
+        rows = [
+            [{"text": "👤 Аккаунт 1", "callback_data": "supernova:account:1"},
+             {"text": "👤 Аккаунт 2", "callback_data": "supernova:account:2"}],
+            [{"text": "Открыть Supernova", "url": "https://t.me/supernova_bot"}],
+        ]
+        if enabled:
+            rows.append([{"text": "⏹ Отключить Supernova", "callback_data": "supernova:disable"}])
+        rows.append([{"text": "⬅️ Главное меню", "callback_data": "supernova:back"}])
+        await self.send(chat_id, (notice + "\n\n" if notice else "") + text, {"inline_keyboard": rows})
 
     @staticmethod
     def channel_key(item):
@@ -190,6 +219,31 @@ class ChannelController(FirstMessageController):
 
     async def handle_callback(self, callback):
         data = callback.get("data") or ""
+        if data.startswith("supernova:"):
+            user_id = callback.get("from", {}).get("id")
+            chat = (callback.get("message") or {}).get("chat") or {}
+            if not self.allowed(user_id, chat.get("type", "private")):
+                await self.answer_callback(callback["id"], "Нет доступа", True)
+                return
+            await self.answer_callback(callback["id"])
+            chat_id = chat.get("id")
+            if data == "supernova:back":
+                await self.send(chat_id, "🛠 Управление прайсом", self.menu())
+            elif data == "supernova:show":
+                await self.show_supernova(chat_id)
+            elif data == "supernova:disable":
+                await self.service.configure_supernova(None)
+                await self.show_supernova(chat_id, "✅ Supernova отключена.")
+            elif data in {"supernova:account:1", "supernova:account:2"}:
+                slot = int(data.rsplit(":", 1)[1])
+                try:
+                    await self.service.configure_supernova(slot)
+                    await self.service.poll_supernova()
+                except Exception as exc:
+                    await self.show_supernova(chat_id, "Не удалось подключить: " + str(exc)[:300])
+                    return
+                await self.show_supernova(chat_id, f"✅ Выбран аккаунт {slot}.")
+            return
         if not data.startswith("channels:"):
             return await super().handle_callback(callback)
         user_id = callback.get("from", {}).get("id")

@@ -1,6 +1,7 @@
 """Synchronization lifecycle for two supplier prices."""
 import asyncio
 import logging
+import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -15,6 +16,7 @@ from prices import (
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
+from supernova import FRESH_SECONDS, MAX_BYTES, parse_supernova
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +76,128 @@ class SyncService:
         self.startup_error = None
         self.account_errors = {}
         self.reload_requested = False
+        self.supernova_verified_account = None
+        self.supernova_last_view = None
+        self.supernova_retry_at = 0.0
+
+    def supernova_items(self, now=None):
+        now = time.time() if now is None else now
+        settings = self.state.get("supernova_settings", {})
+        snapshot = self.state.get("supernova_snapshot", {})
+        if (not settings.get("enabled") or snapshot.get("slot") != settings.get("slot")
+                or not self.supernova_verified_account
+                or snapshot.get("account_id") != self.supernova_verified_account):
+            return []
+        return [Item.from_dict(row["item"]) for row in snapshot.get("offers", [])
+                if 0 <= now - row.get("seen", 0) <= FRESH_SECONDS]
+
+    def supernova_expired_items(self, now=None):
+        now = time.time() if now is None else now
+        settings = self.state.get("supernova_settings", {})
+        snapshot = self.state.get("supernova_snapshot", {})
+        if (not settings.get("enabled") or snapshot.get("slot") != settings.get("slot")
+                or (self.supernova_verified_account and snapshot.get("account_id") != self.supernova_verified_account)):
+            return []
+        return [Item.from_dict(row["item"]) for row in snapshot.get("offers", [])
+                if (now >= row.get("seen", 0) and
+                    (not self.supernova_verified_account or now - row.get("seen", 0) > FRESH_SECONDS))]
+
+    async def configure_supernova(self, slot=None):
+        if slot is not None and slot not in (1, 2):
+            raise ValueError("Выбери аккаунт 1 или 2")
+        previous = self.state.get("supernova_settings", {})
+        async with self.lock:
+            if slot is not None and (slot not in self.clients or not self.account_configured(slot)):
+                raise ValueError(f"Сначала подключи Telegram-аккаунт {slot} через /login {slot}")
+            self.state.set("supernova_settings", {"enabled": slot is not None, "slot": slot})
+            self.supernova_verified_account = None
+            self.supernova_last_view = None
+            self.wake.set()
+        if previous.get("enabled") and previous.get("slot") != slot and self.ready and self.enabled() and self.state.get("sources", {}):
+            await self.refresh_format()
+
+    async def poll_supernova(self):
+        config = self.state.get("supernova_settings", {})
+        slot = config.get("slot")
+        if not config.get("enabled") or slot not in (1, 2):
+            return
+        if time.monotonic() < self.supernova_retry_at:
+            return
+        client = self.clients.get(slot)
+        if client is None:
+            self.supernova_verified_account = None
+            return
+        account_id = None
+        try:
+            me = await client.get_me()
+            account_id = getattr(me, "id", None)
+            if not account_id or getattr(me, "bot", False):
+                raise ValueError("Подключённый аккаунт не является пользовательским")
+            self.supernova_verified_account = account_id
+            peer = await client.get_entity("@supernova_bot")
+            if not getattr(peer, "bot", False):
+                raise ValueError("Supernova не является Telegram-ботом")
+            messages = await client.get_messages(peer, limit=100)
+            now = time.time()
+            candidate = next((m for m in messages
+                              if not getattr(m, "out", False) and not getattr(m, "fwd_from", None)
+                              and getattr(m, "sender_id", None) == peer.id
+                              and getattr(m, "file", None) is not None
+                              and (getattr(m.file, "name", "") or "").casefold().endswith(".xlsx")), None)
+            snapshot = self.state.get("supernova_snapshot", {})
+            if candidate is not None:
+                observed = candidate.date.timestamp()
+                same_account = snapshot.get("account_id") == account_id and snapshot.get("slot") == slot
+                if (0 <= now - observed <= FRESH_SECONDS
+                        and (not same_account or candidate.id > snapshot.get("message_id", 0))):
+                    size = getattr(candidate.file, "size", None)
+                    if not size or size > MAX_BYTES:
+                        raise ValueError("Excel Supernova пуст или больше 5 МБ")
+                    payload = await client.download_media(candidate, file=bytes)
+                    items, unavailable = await asyncio.to_thread(parse_supernova, payload)
+                    async with self.lock:
+                        if self.state.get("supernova_settings", {}) != config:
+                            return
+                        now = time.time()
+                        snapshot = self.state.get("supernova_snapshot", {})
+                        same_account = snapshot.get("account_id") == account_id and snapshot.get("slot") == slot
+                        if not 0 <= now - observed <= FRESH_SECONDS or (same_account and candidate.id <= snapshot.get("message_id", 0)):
+                            return
+                        # No declared total is present: keep omitted rows in history;
+                        # expired offers remain visible as "По запросу".
+                        prior = snapshot.get("offers", []) if same_account else []
+                        offers = {Item.from_dict(row["item"]).key: row for row in prior}
+                        for key in unavailable:
+                            offers.pop(key, None)
+                        for item in items:
+                            offers[item.key] = {"item": item.to_dict(), "seen": observed}
+                        self.state.set("supernova_snapshot", {"slot": slot, "account_id": account_id,
+                                       "message_id": candidate.id, "file_time": observed,
+                                       "offers": list(offers.values()), "count": len(items)})
+                        self.state.set("supernova_error", "")
+        except Exception as exc:
+            if not account_id:
+                self.supernova_verified_account = None
+            if isinstance(exc, errors.FloodWaitError):
+                self.supernova_retry_at = time.monotonic() + exc.seconds + 1
+            log.warning("Ошибка чтения Supernova: %s", type(exc).__name__)
+            message = f"{type(exc).__name__}: {exc}"[:400]
+            if self.state.get("supernova_error", "") != message:
+                self.state.set("supernova_error", message)
+        items = self.supernova_items()
+        expired = self.supernova_expired_items()
+        view = (tuple(sorted((item.key, str(item.price)) for item in items)),
+                tuple(sorted(item.key for item in expired)))
+        if self.supernova_last_view != view:
+            self.supernova_last_view = view
+            source_statuses = self._cached_source_statuses(self.state.get("sources", {}))
+            within_hours = is_open(self.settings) or self._both_fresh_open(source_statuses)
+            if self.ready and self.enabled() and within_hours and (items or expired):
+                try:
+                    await self.refresh_format()
+                except Exception as exc:
+                    self.supernova_last_view = None
+                    log.warning("Не удалось обновить прайс Supernova: %s", type(exc).__name__)
 
     def _load_channel_sources(self):
         self.channel_sources = {1: [], 2: []}
@@ -237,6 +361,9 @@ class SyncService:
 
     def attach_client(self, client, slot=1):
         slot = int(slot)
+        if (self.state.get("supernova_settings", {}).get("slot") == slot
+                and self.clients.get(slot) is not client):
+            self.supernova_verified_account = None
         sources = self._slot_sources(slot)
         readers = self.reader_groups.get(slot)
         if readers is None or tuple(reader.source for reader in readers) != tuple(sources):
@@ -248,6 +375,8 @@ class SyncService:
                 reader.entity = None
 
         if client is None:
+            if self.state.get("supernova_settings", {}).get("slot") == slot:
+                self.supernova_verified_account = None
             self.clients.pop(slot, None)
         else:
             self.clients[slot] = client
@@ -386,6 +515,7 @@ class SyncService:
                     continue
                 if value.get("items"):
                     groups.append(self.source_items(source, [Item.from_dict(item) for item in value["items"]]))
+        groups.append(self.supernova_items())
         return merge_lowest(groups)
 
     async def render(self, closed=False, items=None):
@@ -405,12 +535,18 @@ class SyncService:
                     entry["content"] for entry in entries if entry.get("content")
                 ])
         catalog = self.cached_items(include_closed=closed) if items is None else items
+        request_only = []
+        if not closed:
+            available = {item.key for item in catalog}
+            request_only = [item for item in self.supernova_expired_items() if item.key not in available]
+            catalog = list(catalog) + request_only
         if closed and not catalog:
             changes = await self.publisher.hide_existing()
             self.state.update({"last_publish": timestamp(), "published_items": 0})
             return 0, changes
         selected = select_items(catalog, self.settings, options)
-        pages = render_blocks(selected, self.settings, options, closed=closed)
+        render_options = {**options, "_request_only_keys": {item.key for item in request_only}}
+        pages = render_blocks(selected, self.settings, render_options, closed=closed)
         if not closed:
             rendered_rows = sum(content.count("<code>") for content in pages.values())
             if rendered_rows != len(selected):
@@ -566,7 +702,7 @@ class SyncService:
 
                 # Every fresh account/source result participates. Identical variants
                 # choose the lowest purchase price before markup.
-                catalog = merge_lowest(fresh_open_groups)
+                catalog = merge_lowest(fresh_open_groups + [self.supernova_items()])
                 count, changes = await self.render(items=catalog)
                 source_note = "/".join(statuses)
                 account_note = " + аккаунт 2" if 2 in self.clients else ""
@@ -689,5 +825,14 @@ class SyncService:
                 return
             try:
                 await asyncio.wait_for(self.wake.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+
+    async def run_supernova(self):
+        """Poll separately so a slow supplier does not block receiving the XLSX."""
+        while not self.stop_event.is_set() and not self.reload_requested:
+            await self.poll_supernova()
+            try:
+                await asyncio.wait_for(self.stop_event.wait(), timeout=30)
             except asyncio.TimeoutError:
                 pass
