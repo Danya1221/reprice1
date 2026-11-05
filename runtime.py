@@ -20,6 +20,8 @@ from supernova import FRESH_SECONDS, MAX_BYTES, parse_supernova
 from supernova_auto import SupernovaAutoError, request_supernova_export
 
 log = logging.getLogger(__name__)
+SUPERNOVA_BOT = "@vodorod00bot"
+MAX_SOURCE_SECONDS = 300
 
 
 class LoginRequired(RuntimeError):
@@ -68,6 +70,11 @@ class SyncService:
             self.clients[1] = client
         self.publisher = Publisher(client, settings.target, state, settings)
         self.lock = asyncio.Lock()
+        self.supernova_lock = asyncio.Lock()
+        self.supernova_refresh_task = None
+        self.supernova_refresh_dirty = False
+        self.sync_phase = ""
+        self.sync_started_at = 0.0
         self.wake = asyncio.Event()
         self.stop_event = asyncio.Event()
         self.busy = False
@@ -87,7 +94,7 @@ class SyncService:
         now = time.time() if now is None else now
         settings = self.state.get("supernova_settings", {})
         snapshot = self.state.get("supernova_snapshot", {})
-        if (not settings.get("enabled") or snapshot.get("slot") != settings.get("slot")
+        if (snapshot.get("bot") != SUPERNOVA_BOT or not settings.get("enabled") or snapshot.get("slot") != settings.get("slot")
                 or not self.supernova_verified_account
                 or snapshot.get("account_id") != self.supernova_verified_account):
             return []
@@ -98,7 +105,7 @@ class SyncService:
         now = time.time() if now is None else now
         settings = self.state.get("supernova_settings", {})
         snapshot = self.state.get("supernova_snapshot", {})
-        if (not settings.get("enabled") or snapshot.get("slot") != settings.get("slot")
+        if (snapshot.get("bot") != SUPERNOVA_BOT or not settings.get("enabled") or snapshot.get("slot") != settings.get("slot")
                 or (self.supernova_verified_account and snapshot.get("account_id") != self.supernova_verified_account)):
             return []
         return [Item.from_dict(row["item"]) for row in snapshot.get("offers", [])
@@ -108,8 +115,8 @@ class SyncService:
     async def configure_supernova(self, slot=None):
         if slot is not None and slot not in (1, 2):
             raise ValueError("Выбери аккаунт 1 или 2")
-        previous = self.state.get("supernova_settings", {})
-        async with self.lock:
+        async with self.supernova_lock:
+            previous = self.state.get("supernova_settings", {})
             if slot is not None and (slot not in self.clients or not self.account_configured(slot)):
                 raise ValueError(f"Сначала подключи Telegram-аккаунт {slot} через /login {slot}")
             self.state.set("supernova_settings", {"enabled": slot is not None, "slot": slot})
@@ -121,7 +128,7 @@ class SyncService:
         if previous.get("slot") != slot:
             await self.cancel_supernova_export()
         if previous.get("enabled") and previous.get("slot") != slot and self.ready and self.enabled() and self.state.get("sources", {}):
-            await self.refresh_format()
+            await self.request_supernova_refresh()
 
     def supernova_working_time(self, now=None):
         now = now or datetime.now(timezone.utc)
@@ -181,7 +188,7 @@ class SyncService:
             if client is None:
                 raise SupernovaAutoError("Выбранный Telegram-аккаунт отключён")
             me = await client.get_me()
-            peer = await client.get_entity("@supernova_bot")
+            peer = await client.get_entity(SUPERNOVA_BOT)
             if not getattr(peer, "bot", False) or not getattr(me, "id", None):
                 raise SupernovaAutoError("Не удалось проверить аккаунт и бота Supernova")
             before = await client.get_messages(peer, limit=1)
@@ -192,7 +199,7 @@ class SyncService:
                     if not config.get("enabled") or config.get("slot") != slot or self.clients.get(slot) is not client:
                         raise SupernovaAutoError("Аккаунт Supernova изменился во время запроса")
                     snapshot = self.state.get("supernova_snapshot", {})
-                    if (snapshot.get("slot") == slot and snapshot.get("account_id") == me.id
+                    if (snapshot.get("bot") == SUPERNOVA_BOT and snapshot.get("slot") == slot and snapshot.get("account_id") == me.id
                             and snapshot.get("message_id", 0) > baseline):
                         return
                     self.supernova_wake.set()
@@ -240,7 +247,7 @@ class SyncService:
             if not account_id or getattr(me, "bot", False):
                 raise ValueError("Подключённый аккаунт не является пользовательским")
             self.supernova_verified_account = account_id
-            peer = await client.get_entity("@supernova_bot")
+            peer = await client.get_entity(SUPERNOVA_BOT)
             if not getattr(peer, "bot", False):
                 raise ValueError("Supernova не является Telegram-ботом")
             messages = await client.get_messages(peer, limit=100)
@@ -253,7 +260,7 @@ class SyncService:
             snapshot = self.state.get("supernova_snapshot", {})
             if candidate is not None:
                 observed = candidate.date.timestamp()
-                same_account = snapshot.get("account_id") == account_id and snapshot.get("slot") == slot
+                same_account = (snapshot.get("bot") == SUPERNOVA_BOT and snapshot.get("account_id") == account_id and snapshot.get("slot") == slot)
                 if (0 <= now - observed <= FRESH_SECONDS
                         and (not same_account or candidate.id > snapshot.get("message_id", 0))):
                     size = getattr(candidate.file, "size", None)
@@ -261,12 +268,12 @@ class SyncService:
                         raise ValueError("Excel Supernova пуст или больше 5 МБ")
                     payload = await client.download_media(candidate, file=bytes)
                     items, unavailable = await asyncio.to_thread(parse_supernova, payload)
-                    async with self.lock:
+                    async with self.supernova_lock:
                         if self.state.get("supernova_settings", {}) != config:
                             return
                         now = time.time()
                         snapshot = self.state.get("supernova_snapshot", {})
-                        same_account = snapshot.get("account_id") == account_id and snapshot.get("slot") == slot
+                        same_account = (snapshot.get("bot") == SUPERNOVA_BOT and snapshot.get("account_id") == account_id and snapshot.get("slot") == slot)
                         if not 0 <= now - observed <= FRESH_SECONDS or (same_account and candidate.id <= snapshot.get("message_id", 0)):
                             return
                         # No declared total is present: keep omitted rows in history;
@@ -277,7 +284,7 @@ class SyncService:
                             offers.pop(key, None)
                         for item in items:
                             offers[item.key] = {"item": item.to_dict(), "seen": observed}
-                        self.state.set("supernova_snapshot", {"slot": slot, "account_id": account_id,
+                        self.state.set("supernova_snapshot", {"bot": SUPERNOVA_BOT, "slot": slot, "account_id": account_id,
                                        "message_id": candidate.id, "file_time": observed,
                                        "offers": list(offers.values()), "count": len(items)})
                         self.state.set("supernova_error", "")
@@ -300,10 +307,34 @@ class SyncService:
             within_hours = is_open(self.settings) or self._both_fresh_open(source_statuses)
             if self.ready and self.enabled() and within_hours and (items or expired):
                 try:
-                    await self.refresh_format()
+                    await self.request_supernova_refresh()
                 except Exception as exc:
                     self.supernova_last_view = None
                     log.warning("Не удалось обновить прайс Supernova: %s", type(exc).__name__)
+
+    async def request_supernova_refresh(self):
+        # Persist the workbook immediately; publishing can wait for a running sync.
+        if not self.lock.locked() and not (self.supernova_refresh_task and not self.supernova_refresh_task.done()):
+            await self.refresh_format()
+            return
+        self.supernova_refresh_dirty = True
+        if not self.supernova_refresh_task or self.supernova_refresh_task.done():
+            self.supernova_refresh_task = asyncio.create_task(self._refresh_supernova_when_free())
+
+    async def _refresh_supernova_when_free(self):
+        try:
+            while self.supernova_refresh_dirty:
+                self.supernova_refresh_dirty = False
+                await self.refresh_format()
+        except Exception as exc:
+            self.supernova_last_view = None
+            log.warning("Не удалось обновить прайс Supernova: %s", type(exc).__name__)
+
+    def sync_progress(self):
+        if not self.busy:
+            return "Подготовка обновления"
+        elapsed = max(0, int(time.monotonic() - self.sync_started_at))
+        return f"{self.sync_phase}; прошло {elapsed // 60} мин. {elapsed % 60} сек."
 
     def _load_channel_sources(self):
         self.channel_sources = {1: [], 2: []}
@@ -693,6 +724,8 @@ class SyncService:
             if asyncio.get_running_loop().time() < self.retry_after:
                 return "Ожидаю завершения FloodWait от Telegram"
             self.busy = True
+            self.sync_started_at = time.monotonic()
+            self.sync_phase = "Подключаюсь к Telegram"
             try:
                 await self.connect()
                 self.last_attempt = asyncio.get_running_loop().time()
@@ -703,13 +736,16 @@ class SyncService:
                 errors_found = []
                 fresh_by_source = {index: [] for index in range(len(self.settings.sources))}
                 fresh_open_groups = []
+                timed_out_visible = []
+                entries = list(self.active_reader_entries())
 
-                for slot, reader in list(self.active_reader_entries()):
+                for position, (slot, reader) in enumerate(entries, 1):
                     index = self.source_index(reader.source)
                     key = self.source_key(reader, slot)
                     label = reader.source.label + (f" · аккаунт {slot}" if slot > 1 else "")
+                    self.sync_phase = f"Читаю {label} ({position}/{len(entries)})"
                     try:
-                        budget = self.settings.response_timeout * (len(reader.source.buttons) + self.settings.catalog_pages + 1) * 2 + 120
+                        budget = min(MAX_SOURCE_SECONDS, self.settings.response_timeout * (len(reader.source.buttons) + self.settings.catalog_pages + 1) * 2 + 120)
                         result = await asyncio.wait_for(reader.fetch(), timeout=budget)
                         previous = cache.get(key, {})
                         status = "closed" if result.closed else "open"
@@ -758,6 +794,8 @@ class SyncService:
                         fresh_by_source[index].append("error")
                         errors_found.append(label + ": " + error)
                     except Exception as exc:
+                        if isinstance(exc, asyncio.TimeoutError) and self.source_visible(reader.source, slot):
+                            timed_out_visible.append(label)
                         log.warning("Не удалось прочитать %s: %s", label, type(exc).__name__)
                         old = cache.get(key, {})
                         stats = getattr(reader, "last_read_stats", None) or {}
@@ -781,6 +819,10 @@ class SyncService:
                         errors_found.append(label + ": " + str(exc))
 
                 self.state.set("sources", cache)
+                if timed_out_visible:
+                    message = "Не удалось вовремя прочитать: " + ", ".join(timed_out_visible) + ". Последний опубликованный прайс сохранён."
+                    self.state.set("last_result", message)
+                    return message
                 statuses = [self._aggregate_status(fresh_by_source[index])
                             for index in range(len(self.settings.sources))]
 
@@ -809,6 +851,7 @@ class SyncService:
                 # Every fresh account/source result participates. Identical variants
                 # choose the lowest purchase price before markup.
                 catalog = merge_lowest(fresh_open_groups + [self.supernova_items()])
+                self.sync_phase = "Публикую прайс"
                 count, changes = await self.render(items=catalog)
                 source_note = "/".join(statuses)
                 account_note = " + аккаунт 2" if 2 in self.clients else ""
@@ -833,6 +876,7 @@ class SyncService:
                 return message
             finally:
                 self.busy = False
+                self.sync_phase = ""
 
     async def pause(self):
         async with self.lock:
@@ -884,6 +928,8 @@ class SyncService:
             "Последняя проверка: " + self.state.get("last_check", "ещё не было"),
             "Результат: " + self.state.get("last_result", "ожидание"),
         ]
+        if self.busy:
+            lines.append("Сейчас: " + self.sync_progress())
         if not self.ready:
             lines[0] = "⚠️ Чтение прайса недоступно: " + self.startup_status()
         for slot in (1, 2):
@@ -954,3 +1000,6 @@ class SyncService:
                     pass
         finally:
             await self.cancel_supernova_export()
+            if self.supernova_refresh_task and not self.supernova_refresh_task.done():
+                self.supernova_refresh_task.cancel()
+                await asyncio.gather(self.supernova_refresh_task, return_exceptions=True)

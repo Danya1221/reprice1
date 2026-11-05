@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -86,6 +87,16 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("1 позиций", result)
         pages = self.service.publisher.publish.call_args.args[0]
         self.assertIn("61 000", next(iter(pages.values())))
+
+    async def test_timed_out_supplier_preserves_published_price(self):
+        async def stuck():
+            await asyncio.Event().wait()
+        self.service.readers[1].fetch.side_effect = stuck
+        with patch("runtime.MAX_SOURCE_SECONDS", 0.01), patch("runtime.is_open", return_value=True):
+            result = await self.service.sync()
+        self.assertIn("Последний опубликованный прайс сохранён", result)
+        self.service.publisher.publish.assert_not_awaited()
+        self.assertFalse(self.service.busy)
 
     async def test_lower_purchase_price_wins_before_markup(self):
         expensive = Item("iPhone 17 256 Black 🇺🇸", Decimal(61000), "RUB", "iPhone 17")

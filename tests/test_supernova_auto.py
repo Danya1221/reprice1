@@ -122,6 +122,7 @@ class SupernovaAutomaticTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.service.start_supernova_export(force=True))
             await self.service.supernova_auto_task
         request.assert_awaited_once()
+        self.client.get_entity.assert_any_await("@vodorod00bot")
         status = self.state.get("supernova_auto")
         self.assertEqual(status["status"], "Excel получен и прочитан")
         self.assertEqual(self.state.get("supernova_snapshot")["message_id"], 10)

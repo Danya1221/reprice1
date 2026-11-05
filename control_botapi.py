@@ -203,16 +203,26 @@ class BotAPIController:
         return True
 
     async def background_sync(self, chat_id):
+        task = asyncio.create_task(self.service.sync(force=True))
         try:
-            result = await self.service.sync(force=True)
+            try:
+                result = await asyncio.wait_for(asyncio.shield(task), timeout=25)
+            except asyncio.TimeoutError:
+                with suppress(Exception):
+                    await self.send(chat_id, "⏳ Обновление ещё идёт: " + self.service.sync_progress() + ". Сообщу результат.")
+                result = await task
             await self.send(chat_id, result, self.menu())
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
         except Exception:
             log.exception("Ошибка ручного обновления")
             await self.send(chat_id, "Ошибка обновления. Проверь /status и журнал Railway", self.menu())
 
     async def request_sync(self, chat_id):
         if self.service.busy or (self.task and not self.task.done()):
-            await self.send(chat_id, "Обновление уже выполняется")
+            await self.send(chat_id, "Обновление уже выполняется: " + self.service.sync_progress())
             return
         await self.send(chat_id, "Запрашиваю прайс…")
         self.task = asyncio.create_task(self.background_sync(chat_id))

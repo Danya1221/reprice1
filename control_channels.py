@@ -53,7 +53,7 @@ class ChannelController(FirstMessageController):
         rows = [
             [{"text": "👤 Аккаунт 1", "callback_data": "supernova:account:1"},
              {"text": "👤 Аккаунт 2", "callback_data": "supernova:account:2"}],
-            [{"text": "Открыть Supernova", "url": "https://t.me/supernova_bot"}],
+            [{"text": "Открыть Supernova", "url": "https://t.me/vodorod00bot"}],
         ]
         if enabled:
             rows.append([{"text": "⏸ Выключить авто" if auto_enabled else "▶️ Включить авто",

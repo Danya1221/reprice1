@@ -1,3 +1,4 @@
+import asyncio
 import io
 import tempfile
 import unittest
@@ -73,6 +74,32 @@ class SupernovaServiceTests(unittest.IsolatedAsyncioTestCase):
     async def poll_at(self, now):
         with patch("runtime.time.time", return_value=now), patch("runtime.is_open", return_value=True):
             await self.service.poll_supernova()
+
+    async def test_reads_correct_bot_and_rejects_snapshot_from_old_bot(self):
+        await self.poll_at(2000000000)
+        self.client.get_entity.assert_awaited_with("@vodorod00bot")
+        snapshot = self.state.get("supernova_snapshot")
+        snapshot.pop("bot")
+        self.state.set("supernova_snapshot", snapshot)
+        self.assertEqual(self.service.supernova_items(now=2000000000), [])
+        self.assertEqual(self.service.supernova_expired_items(now=2000000000), [])
+        await self.poll_at(2000000000)
+        self.assertEqual(self.state.get("supernova_snapshot")["bot"], "@vodorod00bot")
+
+    async def test_file_is_saved_while_general_sync_holds_publication_lock(self):
+        async def refresh():
+            async with self.service.lock:
+                return (1, 1)
+        self.service.refresh_format = AsyncMock(side_effect=refresh)
+        await self.service.lock.acquire()
+        try:
+            await asyncio.wait_for(self.poll_at(2000000000), timeout=1)
+            self.assertEqual(self.state.get("supernova_snapshot")["message_id"], 10)
+            self.assertIsNotNone(self.service.supernova_refresh_task)
+        finally:
+            self.service.lock.release()
+        await asyncio.wait_for(self.service.supernova_refresh_task, timeout=1)
+        self.service.refresh_format.assert_awaited_once()
 
     async def test_fresh_export_merges_with_other_supplier_and_expires(self):
         await self.poll_at(2000000000)
