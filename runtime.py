@@ -848,13 +848,15 @@ class SyncService:
                 statuses = [self._aggregate_status(fresh_by_source[index])
                             for index in range(len(self.settings.sources))]
 
-                if self.settings.sources and statuses and all(status == "closed" for status in statuses):
+                fresh_supernova = self.supernova_items()
+                if (self.settings.sources and statuses and all(status == "closed" for status in statuses)
+                        and not fresh_supernova):
                     await self.render(closed=True)
                     message = "Все поставщики закрыты: цены скрыты"
                     self.state.set("last_result", message)
                     return message
 
-                if not fresh_open_groups:
+                if not fresh_open_groups and (not fresh_supernova or errors_found):
                     message = "Прайс сохранён; нет свежего открытого источника"
                     if errors_found:
                         message += ": " + " | ".join(errors_found)
@@ -872,10 +874,12 @@ class SyncService:
 
                 # Every fresh account/source result participates. Identical variants
                 # choose the lowest purchase price before markup.
-                catalog = merge_lowest(fresh_open_groups + [self.supernova_items()])
+                catalog = merge_lowest(fresh_open_groups + [fresh_supernova])
                 self.sync_phase = "Публикую прайс"
                 count, changes = await self.render(items=catalog)
                 source_note = "/".join(statuses)
+                if fresh_supernova:
+                    source_note += ("/" if source_note else "") + "Supernova: открыт"
                 account_note = " + аккаунт 2" if 2 in self.clients else ""
                 message = (
                     f"Прайс обновлён: {count} позиций, изменений: {changes}; "
@@ -926,7 +930,7 @@ class SyncService:
             await self.connect()
             cache = self.state.get("sources", {})
             statuses = self._cached_source_statuses(cache)
-            closed = bool(statuses) and all(status == "closed" for status in statuses)
+            closed = bool(statuses) and all(status == "closed" for status in statuses) and not self.supernova_items()
             if closed:
                 return await self.render(closed=True)
             return await self.render(closed=False)

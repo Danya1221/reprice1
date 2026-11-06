@@ -12,7 +12,7 @@ from openpyxl import Workbook
 
 from config import Settings, Source
 from control_catalog import CatalogController
-from prices import Item
+from prices import Item, ParseResult
 from runtime import SyncService
 from state import StateStore
 from supernova import parse_supernova
@@ -191,6 +191,50 @@ class SupernovaServiceTests(unittest.IsolatedAsyncioTestCase):
         content = "\n".join(pages.values())
         self.assertIn("60 000", content)
         self.assertNotIn("По запросу", content)
+
+    async def test_general_sync_publishes_lowest_prices_and_unique_supernova_items(self):
+        self.client.download_media.return_value = workbook([
+            ["iPhone 17 256 Black 🇪🇺", None, 2, 59000],
+            ["iPhone 17 256 Blue 🇪🇺", None, 1, 62000],
+        ])
+        await self.poll_at(2000000000)
+        self.service.connect = AsyncMock()
+        self.service.readers[0].fetch = AsyncMock(return_value=ParseResult([self.base], []))
+        self.service.publisher.publish = AsyncMock(return_value=0)
+        with patch("runtime.time.time", return_value=2000000000), patch("runtime.is_open", return_value=True):
+            result = await self.service.sync(force=True)
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertIn("Black", content)
+        self.assertIn("Blue", content)
+        self.assertIn("59 000", content)
+        self.assertIn("62 000", content)
+        self.assertNotIn("60 000", content)
+        self.assertIn("Supernova: открыт", result)
+
+    async def test_fresh_supernova_remains_published_when_other_supplier_closed(self):
+        await self.poll_at(2000000000)
+        self.service.connect = AsyncMock()
+        self.service.readers[0].fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        self.service.publisher.publish = AsyncMock(return_value=0)
+        with patch("runtime.time.time", return_value=2000000000), patch("runtime.is_open", return_value=True):
+            result = await self.service.sync(force=True)
+            await SyncService.refresh_format(self.service)
+        self.assertIn("Supernova: открыт", result)
+        self.assertEqual(self.service.publisher.publish.await_count, 2)
+        for call in self.service.publisher.publish.await_args_list:
+            content = "\n".join(call.args[0].values())
+            self.assertIn("59 000", content)
+            self.assertNotIn("Продажи закрыты", content)
+
+    async def test_failed_other_supplier_does_not_publish_incomplete_supernova_only_catalog(self):
+        await self.poll_at(2000000000)
+        self.service.connect = AsyncMock()
+        self.service.readers[0].fetch = AsyncMock(side_effect=ConnectionError("unavailable"))
+        self.service.publisher.publish = AsyncMock(return_value=0)
+        with patch("runtime.time.time", return_value=2000000000), patch("runtime.is_open", return_value=True):
+            result = await self.service.sync(force=True)
+        self.assertIn("Прайс сохранён", result)
+        self.service.publisher.publish.assert_not_awaited()
 
     async def test_accounts_and_supernova_show_connected_account_identity(self):
         self.client.get_me.return_value = SimpleNamespace(id=42, bot=False, first_name="Кирилл",
