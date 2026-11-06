@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from telethon import functions, types
 
-from supernova_auto import WEBVIEW_BRIDGE, SupernovaAutoError, click_export_page, page_markers, supernova_webview
+from supernova_auto import WEBVIEW_BRIDGE, SupernovaAutoError, click_export_page, page_markers, read_cloud_storage, supernova_webview
 import test_supernova as fixtures
 
 
@@ -65,6 +65,38 @@ class TelegramWebviewTests(unittest.IsolatedAsyncioTestCase):
         await supernova_webview(client, bot)
         self.assertIsInstance(client.calls[-1], functions.messages.RequestWebViewRequest)
         self.assertEqual(client.calls[-1].url, button.url)
+
+
+class CloudStorageBridgeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.bot = types.User(id=777, access_hash=888, bot=True, first_name="Supplier")
+        self.frame = SimpleNamespace(url="https://supplier.invalid/app")
+        self.frame.page = SimpleNamespace(main_frame=self.frame)
+        self.source = {"frame": self.frame}
+        self.origin = ("https", "supplier.invalid", None)
+
+    async def test_reads_telegram_storage_without_exposing_request_contents(self):
+        client = AsyncMock(return_value=types.DataJSON('{"language":"ru"}'))
+        result = await read_cloud_storage(client, self.bot, self.source,
+            {"method": "getStorageValues", "params": {"keys": ["language"]}}, self.origin)
+        self.assertEqual(result, {"result": {"language": "ru"}})
+        self.assertEqual(client.await_args.args[0].custom_method, "getStorageValues")
+
+    async def test_rejects_writes_and_calls_from_other_frames_or_origins(self):
+        client = AsyncMock()
+        for request in ({"method": "saveStorageValue", "params": {"key": "x", "value": "1"}},
+                        {"method": "getStorageValues", "params": {"keys": ["x"], "extra": True}}):
+            self.assertIn("error", await read_cloud_storage(client, self.bot, self.source, request, self.origin))
+        self.frame.url = "https://other.invalid/"
+        result = await read_cloud_storage(client, self.bot, self.source,
+            {"method": "getStorageKeys", "params": {}}, self.origin)
+        self.assertEqual(result["error"], "UNTRUSTED_ORIGIN")
+        self.frame.url = "https://supplier.invalid/"
+        self.frame.page.main_frame = object()
+        result = await read_cloud_storage(client, self.bot, self.source,
+            {"method": "getStorageKeys", "params": {}}, self.origin)
+        self.assertEqual(result["error"], "UNTRUSTED_FRAME")
+        client.assert_not_awaited()
 
 
 @unittest.skipUnless(os.getenv("RUN_BROWSER_TESTS") == "1", "локальный браузер не включён")
