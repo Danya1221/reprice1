@@ -1,6 +1,7 @@
 """Synchronization lifecycle for two supplier prices."""
 import asyncio
 import logging
+import re
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from telethon import errors, utils
 from config import Source
 
 from prices import (
-    Item, iphone_model, merge_physical_order, physical_brand_label,
+    Item, identity, iphone_model, sim_type, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
 )
 from publisher import Publisher
@@ -43,14 +44,30 @@ def timestamp():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def merge_key(item):
+    """Normalize explicit iPhone SIM spelling without guessing SIM or region."""
+    title = item.title
+    if iphone_model(title) and item.sim != "unknown" and sim_type(title) == item.sim:
+        title = re.sub(r"\be[\s-]+sim\b", "esim", title, flags=re.I)
+        patterns = {
+            "hybrid": r"\b(?:(?:1\s*)?(?:nano\s*)?sim\s*(?:\+|/|&|and|и)\s*esim|esim\s*(?:\+|/|&|and|и)\s*(?:1\s*)?(?:nano\s*)?sim)\b",
+            "dual": r"\b(?:(?:2|dual)\s*(?:nano\s*)?sim|две\s*sim|2x\s*sim)\b",
+            "esim": r"\b(?:esim|есим)\b",
+            "sim": r"\b(?:physical\s*sim|физическ\w*\s*sim|(?:1\s*)?(?:nano\s*)?sim)\b",
+        }
+        title = re.sub(patterns[item.sim], " ", title, flags=re.I)
+    return identity(title, item.sim, item.currency)
+
+
 def merge_lowest(sources):
     """Same full variant across suppliers -> lower purchase price wins."""
     merged = OrderedDict()
     for items in sources:
         for item in items or []:
-            current = merged.get(item.key)
+            key = merge_key(item)
+            current = merged.get(key)
             if current is None or item.price < current.price:
-                merged[item.key] = item
+                merged[key] = item
     return list(merged.values())
 
 
@@ -696,8 +713,9 @@ class SyncService:
         catalog = self.cached_items(include_closed=closed) if items is None else items
         request_only = []
         if not closed:
-            available = {item.key for item in catalog}
-            request_only = [item for item in self.supernova_expired_items() if item.key not in available]
+            available = {merge_key(item) for item in catalog}
+            request_only = [item for item in merge_lowest([self.supernova_expired_items()])
+                            if merge_key(item) not in available]
             catalog = list(catalog) + request_only
         if closed and not catalog:
             changes = await self.publisher.hide_existing()
@@ -949,7 +967,7 @@ class SyncService:
             "🟢 Синхронизация: включена" if self.enabled() else "⏸ Синхронизация: остановлена",
             f"Telegram: аккаунт 1 — {account_1}; аккаунт 2 — {account_2}",
             f"Интервал: {options.get('poll_seconds', self.settings.poll_seconds) // 60} мин.",
-            f"Наценка: {options.get('markup', str(self.settings.markup))} + {options.get('markup_percent', str(self.settings.markup_percent))}%",
+            f"Базовая наценка (₽): {options.get('markup_base_rub', options.get('markup', str(self.settings.markup)))} + {options.get('markup_percent', str(self.settings.markup_percent))}%",
             "SIM: " + options.get("sim_filter", self.settings.sim_filter),
             "Последняя проверка: " + self.state.get("last_check", "ещё не было"),
             "Результат: " + self.state.get("last_result", "ожидание"),

@@ -25,6 +25,30 @@ class PriceTests(unittest.TestCase):
         self.assertEqual(result.items[0].price, Decimal("58800"))
         self.assertEqual(marked_price(result.items[0], Settings(markup=Decimal(500))), Decimal(59300))
 
+    def test_category_and_specific_model_markups_override_base_without_stacking(self):
+        settings = Settings(markup=Decimal(500))
+        rules = {"markup_rules": [{"pattern": "iPhone", "amount": "1000"},
+                                  {"pattern": "Samsung Ultra", "amount": "1000"},
+                                  {"pattern": "iPhone 17 Pro", "amount": "1500"}]}
+        iphone = Item("iPhone 17 256 Black", Decimal(60000), "RUB", "iPhone 17")
+        pro = Item("iPhone 17 Pro 256 Black", Decimal(80000), "RUB", "iPhone 17 Pro")
+        ultra = Item("Samsung Galaxy S26 Ultra 12/256 Black", Decimal(90000), "RUB", "Samsung S26")
+        other = Item("Dyson HS08", Decimal(40000), "RUB", "Dyson")
+        accessory = Item("Чехол iPhone 17 Black", Decimal(500), "RUB", "Аксессуары", accessory=True)
+        samsung_case = Item("Чехол Samsung Galaxy S26 Ultra", Decimal(700), "RUB", "Аксессуары", accessory=True)
+        self.assertEqual(marked_price(iphone, settings, rules), Decimal(61000))
+        self.assertEqual(marked_price(pro, settings, rules), Decimal(81500))
+        self.assertEqual(marked_price(ultra, settings, rules), Decimal(91000))
+        self.assertEqual(marked_price(other, settings, rules), Decimal(40500))
+        self.assertEqual(marked_price(accessory, settings, rules), Decimal(1000))
+        self.assertEqual(marked_price(samsung_case, settings, rules), Decimal(1200))
+        self.assertEqual(marked_price(iphone, settings, {**rules, "markup_percent": "5"}), Decimal(64000))
+
+    def test_rule_never_treats_ruble_markup_as_dollars(self):
+        item = Item("iPhone 17 256 Black", Decimal(500), "USD", "iPhone 17")
+        self.assertEqual(marked_price(item, Settings(markup=Decimal(10)),
+                                     {"markup_base_rub": "500", "markup_rules": [{"pattern": "iPhone", "amount": "1000"}]}), Decimal(510))
+
     def test_dyson_text_price_after_camera_and_delivery_emojis(self):
         result = self.parse("""🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
 🇬🇧 Gen5 SV23 Detect Absolute Purple 62000 📷

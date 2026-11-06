@@ -40,6 +40,7 @@ class BotAPIController:
         self.task = None
         self.block_choices = {}
         self.login_flows = {}
+        self.markup_flows = {}
         self.closed = False
 
     async def api(self, method, **payload):
@@ -148,7 +149,75 @@ class BotAPIController:
             [{"text": "🔑 Войти в аккаунт 2", "callback_data": "account:login:2"}],
         ]})
 
+    async def show_markup(self, chat_id, notice=""):
+        options = self.service.options()
+        base = options.get("markup_base_rub", options.get("markup", str(self.service.settings.markup)))
+        percent = options.get("markup_percent", str(self.service.settings.markup_percent))
+        rules = options.get("markup_rules", [])
+        lines = ["💰 Наценка", "", f"Остальные товары: +{base} ₽", f"Общий процент: {percent}%", "",
+                 "Наценка категории заменяет базовую. Если подходят несколько правил, применяется более точное.",
+                 "Процент, если задан, добавляется отдельно."]
+        if rules:
+            lines += ["", "Правила:"] + [f"• {rule['pattern']}: +{rule['amount']} ₽" for rule in rules]
+        rows = [
+            [{"text": "📱 iPhone", "callback_data": "markup:set:iphone"},
+             {"text": "📱 Samsung Ultra", "callback_data": "markup:set:samsung_ultra"}],
+            [{"text": "✏️ Другая категория или модель", "callback_data": "markup:set:custom"}],
+            [{"text": "🌍 Остальные товары", "callback_data": "markup:set:base"}],
+        ]
+        for rule in rules:
+            key = hashlib.sha256(rule["pattern"].casefold().encode()).hexdigest()[:16]
+            rows.append([{"text": "🗑 " + rule["pattern"][:40], "callback_data": "markup:delete:" + key}])
+        rows.append([{"text": "⬅️ Главное меню", "callback_data": "markup:back"}])
+        await self.send(chat_id, (notice + "\n\n" if notice else "") + "\n".join(lines), {"inline_keyboard": rows})
+
+    async def handle_markup_input(self, chat_id, user_id, text):
+        flow = self.markup_flows.get(user_id)
+        if not flow or flow.get("chat_id") != chat_id:
+            return
+        if flow["stage"] == "pattern":
+            pattern = " ".join(text.split())
+            if not 2 <= len(pattern) <= 60 or not re.search(r"[a-zа-яё0-9]", pattern, re.I):
+                await self.send(chat_id, "Укажи название категории или модели, например Samsung Ultra. Для отмены /cancel.")
+                return
+            flow.update(stage="amount", pattern=pattern)
+            await self.send(chat_id, f"Наценка для «{pattern}»: отправь сумму в рублях, например 1000. Для отмены /cancel.")
+            return
+        saved = False
+        try:
+            amount = decimal_value(text.replace(" ", ""))
+            if not 0 <= amount <= 10_000_000:
+                raise ValueError("Введи сумму от 0 до 10 000 000 рублей.")
+            options = self.service.options()
+            pattern = flow.get("pattern")
+            if pattern is None:
+                key, value = "markup_base_rub", str(amount)
+            else:
+                key = "markup_rules"
+                value = [rule for rule in options.get(key, []) if rule.get("pattern", "").casefold() != pattern.casefold()]
+                if len(value) >= 40:
+                    raise ValueError("Можно сохранить до 40 правил наценки.")
+                value.append({"pattern": pattern, "amount": str(amount)})
+            proposed = {**options, key: value}
+            for item in self.service.cached_items(include_closed=True):
+                marked_price(item, self.service.settings, proposed)
+            self.service.set_option(key, value)
+            saved = True
+            self.markup_flows.pop(user_id, None)
+            await self.service.refresh_format()
+            await self.show_markup(chat_id, f"✅ Сохранено: {pattern or 'остальные товары'} +{amount} ₽.")
+        except (ValueError, ArithmeticError) as exc:
+            if saved:
+                await self.send(chat_id, f"⚠️ Наценка сохранена, но прайс не удалось обновить: {exc}")
+            else:
+                await self.send(chat_id, f"{exc} Попробуй ещё раз или /cancel.")
+        except Exception:
+            log.exception("Не удалось обновить прайс после настройки наценки")
+            await self.send(chat_id, "⚠️ Наценка сохранена, но прайс не удалось обновить. Проверь статус бота." if saved
+                            else "⚠️ Не удалось сохранить наценку. Проверь статус бота.")
+
     async def begin_login(self, chat_id, user_id, slot=1):
+        self.markup_flows.pop(user_id, None)
         slot = int(slot)
         if slot not in {1, 2}:
             raise ValueError("Аккаунт может быть только 1 или 2")
@@ -300,7 +369,36 @@ class BotAPIController:
             elif data.startswith("account:login:"):
                 await self.begin_login(chat_id, user_id, int(data.rsplit(":", 1)[1]))
             elif data == "markup":
-                await self.send(chat_id, "Отправь /markup 500 — фиксированная наценка.\n/percent 5 — наценка 5%.\nМожно применять вместе.")
+                await self.show_markup(chat_id)
+            elif data == "markup:back":
+                self.markup_flows.pop(user_id, None)
+                await self.send(chat_id, "🛠 Управление прайсом", self.menu())
+            elif data.startswith("markup:set:"):
+                if user_id in self.login_flows:
+                    raise ValueError("Сначала заверши вход или отправь /cancel")
+                getattr(self, "channel_waiting", set()).discard(user_id)
+                getattr(self, "first_message_waiting", set()).discard(user_id)
+                getattr(self, "order_selected", {}).pop(user_id, None)
+                choice = data.rsplit(":", 1)[1]
+                choices = {"iphone": "iPhone", "samsung_ultra": "Samsung Ultra", "base": None}
+                if choice == "custom":
+                    self.markup_flows[user_id] = {"stage": "pattern", "chat_id": chat_id}
+                    await self.send(chat_id, "Отправь название категории или модели, например Samsung Ultra или iPhone 17 Pro. Для отмены /cancel.")
+                elif choice in choices:
+                    pattern = choices[choice]
+                    self.markup_flows[user_id] = {"stage": "amount", "pattern": pattern, "chat_id": chat_id}
+                    await self.send(chat_id, f"Наценка для «{pattern or 'остальные товары'}»: отправь сумму, например 1000. Для отмены /cancel.")
+                else:
+                    raise ValueError("Неизвестная категория")
+            elif data.startswith("markup:delete:"):
+                rule_id = data.rsplit(":", 1)[1]
+                rules = self.service.options().get("markup_rules", [])
+                remaining = [rule for rule in rules if hashlib.sha256(rule["pattern"].casefold().encode()).hexdigest()[:16] != rule_id]
+                if len(remaining) == len(rules):
+                    raise ValueError("Правило уже удалено")
+                self.service.set_option("markup_rules", remaining)
+                await self.service.refresh_format()
+                await self.show_markup(chat_id, "✅ Правило удалено.")
             elif data == "interval":
                 await self.send(chat_id, "Интервал обновления:", {"inline_keyboard": [
                     [{"text": "5 мин.", "callback_data": "every:5"}, {"text": "15 мин.", "callback_data": "every:15"}, {"text": "30 мин.", "callback_data": "every:30"}],
@@ -362,6 +460,13 @@ class BotAPIController:
             await self.handle_login_input(chat_id, user_id, text)
             return
 
+        if user_id in self.markup_flows and not command.startswith("/"):
+            if not self.allowed(user_id, chat_type):
+                await self.explain_access(chat_id, user_id, chat_type)
+                return
+            await self.handle_markup_input(chat_id, user_id, text)
+            return
+
         commands = {"/start", "/help", "/id", "/status", "/sync", "/stop", "/resume", "/markup",
                     "/percent", "/interval", "/order", "/rejected", "/login", "/login2", "/accounts", "/cancel"}
         if command not in commands:
@@ -390,7 +495,10 @@ class BotAPIController:
             elif command == "/accounts":
                 await self.accounts_menu(chat_id)
             elif command == "/cancel":
-                if user_id in self.login_flows:
+                if user_id in self.markup_flows:
+                    self.markup_flows.pop(user_id, None)
+                    await self.send(chat_id, "Настройка наценки отменена", self.menu())
+                elif user_id in self.login_flows:
                     await self._close_login(user_id)
                     await self.send(chat_id, "Вход отменён", self.menu())
                 else:
@@ -412,9 +520,13 @@ class BotAPIController:
                     raise ValueError("Процент должен быть больше -100")
                 option = "markup" if command == "/markup" else "markup_percent"
                 proposed = {**self.service.options(), option: str(number)}
+                if command == "/markup" and "markup_base_rub" in proposed:
+                    proposed["markup_base_rub"] = str(number)
                 for item in self.service.cached_items(include_closed=True):
                     marked_price(item, self.service.settings, proposed)
                 self.service.set_option(option, str(number))
+                if command == "/markup" and "markup_base_rub" in proposed:
+                    self.service.set_option("markup_base_rub", str(number))
                 await self.service.refresh_format()
                 await self.send(chat_id, "Наценка применена", self.menu())
             elif command == "/interval":

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from telethon.errors import FloodWaitError
 
 from config import Settings, Source
+from control_catalog import CatalogController
 from prices import Item, ParseResult, parse_documents, physical_page_labels
 from runtime import SyncService, is_open, LoginRequired, merge_lowest
 from state import StateStore
@@ -97,6 +98,67 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Последний опубликованный прайс сохранён", result)
         self.service.publisher.publish.assert_not_awaited()
         self.assertFalse(self.service.busy)
+
+    async def test_same_iphone_sim_spelling_merges_but_distinct_variants_do_not(self):
+        rows = parse_documents(["\n".join([
+            "iPhone 17 256 Black 1Sim+eSim 🇪🇺 — 61000",
+            "iPhone 17 256 Black SIM + eSIM 🇪🇺 — 59000",
+            "iPhone 17 256 Black eSIM 🇪🇺 — 58000",
+            "iPhone 17 256 Black SIM + eSIM 🇺🇸 — 57000",
+            "iPhone 17 512 Black SIM + eSIM 🇪🇺 — 70000",
+            "iPhone 17 256 Black SIM + eSIM Актив 🇪🇺 — 56000",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(len(merged), 5)
+        self.assertEqual(sorted(item.price for item in merged),
+                         list(map(Decimal, (56000, 57000, 58000, 59000, 70000))))
+
+    async def test_admin_sets_category_and_base_markup_with_buttons(self):
+        self.service.refresh_format = AsyncMock(return_value=(1, 1))
+        controller = CatalogController("TOKEN", self.service, [42])
+        controller.send = AsyncMock()
+        controller.answer_callback = AsyncMock()
+        def callback(data):
+            return {"id": "1", "from": {"id": 42}, "message": {"chat": {"id": 42, "type": "private"}}, "data": data}
+        def message(text):
+            return {"from": {"id": 42}, "chat": {"id": 42, "type": "private"}, "text": text}
+        controller.channel_waiting.add(42)
+        controller.first_message_waiting.add(42)
+        controller.order_selected[42] = "iPhone 17"
+        await controller.handle_callback(callback("markup:set:iphone"))
+        self.assertNotIn(42, controller.channel_waiting)
+        self.assertNotIn(42, controller.first_message_waiting)
+        self.assertNotIn(42, controller.order_selected)
+        await controller.handle_message(message("1000"))
+        self.assertEqual(self.service.options()["markup_rules"], [{"pattern": "iPhone", "amount": "1000"}])
+        await controller.handle_callback(callback("markup:set:base"))
+        await controller.handle_message(message("500"))
+        self.assertEqual(self.service.options()["markup_base_rub"], "500")
+        await controller.handle_callback(callback("markup:set:custom"))
+        await controller.handle_message(message("Samsung Ultra"))
+        await controller.handle_message(message("1000"))
+        self.assertEqual(self.service.options()["markup_rules"][-1], {"pattern": "Samsung Ultra", "amount": "1000"})
+        self.assertEqual(self.service.refresh_format.await_count, 3)
+
+    async def test_combined_publication_applies_rules_to_lowest_supplier_price(self):
+        first = Item("iPhone 17 256 Black 1Sim+eSim 🇪🇺", Decimal(60000), "RUB", "iPhone 17", "hybrid")
+        cheaper = Item("iPhone 17 256 Black SIM + eSIM 🇪🇺", Decimal(59000), "RUB", "iPhone 17", "hybrid")
+        ultra = Item("Samsung Galaxy S26 Ultra 12/256 Black", Decimal(90000), "RUB", "Samsung S26")
+        other = Item("Dyson HS08", Decimal(40000), "RUB", "Dyson")
+        self.service.readers[0].fetch.return_value = ParseResult([first], [])
+        self.service.readers[1].fetch.return_value = ParseResult([cheaper, ultra, other], [])
+        self.service.set_option("markup_base_rub", "500")
+        self.service.set_option("markup_rules", [{"pattern": "iPhone", "amount": "1000"},
+                                                 {"pattern": "Samsung Ultra", "amount": "1000"}])
+        with patch("runtime.is_open", return_value=True):
+            result = await self.service.sync(force=True)
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertIn("3 позиций", result)
+        self.assertEqual(content.count("iPhone 17 256 Black"), 1)
+        self.assertIn("60 000", content)
+        self.assertIn("91 000", content)
+        self.assertIn("40 500", content)
+        self.assertNotIn("61 000", content)
 
     async def test_lower_purchase_price_wins_before_markup(self):
         expensive = Item("iPhone 17 256 Black 🇺🇸", Decimal(61000), "RUB", "iPhone 17")

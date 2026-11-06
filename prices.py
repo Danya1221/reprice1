@@ -633,9 +633,36 @@ def merge_sources(sources):
     return list(merged.values())
 
 
+def fixed_markup_for_item(item, settings, overrides=None):
+    """Most specific matching category/model rule replaces the base fixed markup."""
+    overrides = overrides or {}
+    base = Decimal(str(overrides.get("markup", settings.markup)))
+    if item.currency != "RUB":
+        return base
+    base = Decimal(str(overrides.get("markup_base_rub", base)))
+    haystack = clean(" ".join((item.title, item.block, brand_of(item.title)))).casefold()
+    best = None
+    for index, rule in enumerate(overrides.get("markup_rules", [])):
+        if not isinstance(rule, dict):
+            continue
+        pattern = str(rule.get("pattern", "")).strip()
+        tokens = re.findall(r"[\w]+", pattern.casefold())
+        if not tokens:
+            continue
+        # Device rules do not include accessories unless the rule names them.
+        if (item.accessory or is_accessory(item.title)) and not is_accessory(pattern):
+            continue
+        if not all(re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", haystack) for token in tokens):
+            continue
+        score = (len(tokens), sum(len(token) for token in tokens), index)
+        if best is None or score > best[0]:
+            best = (score, Decimal(str(rule["amount"])))
+    return best[1] if best else base
+
+
 def marked_price(item, settings, overrides=None):
     overrides = overrides or {}
-    fixed = Decimal(str(overrides.get("markup", settings.markup)))
+    fixed = fixed_markup_for_item(item, settings, overrides)
     percent = Decimal(str(overrides.get("markup_percent", settings.markup_percent)))
     value = item.price * (1 + percent / 100) + fixed
     if value <= 0:
