@@ -49,6 +49,13 @@ class PriceTests(unittest.TestCase):
         self.assertEqual(marked_price(item, Settings(markup=Decimal(10)),
                                      {"markup_base_rub": "500", "markup_rules": [{"pattern": "iPhone", "amount": "1000"}]}), Decimal(510))
 
+    def test_lego_never_enters_the_published_catalog_from_any_block(self):
+        items = [Item("LEGO Pokemon Eevee (72151)", Decimal(6000), "RUB", "LEGO"),
+                 Item("LEGO Ninjago X-1 Ninja Charger (71867)", Decimal(7400), "RUB", "Аксессуары"),
+                 Item("Sony WH-1000XM6 Black", Decimal(25400), "RUB", "Sony")]
+        selected = select_items(items, Settings())
+        self.assertEqual([item.title for item in selected], ["Sony WH-1000XM6 Black"])
+
     def test_dyson_text_price_after_camera_and_delivery_emojis(self):
         result = self.parse("""🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
 🇬🇧 Gen5 SV23 Detect Absolute Purple 62000 📷

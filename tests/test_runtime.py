@@ -113,6 +113,159 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(item.price for item in merged),
                          list(map(Decimal, (56000, 57000, 58000, 59000, 70000))))
 
+    async def test_all_ten_user_iphone_17_color_storage_pairs_keep_lowest_price(self):
+        pairs = [
+            (256, "Black", 75200, 73200), (256, "Blue", 75000, 73000),
+            (256, "Lavender", 75500, 73600), (256, "Sage", 75100, 73000),
+            (256, "White", 75300, 73500), (512, "Black", 91700, 90000),
+            (512, "Blue", 89800, 88500), (512, "Lavender", 95000, 93900),
+            (512, "Sage", 93400, 91500), (512, "White", 90800, 89600),
+        ]
+        first = [f"Apple iPhone 17 {storage}GB SIM+eSIM {color} — {high}" for storage, color, high, low in pairs]
+        second = [f"iPhone 17 {storage} {color} (1Sim+eSim) — {low}" for storage, color, high, low in pairs]
+        merged = merge_lowest([parse_documents(first).items, parse_documents(second).items])
+        self.assertEqual(len(merged), len(pairs))
+        for storage, color, high, low in pairs:
+            matching = [item for item in merged if f"{storage} {color}" in item.title]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(matching[0].price, Decimal(low))
+
+    async def test_user_examples_publish_one_cheapest_row_and_no_lego(self):
+        rows = parse_documents(["\n".join([
+            "Apple iPhone 17 256GB SIM+eSIM Black — 75 200",
+            "iPhone 17 256 Black (1Sim+eSim) — 73 200",
+            "Samsung S26 12/256GB () Cobalt Violet 🇰🇿 — 58 500",
+            "Galaxy S26 12/256 Cobalt Violet 🇰🇿 — 58 300",
+            "Apple MacBook Neo 13 A18 Pro 8/512GB Silver MHFC4 — 69 000",
+            "Neo 13 MHFC4 Silver (A18 Pro 8/512) — 67 500",
+            "Realme 16 Pro 5G 8/256 Бежевый 🇷🇺 — 29 500",
+            "Realme 16 Pro 5G 8/256GB Beige 🇷🇺 — 30 300",
+            "Sony WH-1000 XM6 (Black) — 25 400",
+            "Sony WH-1000XM6 Blaсk — 26 800",
+            "LEGO Pokemon Eevee (72151) — 6 000",
+        ])]).items
+        count, _ = await self.service.render(items=merge_lowest([rows]))
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 5)
+        for price in ("73 200", "58 300", "67 500", "29 500", "25 400"):
+            self.assertIn(price, content)
+        for price in ("75 200", "58 500", "69 000", "30 300", "26 800"):
+            self.assertNotIn(price, content)
+        self.assertNotIn("LEGO", content)
+
+    async def test_user_iphone_pairs_merge_without_mixing_versions(self):
+        rows = parse_documents(["\n".join([
+            "Apple iPhone 17 256GB SIM+eSIM Black — 75 200",
+            "iPhone 17 256 Black (1Sim+eSim) — 73 200",
+            "Apple iPhone 17 Pro Max 1TB SIM+eSIM Orange — 157 100",
+            "iPhone 17 Pro Max 1TB Orange (1Sim+eSim) — 157 200",
+            "Apple iPhone 17e 512GB eSIM White — 67 400",
+            "iPhone 17e 512 White (eSim) — 67 000",
+            "Apple iPhone 17 Air 256GB eSIM Black — 78 700",
+            "iPhone 17 Air 256 Black (eSim) — 75 000",
+            "iPhone 17 256 Black (1Sim+eSim) 🇮🇳 — 62 000",
+            "iPhone 17 256 Black (eSim) — 70 000",
+            "iPhone 17 512 Black (1Sim+eSim) — 90 000",
+            "iPhone 17 256 Black (1Sim+eSim) ASIS — 65 000",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(len(merged), 8)
+        self.assertEqual(sorted(item.price for item in merged),
+                         list(map(Decimal, (62000, 65000, 67000, 70000, 73200, 75000, 90000, 157100))))
+
+    async def test_user_samsung_pairs_merge_only_with_matching_specs_and_region(self):
+        rows = parse_documents(["\n".join([
+            "Samsung S26 12/256GB () Cobalt Violet 🇰🇿 — 58 500",
+            "Galaxy S26 12/256 Cobalt Violet 🇰🇿 — 58 300",
+            "Samsung S26 Ultra 12/512GB () Sky Blue 🇰🇿 — 92 800",
+            "Galaxy S26 Ultra 12/512 Sky Blue 🇰🇿 — 91 300",
+            "Samsung S26+ 12/512GB () Sky Blue 🇰🇿 — 77 000",
+            "Galaxy S26+ 12/512 Sky Blue 🇰🇿 — 76 000",
+            "Galaxy S26 Ultra 12/512 Sky Blue 🇨🇱 — 91 300",
+            "Galaxy S26 Ultra 12/256 Sky Blue 🇰🇿 — 76 000",
+            "Galaxy S26 Ultra 12/512 Sky Blue Уценка 🇰🇿 — 80 000",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(len(merged), 6)
+        self.assertEqual(sorted(item.price for item in merged),
+                         list(map(Decimal, (58300, 76000, 76000, 80000, 91300, 91300))))
+
+    async def test_samsung_prefix_region_flag_position_does_not_create_duplicate(self):
+        rows = parse_documents([
+            "🇰🇿 Samsung S26 12/256GB Cobalt Violet — 58 500",
+            "Galaxy S26 12/256 Cobalt Violet 🇰🇿 — 58 300",
+            "Galaxy S26 12/256 Cobalt Violet 🇨🇱 — 58 200",
+        ]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(sorted(item.price for item in merged), [Decimal(58200), Decimal(58300)])
+
+    async def test_user_realme_and_sony_pairs_merge_only_for_same_version(self):
+        rows = parse_documents(["\n".join([
+            "Realme 16 Pro 5G 8/256 Бежевый 🇷🇺 — 29 500",
+            "Realme 16 Pro 5G 8/256GB Beige 🇷🇺 — 30 300",
+            "Realme 16 Pro+ 5G 12/512 Серый 🇷🇺 — 42 000",
+            "Realme 16 Pro+ 5G 12/512GB Gray 🇷🇺 — 42 300",
+            "Realme 16 Pro 5G 8/256 Графитовый 🇷🇺 — 29 500",
+            "Realme 16 Pro 5G 8/256GB Графит 🇷🇺 — 30 300",
+            "Sony WH-1000 XM6 (Black) — 25 400",
+            "Sony WH-1000XM6 Blaсk — 26 800",
+            "Sony WH-1000 XM6 (Pink) — 25 800",
+            "Sony WH-1000 XM5SA (Black) мягкий кейс — 18 400",
+            "Sony WH-1000XM6 Black 🇪🇺 — 26 000",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(len(merged), 7)
+        self.assertEqual(sorted(item.price for item in merged), list(map(Decimal, (
+            18400, 25400, 25800, 26000, 29500, 29500, 42000))))
+
+    async def test_user_galaxy_book_exact_sku_keeps_best_price_and_full_description(self):
+        rows = parse_documents(["\n".join([
+            'Samsung Galaxy Book 6 14" Core Ultra 5-325 16/512GB Gray NP740VJG-LG1IN 🇮🇳 — 110 600',
+            'Galaxy Book 6 NP740VJG - LG1IN 🇮🇳 — 105 500',
+            'Galaxy Book 6 NP740VJG - LG2IN 🇮🇳 — 116 500',
+            'Galaxy Book 6 NP740VJG - LG1IN 🇪🇺 — 105 000',
+            'Galaxy Book 6 NP740VJG - LG1IN Уценка 🇮🇳 — 99 000',
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(len(merged), 4)
+        full = next(item for item in merged if "Core Ultra" in item.title)
+        self.assertEqual(full.price, Decimal(105500))
+        self.assertIn("16/512", full.title)
+
+    async def test_galaxy_book_conflicting_full_specs_are_not_merged_by_sku(self):
+        rows = parse_documents(["\n".join([
+            'Samsung Galaxy Book 6 14" Core Ultra 5-325 16/512GB Gray NP740VJG-LG1IN 🇮🇳 — 110 600',
+            'Samsung Galaxy Book 6 14" Core Ultra 5-325 16/512GB Silver NP740VJG-LG1IN 🇮🇳 — 110 700',
+            'Galaxy Book 6 NP740VJG - LG1IN 🇮🇳 — 105 500',
+        ])]).items
+        self.assertEqual(len(merge_lowest([rows])), 3)
+
+    async def test_expired_galaxy_book_short_sku_is_not_duplicated_when_fresh_full_sku_exists(self):
+        rows = parse_documents(["\n".join([
+            'Samsung Galaxy Book 6 14" Core Ultra 5-325 16/512GB Gray NP740VJG-LG1IN 🇮🇳 — 110 600',
+            'Galaxy Book 6 NP740VJG - LG1IN 🇮🇳 — 105 500',
+        ])]).items
+        self.service.supernova_expired_items = lambda: [rows[1]]
+        self.service.publisher.publish = AsyncMock(return_value=0)
+        count, _ = await self.service.render(items=[rows[0]])
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 1)
+        self.assertIn("110 600", content)
+        self.assertNotIn("По запросу", content)
+
+    async def test_user_macbook_neo_pair_requires_all_specs_to_match(self):
+        rows = parse_documents(["\n".join([
+            "Apple MacBook Neo 13 A18 Pro 8/512GB Silver MHFC4 — 69 000",
+            "Neo 13 MHFC4 Silver (A18 Pro 8/512) — 67 500",
+            "Neo 13 MHFC4 Blush (A18 Pro 8/512) — 68 000",
+            "Neo 13 MHFC4 Silver (A18 Pro 8/256) — 66 000",
+            "Neo 13 MHFC4 Silver (A18 Pro 8/512) 🇺🇸 — 68 500",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(len(merged), 4)
+        self.assertEqual(sorted(item.price for item in merged), list(map(Decimal, (66000, 67500, 68000, 68500))))
+
     async def test_admin_sets_category_and_base_markup_with_buttons(self):
         self.service.refresh_format = AsyncMock(return_value=(1, 1))
         controller = CatalogController("TOKEN", self.service, [42])

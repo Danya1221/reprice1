@@ -4,6 +4,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from dataclasses import replace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -12,7 +13,7 @@ from telethon import errors, utils
 from config import Source
 
 from prices import (
-    Item, identity, iphone_model, sim_type, merge_physical_order, physical_brand_label,
+    FLAGS, Item, clean, identity, iphone_model, sim_type, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
 )
 from publisher import Publisher
@@ -44,9 +45,94 @@ def timestamp():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def macbook_neo_merge_key(item):
+    """Match fully specified Neo listings only when every identifying field agrees."""
+    if item.block != "MacBook / iMac" or item.accessory:
+        return None
+    title = FLAGS.sub("", clean(item.title)).casefold()
+    title = re.sub(r"^\s*(?:apple\s+)?(?:macbook\s+)?", "", title)
+    matchers = (
+        re.compile(r"\bneo\s+13\b"),
+        re.compile(r"\bm[a-z0-9]{3}\d\b"),
+        re.compile(r"\ba18\s+pro\b"),
+        re.compile(r"\b\d{1,2}\s*/\s*\d{3,4}\s*(?:gb|гб)?\b"),
+        re.compile(r"\b(?:silver|indigo|blush|citrus)\b"),
+    )
+    parts = []
+    for pattern in matchers:
+        found = list(pattern.finditer(title))
+        if len(found) != 1:
+            return None
+        part = re.sub(r"\s+|(?:gb|гб)$", "", found[0].group())
+        parts.append(part)
+        title = title[:found[0].start()] + " " + title[found[0].end():]
+    if re.sub(r"[\s()\[\],.\-–—]+", "", title):
+        return None
+    flags = "".join(sorted(FLAGS.findall(item.title)))
+    return identity(" ".join(parts) + flags, item.sim, item.currency)
+
+
+def galaxy_book_descriptor(item):
+    """Recognize exact Galaxy Book part numbers; reject unspecified extra notes."""
+    if not item.block.startswith("Samsung") or item.accessory:
+        return None
+    title = FLAGS.sub("", clean(item.title)).casefold()
+    prefix = re.match(r"^(?:samsung\s+)?galaxy\s+book\s+(6)(\s+pro)?\b", title)
+    sku = re.search(r"\b(np\d{3}[a-z0-9]{2,})\s*[-–—]\s*([a-z0-9]{3,})\b", title)
+    if not prefix or not sku:
+        return None
+    series = prefix.group(1) + (" pro" if prefix.group(2) else "")
+    part = sku.group(1) + "-" + sku.group(2)
+    title = title[:sku.start()] + " " + title[sku.end():]
+    title = re.sub(r"^(?:samsung\s+)?galaxy\s+book\s+6(?:\s+pro)?\b", " ", title)
+    patterns = (
+        re.compile(r"\b(14|16)\s*[\"″]"),
+        re.compile(r"\bcore\s+ultra\s+([57])\s*-\s*(\d{3})\b"),
+        re.compile(r"\b(\d{1,2})\s*/\s*(\d{3,4}|[12]\s*tb)(?:\s*gb)?\b"),
+        re.compile(r"\b(gray|grey|silver)\b"),
+    )
+    details = []
+    for pattern in patterns:
+        matches = list(pattern.finditer(title))
+        if len(matches) > 1:
+            return None
+        if not matches:
+            details.append(None)
+            continue
+        match = matches[0]
+        details.append(re.sub(r"\s+", "", match.group()).replace("grey", "gray"))
+        title = title[:match.start()] + " " + title[match.end():]
+    if re.sub(r"[\s()\[\],.\-–—]+", "", title):
+        return None
+    if any(details) and not all(details):
+        return None
+    flags = "".join(sorted(FLAGS.findall(item.title)))
+    key = identity("galaxy book " + series + " " + part + flags, item.sim, item.currency)
+    return key, tuple(details) if all(details) else None
+
+
 def merge_key(item):
     """Normalize explicit iPhone SIM spelling without guessing SIM or region."""
     title = item.title
+    neo_key = macbook_neo_merge_key(item)
+    if neo_key is not None:
+        return neo_key
+    if iphone_model(title) and not item.accessory:
+        title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
+    if item.block.startswith("Samsung") and not item.accessory:
+        flags = "".join(FLAGS.findall(title))
+        bare = FLAGS.sub("", title).strip()
+        bare = re.sub(r"^\s*(?:samsung\s+galaxy|galaxy)\b", "Samsung", bare, flags=re.I)
+        bare = re.sub(r"\b(S\d+)\s*plus\b", r"\1+", bare, flags=re.I)
+        title = bare + " " + flags
+    if item.block == "Realme" and not item.accessory:
+        for pattern, color in ((r"\bбежев(?:ый|ая|ое)\b", "beige"),
+                               (r"\bсер(?:ый|ая|ое)\b|\bgrey\b", "gray"),
+                               (r"\bграфит(?:овый|овая|овое)?\b", "graphite")):
+            title = re.sub(pattern, color, title, flags=re.I)
+    if re.search(r"\bsony\s+wh[-\s]*1000\s*xm\d", title, re.I) and not item.accessory:
+        title = re.sub(r"\b(wh)[-\s]*(1000)\s*(xm\d+)", r"\1-\2\3", title, flags=re.I)
+        title = re.sub(r"\bblaсk\b", "black", title, flags=re.I)  # Cyrillic с in a Latin colour
     if iphone_model(title) and item.sim != "unknown" and sim_type(title) == item.sim:
         title = re.sub(r"\be[\s-]+sim\b", "esim", title, flags=re.I)
         patterns = {
@@ -59,15 +145,41 @@ def merge_key(item):
     return identity(title, item.sim, item.currency)
 
 
-def merge_lowest(sources):
+def conflicting_galaxy_book_keys(items):
+    specifications = {}
+    for item in items:
+        book = galaxy_book_descriptor(item)
+        if book and book[1] is not None:
+            specifications.setdefault(book[0], set()).add(book[1])
+    return {key for key, values in specifications.items() if len(values) > 1}
+
+
+def comparison_key(item, conflicted_books):
+    book = galaxy_book_descriptor(item)
+    return book[0] if book and book[0] not in conflicted_books else merge_key(item)
+
+
+def merge_lowest(sources, conflicted_books=None):
     """Same full variant across suppliers -> lower purchase price wins."""
+    items = [item for group in sources for item in group or []]
+    conflicted = conflicting_galaxy_book_keys(items) | (conflicted_books or set())
     merged = OrderedDict()
-    for items in sources:
-        for item in items or []:
-            key = merge_key(item)
-            current = merged.get(key)
-            if current is None or item.price < current.price:
-                merged[key] = item
+    detailed = {}
+    for item in items:
+        book = galaxy_book_descriptor(item)
+        use_book = book is not None and book[0] not in conflicted
+        key = book[0] if use_book else merge_key(item)
+        current = merged.get(key)
+        if current is None:
+            merged[key] = item
+            detailed[key] = bool(use_book and book[1] is not None)
+            continue
+        if use_book and book[1] is not None and not detailed[key]:
+            # Preserve the richer verified description while using the best price.
+            merged[key] = replace(item, price=min(item.price, current.price))
+            detailed[key] = True
+        elif item.price < current.price:
+            merged[key] = replace(current, price=item.price) if use_book and detailed[key] else item
     return list(merged.values())
 
 
@@ -713,9 +825,11 @@ class SyncService:
         catalog = self.cached_items(include_closed=closed) if items is None else items
         request_only = []
         if not closed:
-            available = {merge_key(item) for item in catalog}
-            request_only = [item for item in merge_lowest([self.supernova_expired_items()])
-                            if merge_key(item) not in available]
+            expired = self.supernova_expired_items()
+            conflicts = conflicting_galaxy_book_keys(list(catalog) + expired)
+            available = {comparison_key(item, conflicts) for item in catalog}
+            request_only = [item for item in merge_lowest([expired], conflicts)
+                            if comparison_key(item, conflicts) not in available]
             catalog = list(catalog) + request_only
         if closed and not catalog:
             changes = await self.publisher.hide_existing()

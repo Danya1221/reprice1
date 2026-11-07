@@ -601,6 +601,9 @@ def select_items(items, settings, overrides=None):
     allow_accessories = overrides.get("allow_accessories", settings.allow_accessories)
     result = []
     for item in items:
+        # LEGO is excluded from the published price regardless of its source or block.
+        if re.search(r"\blego\b", item.title, re.I) or item.block.casefold() == "lego":
+            continue
         if item.block in disabled:
             continue
         if include_blocks and not matches_any(item.block, include_blocks):
