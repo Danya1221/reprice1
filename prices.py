@@ -840,9 +840,17 @@ def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
     # Apply at render time so previously saved prices lose the note as well.
     title = normal_title(ORIGINAL_PACKAGING.sub("", item.title))
-    if iphone_model(title):
-        explicit = sim_type(title)
-        if explicit == "unknown" and SIM_LABELS.get(item.sim):
+    if iphone_model(title) and not item.accessory:
+        title = FLAGS.sub("", title)
+        # The supplier may place the SIM marker anywhere in the name.
+        sim_marker = (r"(?<!\w)(?:(?:1\s*)?(?:nano\s*)?sim\s*(?:\+|/|&|and|и)\s*e[\s-]*sim|"
+                      r"e[\s-]*sim\s*(?:\+|/|&|and|и)\s*(?:1\s*)?(?:nano\s*)?sim|"
+                      r"(?:2|dual|2x)\s*(?:nano\s*)?sim|две\s*sim|"
+                      r"e[\s-]*sim|есим|(?:1\s*)?(?:nano\s*)?sim|physical\s*sim|физическ\w*\s*sim)(?!\w)")
+        title = re.sub(sim_marker, "", title, flags=re.I)
+        title = re.sub(r"\(\s*\)", "", title)
+        title = clean(title).strip(" ·-")
+        if SIM_LABELS.get(item.sim):
             title += " · " + SIM_LABELS[item.sim]
     return title
 
