@@ -359,6 +359,21 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🇮🇳", content)
         self.assertNotIn("🇹🇭", content)
 
+    async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
+        rows = parse_documents(["\n".join([
+            "Samsung A57 5G 12/256GB A.Icyblue 🇦🇪 — 40 300",
+            "Samsung A57 5G 12/256GB A.Icyblue 🇮🇩 — 40 000",
+            "Samsung A57 5G 12/256GB A.Lilac 🇦🇪 — 40 300",
+            "Samsung A57 5G 12/256GB A.Lilac 🇮🇩 — 40 000",
+        ])]).items
+        count, _ = await self.service.render(items=merge_lowest([rows]))
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 2)
+        self.assertEqual(content.count("40 000"), 2)
+        self.assertNotIn("40 300", content)
+        self.assertIn("A.Icyblue 🇮🇩", content)
+        self.assertIn("A.Lilac 🇮🇩", content)
+
     async def test_pause_persists_and_skips_periodic_sync(self):
         await self.service.pause()
         await self.service.sync()
