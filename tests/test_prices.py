@@ -255,6 +255,25 @@ SIM
         self.assertEqual(item.sim, "esim")
         self.assertEqual(len(select_items([item], Settings(sim_filter="esim"))), 1)
 
+    def test_iphone_max_abbreviation_does_not_inherit_samsung_section(self):
+        rows = self.parse("""Samsung
+Samsung Galaxy Watch Ultra 2025 47mm Titanium White — 26500
+17 Max 256GB Orange 1Sim+eSim 🇭🇰 — 102500
+18 Max 512GB Glacier eSim 🇯🇵 — 138000
+Samsung 18 Max 1TB Glacier 1Sim+eSim ACTIVE 🇭🇰 — 189500
+Samsung Galaxy S26 Ultra 12/256GB Black 🇭🇰 — 76500""").items
+        self.assertEqual(rows[0].block, "Samsung")
+        self.assertEqual(rows[1].block, "iPhone 17 Pro Max")
+        self.assertEqual(rows[2].block, "iPhone 18 Pro Max")
+        self.assertEqual(rows[3].block, "iPhone 18 Pro Max")
+        self.assertIn("iPhone 18 Pro Max", rows[3].title)
+        self.assertEqual(rows[4].block, "Samsung S26")
+        old = Item.from_dict({"title": "Samsung 17 Max 256GB Orange 1Sim+eSim 🇭🇰",
+                              "price": "102500", "currency": "RUB", "block": "Samsung",
+                              "sim": "hybrid", "accessory": False})
+        self.assertEqual(old.block, "iPhone 17 Pro Max")
+        self.assertEqual(old.title, "iPhone 17 Pro Max 256GB Orange 1Sim+eSim 🇭🇰")
+
     def test_iphone_sim_inference_depends_on_model_market_and_explicit_label(self):
         items = self.parse("""iPhone 17 Pro Max 1TB Blue 🇯🇵 — 147600
 iPhone 16 Pro 256 Black 🇯🇵 — 80000

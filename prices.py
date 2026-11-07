@@ -456,6 +456,14 @@ def normal_title(title, context=""):
     title = strip_decoration(title)
     title = re.sub(r"\bSM-[A-Za-z0-9/]+\b", "", title, flags=re.I)
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
+    # A supplier abbreviates iPhone Pro Max as "17 Max" / "18 Max".
+    # A preceding Samsung section used to prepend Samsung to those rows.
+    # Recognize both the raw abbreviation and already-cached wrong titles,
+    # but require an iPhone-style SIM marker and a capacity.
+    if sim_type(title) in {"hybrid", "esim"}:
+        flag_prefix = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"
+        title = re.sub(r"^" + flag_prefix + r"(?:Samsung\s+)?(17|18)\s+Max(?=\s+\d{1,4}\s*(?:GB|TB|ГБ|ТБ)?\b)",
+                       r"\1iPhone \2 Pro Max", title, count=1, flags=re.I)
     # Supplier rows may use Cyrillic Е instead of Latin e in iPhone 16e/17e.
     # Restrict the substitution to the model prefix, not product descriptions.
     title = re.sub(r"^((?:iPhone\s*:?\s*)?\d{1,2})\s*[eе]\b", r"\1e", title, flags=re.I)
