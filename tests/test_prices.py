@@ -271,6 +271,22 @@ iPhone 17 256 Black — 60000""").items
                          ["esim", "hybrid", "dual", "hybrid", "hybrid", "dual", "esim",
                           "hybrid", "unknown", "hybrid", "unknown"])
 
+    def test_iphone_market_rules_cover_other_countries_and_18_pro(self):
+        items = self.parse("""iPhone 17 Pro 256 Black 🇦🇪 — 100000
+iPhone 17 Pro 256 Blue 🇭🇰 — 100000
+iPhone 17 Pro 256 White 🇪🇺 — 100000
+iPhone 17 Pro 256 Orange 🇧🇷 — 100000
+iPhone 16 Pro 256 Black 🇦🇪 — 90000
+iPhone 16 Pro 256 Blue 🇭🇰 — 90000
+iPhone 13 mini 256 Black 🇭🇰 — 50000
+iPhone 13 mini 256 White 🇨🇳 — 50000
+iPhone 18 Pro 256 Black 🇯🇵 — 120000
+iPhone 18 Pro 256 White 🇨🇳 — 120000
+iPhone 18 Pro 256 Blue 🇭🇰 — 120000
+iPhone 17 256 Black 🇽🇽 — 60000""").items
+        self.assertEqual([item.sim for item in items], ["esim", "hybrid", "hybrid", "hybrid",
+            "hybrid", "dual", "hybrid", "unknown", "esim", "hybrid", "hybrid", "unknown"])
+
     def test_supplier_sim_markers_drive_iphone17_variants(self):
         items = self.parse("""iPhone 17
 SIM + eSIM

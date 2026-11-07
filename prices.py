@@ -231,30 +231,41 @@ def infer_iphone_sim(title):
     if len(flags) != 1:
         return "unknown"
     flag = next(iter(flags))
-    esim17 = {"🇺🇸", "🇻🇮", "🇨🇦", "🇲🇽", "🇯🇵", "🇬🇺", "🇦🇪", "🇸🇦", "🇧🇭", "🇰🇼", "🇶🇦", "🇴🇲"}
-    ordinary = {"🇪🇺", "🇬🇧", "🇮🇳", "🇷🇺", "🇰🇷", "🇰🇿", "🇹🇭", "🇸🇬", "🇲🇾", "🇹🇼", "🇦🇺", "🇩🇪", "🇫🇷", "🇮🇹", "🇪🇸"}
-    if model in {"iphone 17", "iphone 17 pro", "iphone 17 pro max", "iphone 17e"}:
-        if flag in esim17:
-            return "esim"
-        if flag == "🇨🇳":
-            return "hybrid" if model == "iphone 17e" else "dual"
-        if flag in ordinary | {"🇭🇰", "🇲🇴"}:
-            return "hybrid"
-    m = re.fullmatch(r"iphone (1[1-6])(?:e| plus| pro| pro max| mini)?", model)
-    if not m:
+    # ISO 3166-1 alpha-2, plus the supplier's EU flag. This validates flags
+    # rather than treating any pair of regional-indicator letters as a market.
+    codes = set(("AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ "
+                 "CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR "
+                 "GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP "
+                 "KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ "
+                 "NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ "
+                 "TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW EU").split())
+    country = "".join(chr(ord(ch) - 0x1F1E6 + ord("A")) for ch in flag)
+    if country not in codes:
         return "unknown"
-    generation = int(m.group(1))
-    if flag == "🇺🇸" and generation >= 14:
-        return "esim"
-    if flag in {"🇨🇳", "🇭🇰", "🇲🇴"}:
-        if model == "iphone 16e":
-            return "dual" if flag == "🇨🇳" else "hybrid"
-        if "mini" in model:
-            return "unknown"
-        return "dual"
-    if flag in ordinary | {"🇯🇵", "🇨🇦", "🇲🇽", "🇦🇪", "🇸🇦", "🇧🇭", "🇰🇼", "🇶🇦", "🇴🇲"}:
+    esim17 = {"US", "PR", "VI", "CA", "MX", "JP", "GU", "AE", "SA", "BH", "KW", "QA", "OM"}
+    if model in {"iphone 17", "iphone 17 pro", "iphone 17 pro max", "iphone 17e", "iphone 18 pro", "iphone 18 pro max"}:
+        if country in esim17:
+            return "esim"
+        if country == "CN":
+            return "hybrid" if model in {"iphone 17e", "iphone 18 pro", "iphone 18 pro max"} else "dual"
         return "hybrid"
-    return "unknown"
+    valid_older = {f"iphone {number}{suffix}" for number, suffixes in {
+        11: ("", " pro", " pro max"), 12: ("", " mini", " pro", " pro max"),
+        13: ("", " mini", " pro", " pro max"), 14: ("", " plus", " pro", " pro max"),
+        15: ("", " plus", " pro", " pro max"), 16: ("", "e", " plus", " pro", " pro max")
+    }.items() for suffix in suffixes}
+    if model not in valid_older:
+        return "unknown"
+    generation = int(re.match(r"iphone (\d+)", model).group(1))
+    if country in {"US", "PR"} and generation >= 14:
+        return "esim"
+    if country in {"CN", "HK", "MO"}:
+        if model == "iphone 16e":
+            return "dual" if country == "CN" else "hybrid"
+        if "mini" in model:
+            return "unknown" if country == "CN" else "hybrid"
+        return "dual"
+    return "hybrid"
 
 
 def resolve_iphone_sim(item):
