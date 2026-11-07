@@ -1,13 +1,15 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from bot_publisher import BotAPIPublisher
 from config import Settings, Source
 from control import Controller
-from main import main, run_supplier
+from main import acquire_runtime_state, main, run_supplier
 from runtime import SyncService
 from state import StateStore
 
@@ -22,6 +24,35 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    async def test_waiting_deployment_reloads_published_ids_after_previous_instance_finishes(self):
+        class Database:
+            def __init__(self):
+                self.payload = json.dumps({"published": {"binding": "botapi:-100777", "messages": {}}})
+                self.lock_acquired = False
+            def get(self, key, default=None):
+                return self.payload
+            def set(self, key, value):
+                self.payload = value
+            def acquire_runtime_lock(self, on_wait=None):
+                # Previous deployment completes publication while this one waits.
+                self.payload = json.dumps({"published": {"binding": "botapi:-100777",
+                                        "messages": {"price:0": {"id": 123, "content": "Прайс"}}}})
+                self.lock_acquired = True
+        database = Database()
+        state = StateStore(Path(self.temp.name) / "db-state.json", database=database)
+        self.assertFalse(state.get("published")["messages"])
+        await acquire_runtime_state(state)
+        self.assertTrue(database.lock_acquired)
+        self.assertEqual(state.get("published")["messages"]["price:0"]["id"], 123)
+        publisher = BotAPIPublisher("TOKEN", -100777, state, Settings(send_delay=0))
+        publisher.target = -100777
+        publisher.ensure_target = AsyncMock(return_value=-100777)
+        publisher._edit = AsyncMock(side_effect=RuntimeError("message is not modified"))
+        publisher._send = AsyncMock(return_value={"message_id": 124})
+        await publisher.publish({"price:0": "Прайс"})
+        publisher._send.assert_not_awaited()
+        self.assertEqual(state.get("published")["messages"]["price:0"]["id"], 123)
 
     async def test_supplier_failure_keeps_controller_alive_and_answers_start(self):
         failed = asyncio.Event()

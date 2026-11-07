@@ -135,6 +135,26 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(method == "editMessageText" and payload.get("text") == "Новый прайс"
                             for method, payload in publisher.calls))
 
+    async def test_uneditable_existing_message_does_not_trigger_duplicate_publication(self):
+        settings = Settings(send_delay=0, admin_ids=(42,))
+        group_id = -100777
+        publisher = FakeBotPublisher(group_id, self.state, settings,
+                                     {group_id: {"id": group_id, "type": "supergroup", "title": "Розница"}})
+        pages = {"one:0": "Первый блок", "two:0": "Второй блок"}
+        await publisher.publish(pages)
+        manifest = self.state.get("published")
+        original_api = publisher.api
+        async def uneditable(method, **payload):
+            if method == "editMessageText":
+                raise RuntimeError("Bad Request: message can't be edited")
+            return await original_api(method, **payload)
+        publisher.api = uneditable
+        publisher.calls.clear()
+        with self.assertRaisesRegex(RuntimeError, "can't be edited"):
+            await publisher.publish(pages)
+        self.assertFalse(any(method == "sendMessage" for method, _ in publisher.calls))
+        self.assertEqual(self.state.get("published"), manifest)
+
     async def test_deleted_saved_id_rebuilds_all_managed_price_posts(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
         group_id = -100777

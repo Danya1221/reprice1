@@ -94,17 +94,24 @@ async def prepare_supplier(service, settings, controller=None):
     service.ready = True
 
 
+async def acquire_runtime_state(state):
+    """Take ownership before using persisted state, then read the latest checkpoint."""
+    database = getattr(state, "database", None)
+    if database is None:
+        return
+
+    def waiting():
+        log.warning("Жду завершения предыдущего Railway deployment")
+
+    await asyncio.to_thread(database.acquire_runtime_lock, waiting)
+    # Another deployment could have saved message IDs while we were waiting.
+    # No controller or publisher may use the earlier in-memory snapshot.
+    await asyncio.to_thread(state.load)
+    log.info("PostgreSQL runtime lock получен, состояние обновлено")
+
+
 async def run_supplier(service, settings, controller=None, retry_seconds=30):
     """Run supplier sync forever and hot-reload either saved Telegram session."""
-    database = getattr(service.state, "database", None)
-    if database is not None:
-        def waiting():
-            service.startup_error = "Жду завершения предыдущего Railway deployment"
-            log.warning("Жду PostgreSQL runtime lock перед подключением Telegram-сессии")
-
-        await asyncio.to_thread(database.acquire_runtime_lock, waiting)
-        log.info("PostgreSQL runtime lock получен")
-
     while not service.stop_event.is_set():
         service.ready = False
         service.reload_requested = False
@@ -174,7 +181,12 @@ async def run_supplier(service, settings, controller=None, retry_seconds=30):
 async def main():
     settings = Settings.from_env(require_sync=False)
     state = StateStore(settings.state_file)
-    state.acquire()
+    try:
+        state.acquire()
+        await acquire_runtime_state(state)
+    except BaseException:
+        state.close()
+        raise
 
     stored_session = state.get("session_string", "")
     stored_session_2 = state.get("session_string_2", "")

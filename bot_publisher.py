@@ -31,9 +31,6 @@ def is_missing_message_error(error):
         "message to delete not found",
         "message_id_invalid",
         "message id invalid",
-        "message identifier is not specified",
-        "message can't be edited",
-        "message cannot be edited",
     ))
 
 
