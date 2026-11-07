@@ -42,9 +42,9 @@ Dyson HS08 🇪🇺 — 40000"""]).items
         self.assertEqual(titles[0], "iPhone 17 256 Black · SIM + eSIM")
         self.assertEqual(titles[1], "Apple iPhone 17 256GB Black · SIM + eSIM")
         self.assertEqual(titles[2], "iPhone 17 Pro 512 Blue ASIS · eSIM")
-        self.assertEqual(titles[3], "iPhone 17 Pro Max 1TB Blue")
+        self.assertEqual(titles[3], "iPhone 17 Pro Max 1TB Blue · eSIM")
         self.assertIn("🇪🇺", titles[4])
-        self.assertEqual(items[3].sim, "unknown")
+        self.assertEqual(items[3].sim, "esim")
         self.assertIn("🇯🇵", items[3].title)
 
 

@@ -4,7 +4,7 @@ import html
 import re
 import unicodedata
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_HALF_UP
 
 SPACE = re.compile(r"\s+")
@@ -216,6 +216,52 @@ def iphone_model(title):
     if model.casefold() == "17 air":
         return "iPhone Air"
     return "iPhone " + model
+
+
+def infer_iphone_sim(title):
+    """Infer only from an unambiguous supplier market flag and supported model.
+
+    Apple: support.apple.com/en-ie/118569 and support.apple.com/en-ca/108898.
+    A flag is treated as the market version, not the seller's location.
+    """
+    model = iphone_model(title).casefold()
+    if model == "iphone air":
+        return "esim"
+    flags = set(FLAGS.findall(title))
+    if len(flags) != 1:
+        return "unknown"
+    flag = next(iter(flags))
+    esim17 = {"🇺🇸", "🇻🇮", "🇨🇦", "🇲🇽", "🇯🇵", "🇬🇺", "🇦🇪", "🇸🇦", "🇧🇭", "🇰🇼", "🇶🇦", "🇴🇲"}
+    ordinary = {"🇪🇺", "🇬🇧", "🇮🇳", "🇷🇺", "🇰🇷", "🇰🇿", "🇹🇭", "🇸🇬", "🇲🇾", "🇹🇼", "🇦🇺", "🇩🇪", "🇫🇷", "🇮🇹", "🇪🇸"}
+    if model in {"iphone 17", "iphone 17 pro", "iphone 17 pro max", "iphone 17e"}:
+        if flag in esim17:
+            return "esim"
+        if flag == "🇨🇳":
+            return "hybrid" if model == "iphone 17e" else "dual"
+        if flag in ordinary | {"🇭🇰", "🇲🇴"}:
+            return "hybrid"
+    m = re.fullmatch(r"iphone (1[1-6])(?:e| plus| pro| pro max| mini)?", model)
+    if not m:
+        return "unknown"
+    generation = int(m.group(1))
+    if flag == "🇺🇸" and generation >= 14:
+        return "esim"
+    if flag in {"🇨🇳", "🇭🇰", "🇲🇴"}:
+        if model == "iphone 16e":
+            return "dual" if flag == "🇨🇳" else "hybrid"
+        if "mini" in model:
+            return "unknown"
+        return "dual"
+    if flag in ordinary | {"🇯🇵", "🇨🇦", "🇲🇽", "🇦🇪", "🇸🇦", "🇧🇭", "🇰🇼", "🇶🇦", "🇴🇲"}:
+        return "hybrid"
+    return "unknown"
+
+
+def resolve_iphone_sim(item):
+    if item.sim != "unknown" or item.accessory:
+        return item
+    sim = infer_iphone_sim(item.title)
+    return replace(item, sim=sim) if sim != "unknown" else item
 
 
 def iphone_publish_block(model):
@@ -580,6 +626,7 @@ def parse_documents(documents, default_currency="RUB", fallback_block="", docume
         if sim == "unknown":
             sim = section_sim if model else "unknown"
         item = Item(title, amount, currency, block, sim, accessory)
+        item = resolve_iphone_sim(item)
         if item.key not in item_priorities or priority >= item_priorities[item.key]:
             items[item.key] = item
             item_priorities[item.key] = priority
@@ -601,6 +648,7 @@ def select_items(items, settings, overrides=None):
     allow_accessories = overrides.get("allow_accessories", settings.allow_accessories)
     result = []
     for item in items:
+        item = resolve_iphone_sim(item)
         # LEGO is excluded from the published price regardless of its source or block.
         if re.search(r"\blego\b", item.title, re.I) or item.block.casefold() == "lego":
             continue

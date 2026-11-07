@@ -250,10 +250,26 @@ SIM
         self.assertEqual(len(select_items(items, Settings(sim_filter="sim"))), 2)
         self.assertEqual(len(select_items(items, Settings(sim_filter="esim"))), 1)
 
-    def test_country_flag_does_not_infer_iphone17_sim(self):
+    def test_country_flag_infers_iphone17_sim(self):
         item = self.parse("🇺🇸 iPhone 17 256GB Black — 58800").items[0]
-        self.assertEqual(item.sim, "unknown")
-        self.assertEqual(len(select_items([item], Settings(sim_filter="esim"))), 0)
+        self.assertEqual(item.sim, "esim")
+        self.assertEqual(len(select_items([item], Settings(sim_filter="esim"))), 1)
+
+    def test_iphone_sim_inference_depends_on_model_market_and_explicit_label(self):
+        items = self.parse("""iPhone 17 Pro Max 1TB Blue 🇯🇵 — 147600
+iPhone 16 Pro 256 Black 🇯🇵 — 80000
+iPhone 17 256 Black 🇨🇳 — 70000
+iPhone 17e 256 Black 🇨🇳 — 60000
+iPhone 17 256 Black 🇭🇰 — 70000
+iPhone 16 256 Black 🇭🇰 — 60000
+iPhone 17 Air 256 Black — 75000
+iPhone 17 256 Black 🇮🇳 — 60000
+iPhone 17 256 Black 🇮🇳 🇺🇸 — 60000
+iPhone 17 256 Black SIM+eSIM 🇺🇸 — 60000
+iPhone 17 256 Black — 60000""").items
+        self.assertEqual([item.sim for item in items],
+                         ["esim", "hybrid", "dual", "hybrid", "hybrid", "dual", "esim",
+                          "hybrid", "unknown", "hybrid", "unknown"])
 
     def test_supplier_sim_markers_drive_iphone17_variants(self):
         items = self.parse("""iPhone 17

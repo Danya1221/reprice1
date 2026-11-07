@@ -13,7 +13,7 @@ from telethon import errors, utils
 from config import Source
 
 from prices import (
-    FLAGS, Item, clean, identity, iphone_model, sim_type, merge_physical_order, physical_brand_label,
+    FLAGS, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
 )
 from publisher import Publisher
@@ -161,7 +161,7 @@ def comparison_key(item, conflicted_books):
 
 def merge_lowest(sources, conflicted_books=None):
     """Same full variant across suppliers -> lower purchase price wins."""
-    items = [item for group in sources for item in group or []]
+    items = [resolve_iphone_sim(item) for group in sources for item in group or []]
     conflicted = conflicting_galaxy_book_keys(items) | (conflicted_books or set())
     merged = OrderedDict()
     detailed = {}
