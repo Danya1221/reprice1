@@ -108,7 +108,7 @@ BRANDS = (
 )
 SIM_LABELS = {
     "sim": "SIM",
-    "hybrid": "SIM + eSIM",
+    "hybrid": "SIM",
     "esim": "eSIM",
     "dual": "2 SIM",
     "unknown": "",
@@ -284,7 +284,9 @@ def iphone_storage_key(item):
     title = FLAGS.sub("", clean(item.title))
     model = iphone_model(title)
     if model:
-        title = re.sub(re.escape(model), "", title, count=1, flags=re.I).strip()
+        # iPhone 17 Air is grouped as "iPhone Air", but the original text
+        # still contains 17; remove the actual match before finding storage.
+        title = IPHONE.sub("", title, count=1).strip()
     match = re.search(r"\b(\d{1,4})\s*(GB|TB)?\b", title, re.I)
     if not match:
         return ""
@@ -918,7 +920,7 @@ def display_title(item):
         title = re.sub(r"\(\s*\)", "", title)
         title = clean(title).strip(" ·-")
         if SIM_LABELS.get(item.sim):
-            title += " · " + SIM_LABELS[item.sim]
+            title += " " + SIM_LABELS[item.sim]
     return title
 
 

@@ -720,8 +720,8 @@ S25 Ultra 12/256 Black — 65000""").items
     def test_service_headings_have_visible_blank_lines(self):
         items = self.parse("iPhone 17e 256 Black 1Sim+eSim — 63800\niPhone 17e 512 White 1Sim+eSim Актив — 70000").items
         content = next(iter(render_blocks(items, Settings()).values()))
-        self.assertIn("— iPhone 17e —</b>\n\n<b>— SIM + eSIM —</b>\n\n<code>", content)
-        self.assertIn("— Актив —</b>\n\n<b>— SIM + eSIM —</b>\n\n<code>", content)
+        self.assertIn("— iPhone 17e —</b>\n\n<b>— SIM —</b>\n\n<code>", content)
+        self.assertIn("— Актив —</b>\n\n<b>— SIM —</b>\n\n<code>", content)
         self.assertNotIn("— Не активированное —", content)
 
     def test_iphone_11_to_15_visual_order_is_ascending(self):

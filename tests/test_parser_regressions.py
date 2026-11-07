@@ -9,7 +9,7 @@ class ParserRegressionTests(unittest.TestCase):
     def test_1sim_plus_esim_is_hybrid(self):
         items = self.parse("iPhone 17\n1Sim+eSim\n17 256 Black — 60000\niPhone 17 Pro 256 White (1Sim+eSim) — 70000").items
         self.assertEqual([i.sim for i in items], ["hybrid", "hybrid"])
-        self.assertIn("SIM + eSIM", "\n".join(render_blocks(items, Settings()).values()))
+        self.assertIn("— SIM —", "\n".join(render_blocks(items, Settings()).values()))
 
     def test_short_iphone_tb_and_air_blocks(self):
         items = self.parse("17 Pro 1TB Orange — 100000\n17 Pro Max 2TB Silver — 120000\n17 Air 1TB Blue — 90000").items
