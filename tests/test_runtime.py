@@ -322,6 +322,43 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         usa = next(i for i in merged if "🇺🇸" in i.title)
         self.assertEqual(usa.price, Decimal(59000))
 
+    async def test_samsung_publication_keeps_lowest_and_three_requested_regions(self):
+        rows = parse_documents(["\n".join([
+            "Galaxy S26 12/256 Cobalt Violet 🇨🇱 — 58 200",
+            "Galaxy S26 12/256 Cobalt Violet 🇦🇪 — 58 400",
+            "Galaxy S26 12/256 Cobalt Violet 🇭🇰 — 57 500",
+            "Samsung S26 12/256GB () Cobalt Violet 🇰🇿 — 58 500",
+            "Samsung S26 12/256GB () Cobalt Violet 🇨🇳 — 60 000",
+            "Galaxy S26 12/512 Cobalt Violet 🇨🇱 — 67 500",
+            "Galaxy S26 12/512 Cobalt Violet 🇰🇿 — 68 000",
+            "Galaxy S26 12/256 Cobalt Violet Уценка 🇺🇸 — 48 500",
+            "Galaxy S26 12/256 Cobalt Violet Уценка 🇰🇿 — 49 500",
+        ])]).items
+        count, _ = await self.service.render(items=merge_lowest([rows]))
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 7)
+        for price in ("57 500", "58 500", "60 000", "67 500", "68 000", "48 500", "49 500"):
+            self.assertIn(price, content)
+        for price in ("58 200", "58 400"):
+            self.assertNotIn(price, content)
+        self.assertIn("🇭🇰", content)
+        self.assertIn("🇨🇳", content)
+        self.assertIn("🇰🇿", content)
+
+    async def test_samsung_cheapest_outside_protected_markets_is_also_shown(self):
+        rows = parse_documents(["\n".join([
+            "Galaxy S26 12/256 White 🇹🇭 — 58 000",
+            "Galaxy S26 12/256 White 🇮🇳 — 57 000",
+            "Galaxy S26 12/256 White 🇭🇰 — 59 000",
+            "Galaxy S26 12/256 White 🇨🇳 — 60 000",
+            "Galaxy S26 12/256 White 🇰🇿 — 61 000",
+        ])]).items
+        count, _ = await self.service.render(items=rows)
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 4)
+        self.assertIn("🇮🇳", content)
+        self.assertNotIn("🇹🇭", content)
+
     async def test_pause_persists_and_skips_periodic_sync(self):
         await self.service.pause()
         await self.service.sync()

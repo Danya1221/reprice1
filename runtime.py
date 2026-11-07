@@ -183,6 +183,32 @@ def merge_lowest(sources, conflicted_books=None):
     return list(merged.values())
 
 
+def select_samsung_regions(items):
+    """Keep the cheapest offer and the cheapest HK, China and Kazakhstan offers.
+
+    Compare only otherwise-identical descriptions; never strip condition,
+    configuration, colour, SIM, or currency from the comparison key.
+    """
+    protected = {"🇭🇰", "🇨🇳", "🇰🇿"}
+    groups = OrderedDict()
+    keep = set()
+    for index, item in enumerate(items):
+        if not item.block.startswith("Samsung") or item.accessory:
+            keep.add(index)
+            continue
+        key = merge_key(replace(item, title=FLAGS.sub("", item.title)))
+        groups.setdefault(key, []).append((index, item, set(FLAGS.findall(item.title))))
+    for group in groups.values():
+        # At equal price prefer a protected region, avoiding an extra row.
+        chosen = min(group, key=lambda row: (row[1].price, not bool(row[2] & protected), row[0]))
+        keep.add(chosen[0])
+        for region in protected:
+            matches = [row for row in group if region in row[2]]
+            if matches:
+                keep.add(min(matches, key=lambda row: (row[1].price, row[0]))[0])
+    return [item for index, item in enumerate(items) if index in keep]
+
+
 class SyncService:
     def __init__(self, client, settings, state):
         self.client = client
@@ -836,6 +862,13 @@ class SyncService:
             self.state.update({"last_publish": timestamp(), "published_items": 0})
             return 0, changes
         selected = select_items(catalog, self.settings, options)
+        if not closed:
+            request_keys = {item.key for item in request_only}
+            active = [item for item in selected if item.key not in request_keys]
+            expired = [item for item in selected if item.key in request_keys]
+            active_keys = {id(item) for item in select_samsung_regions(active)}
+            expired_keys = {id(item) for item in select_samsung_regions(expired)}
+            selected = [item for item in selected if id(item) in active_keys | expired_keys]
         render_options = {**options, "_request_only_keys": {item.key for item in request_only}}
         pages = render_blocks(selected, self.settings, render_options, closed=closed)
         if not closed:
