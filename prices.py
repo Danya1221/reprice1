@@ -845,8 +845,7 @@ def samsung_a_s25_sort(item):
     plain = FLAGS.sub("", clean(item.title)).strip()
     a = samsung_a_model(plain)
     if a:
-        memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", plain)
-        return 0, a[0], (a[1], tuple(map(int, memory.groups())) if memory else (999, 999)), plain.casefold()
+        return 0, a[0], (a[1], samsung_memory_sort(plain)), plain.casefold()
     if re.search(r"\bS\s*25\s*FE\b", plain, re.I):
         return 1, 0, 0, plain.casefold()
     if re.search(r"\bS\s*25\s*Edge\b", plain, re.I):
@@ -862,6 +861,16 @@ def samsung_a_model(title):
     plain = FLAGS.sub("", clean(title))
     match = re.match(r"^(?:samsung\s+)?(?:galaxy\s+)?a\s*(\d{2,3})([a-z]?)\b", plain, re.I)
     return (int(match.group(1)), match.group(2).casefold()) if match else None
+
+
+def samsung_memory_sort(title):
+    match = re.search(r"\b(\d{1,2})\s*/\s*(\d{1,4})\s*(tb|тб|gb|гб)?\b", title, re.I)
+    if not match:
+        return (999, 99999)
+    ram, storage = int(match.group(1)), int(match.group(2))
+    if (match.group(3) or "").casefold() in {"tb", "тб"}:
+        storage *= 1024
+    return (ram, storage)
 
 
 def samsung_s_model(title):
@@ -890,6 +899,26 @@ def samsung_phone_group(title):
     if model:
         return ("z", *model)
     return None
+
+
+def samsung_colour_sort(title):
+    """Visual grouping only: never use approximate colour names to merge stock."""
+    text = FLAGS.sub("", clean(title)).casefold().replace("ё", "е")
+    colours = (
+        ("black", r"\bblack\b|черн\w*|jet\s*black"),
+        ("blue", r"\bblue\b|\bblueberry\b|голуб\w*|сини\w*"),
+        ("green", r"\bgreen\b|\bpistachio\b|зелен\w*|фисташков\w*"),
+        ("gray", r"\bgr[ae]y\b|\bgraphite\b|сер\w*|графит\w*"),
+        ("purple", r"\bviolet\b|\bpurple\b|\blilac\b|фиолетов\w*|сиренев\w*"),
+        ("white", r"\bwhite\b|бел\w*"),
+        ("silver", r"\bsilver\b|серебр\w*"),
+        ("gold", r"\bgold\b|золот\w*"),
+        ("pink", r"\bpink\b|розов\w*"),
+    )
+    for label, pattern in colours:
+        if re.search(pattern, text):
+            return label
+    return "~"
 
 
 def model_group_key(item):
@@ -1149,14 +1178,12 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
             if block == "Samsung":
                 model = samsung_a_model(item.title)
                 if model:
-                    memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", item.title)
-                    return (0, model, tuple(map(int, memory.groups())) if memory else (999, 999), item_sort(item))
-                return (1, (0, ""), (0, 0), item_sort(item))
-            if block in {"Samsung S26", "Samsung Fold / Flip"}:
+                    return (0, model, samsung_memory_sort(item.title), samsung_colour_sort(item.title), item_sort(item))
+                return (1, (0, ""), (0, 0), "", item_sort(item))
+            if block in {"Samsung A + S25", "Samsung S26", "Samsung Fold / Flip"}:
                 model = samsung_phone_group(item.title)
-                memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", item.title)
                 return (0 if model else 1, model or (),
-                        tuple(map(int, memory.groups())) if memory else (999, 999), item_sort(item))
+                        samsung_memory_sort(item.title), samsung_colour_sort(item.title), item_sort(item))
             if block in {"CPO", "ASIS"}:
                 name = iphone_model(item.title).casefold()
                 natural = tuple(int(part) if part.isdigit() else part

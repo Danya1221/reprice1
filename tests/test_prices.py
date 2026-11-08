@@ -87,6 +87,25 @@ Samsung S25 12/256 Navy 🇮🇳 — 49000""").items
         self.assertEqual(indices, sorted(indices))
         self.assertLess(indices[-1], content.index("Samsung S25 12/256"))
 
+    def test_samsung_s26_russian_and_english_colours_are_adjacent(self):
+        items = self.parse("""Samsung S26 12/256GB Black 🇨🇳 — 62000
+Samsung S26 12/256GB Cobalt Violet 🇨🇳 — 60000
+Samsung S26 12/256GB Sky Blue 🇰🇿 — 58500
+Samsung S26 12/256GB White 🇵🇦 — 60000
+Samsung S26 12/256GB Голубой 🇷🇺 — 60000
+Samsung S26 12/256GB Фиолетовый 🇷🇺 — 61500
+Samsung S26 12/256GB Черный 🇷🇺 — 61500
+Samsung S26 12/512GB Black 🇰🇿 — 68500""").items
+        content = "\n".join(render_blocks(items, Settings()).values())
+        rows = re.findall(r"<code>(.*?)</code>", content)
+        self.assertIn("Black 🇨🇳", rows[0])
+        self.assertIn("Черный 🇷🇺", rows[1])
+        self.assertIn("Sky Blue 🇰🇿", rows[2])
+        self.assertIn("Голубой 🇷🇺", rows[3])
+        self.assertIn("Cobalt Violet 🇨🇳", rows[4])
+        self.assertIn("Фиолетовый 🇷🇺", rows[5])
+        self.assertIn("12/512GB", rows[-1])
+
     def test_dyson_text_price_after_camera_and_delivery_emojis(self):
         result = self.parse("""🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
 🇬🇧 Gen5 SV23 Detect Absolute Purple 62000 📷

@@ -1,4 +1,5 @@
 import asyncio
+import re
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -447,6 +448,30 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(fe, plus)
         self.assertLess(plus, ultra)
         self.assertGreater(count, 0)
+
+    async def test_s26_memory_colour_and_duplicate_regions_follow_user_example(self):
+        first = parse_documents(["""Samsung S26 12/256 Cobalt Violet 🇭🇰 — 57500
+Samsung S26 12/512 Black 🇰🇿 — 68500
+Samsung S26 12/512 Cobalt Violet 🇦🇪 — 67800
+Samsung S26 12/128GB Black 🇪🇺 — 56800
+Samsung S26 12/256GB Black 🇨🇳 — 62000
+Samsung S26 12/256GB Cobalt Violet 🇨🇳 — 60000
+Samsung S26 12/256GB Cobalt Violet 🇰🇿 — 58500
+Samsung S26 12/256GB Черный 🇷🇺 — 61500
+Samsung S26 12/512GB Cobalt Violet 🇰🇿 — 68000"""]).items
+        duplicate = parse_documents(["Samsung S26 12/256GB Cobalt Violet 🇭🇰 — 59000"]).items
+        _, _ = await self.service.render(items=merge_lowest([first, duplicate]))
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertNotIn("59 000", content)
+        self.assertIn("57 500", content)
+        self.assertIn("67 800", content)
+        self.assertIn("68 000", content)
+        self.assertLess(content.index("12/128GB"), content.index("12/256"))
+        self.assertLess(content.index("12/256"), content.index("12/512"))
+        rows = re.findall(r"<code>(.*?)</code>", content)
+        black = [i for i, row in enumerate(rows) if "12/256" in row and ("Black" in row or "Черный" in row)]
+        self.assertEqual(len(black), 2)
+        self.assertEqual(black[1], black[0] + 1)
 
     async def test_galaxy_fold_prefix_and_model_spacing_merge_in_same_region(self):
         rows = parse_documents(["\n".join([
