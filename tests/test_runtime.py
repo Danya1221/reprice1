@@ -397,6 +397,26 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         for price in ("17 600", "21 000", "15 900", "15 000", "18 000"):
             self.assertIn(price, content)
 
+    async def test_galaxy_fold_prefix_and_model_spacing_merge_in_same_region(self):
+        rows = parse_documents(["\n".join([
+            "Galaxy Z Fold7 12/256 Blue Shadow 🇰🇿 — 97 600",
+            "Samsung Galaxy Z Fold 7 12/256GB Blue Shadow 🇰🇿 — 99 000",
+            "Samsung Galaxy Z Fold7 12/256GB Blue Shadow 🇭🇰 — 98 000",
+            "Samsung Galaxy Z Fold7 12/512GB Blue Shadow 🇰🇿 — 110 000",
+            "Samsung Galaxy Z Fold7 12/256GB Silver Shadow 🇰🇿 — 97 000",
+            "Samsung Galaxy Z Fold7 12/256GB Blue Shadow Уценка 🇰🇿 — 90 000",
+            "Samsung Galaxy Z Flip8 12/256GB Graphite 🇰🇿 — 64 000",
+            "Galaxy Z Flip 8 12/256 Graphite 🇰🇿 — 63 000",
+        ])]).items
+        self.assertTrue(all(item.block == "Samsung Fold / Flip" for item in rows))
+        merged = merge_lowest([rows])
+        self.assertEqual(sorted(item.price for item in merged),
+                         list(map(Decimal, (63000, 90000, 97000, 97600, 98000, 110000))))
+        restored = Item.from_dict({"title": "Galaxy Z Fold7 12/256 Blue Shadow 🇰🇿",
+                                   "price": "97600", "currency": "RUB", "block": "Samsung",
+                                   "sim": "unknown", "accessory": False})
+        self.assertEqual(restored.block, "Samsung Fold / Flip")
+
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
         rows = parse_documents(["\n".join([
             "Samsung A57 5G 12/256GB A.Icyblue 🇦🇪 — 40 300",

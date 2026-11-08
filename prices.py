@@ -344,14 +344,14 @@ def samsung_block(title):
         return "Samsung S26"
     if re.search(r"^(?:samsung\s+|galaxy\s+)?tab\s*s\s*\d*", plain, re.I):
         return "Samsung Tab S"
-    if re.search(r"^(?:samsung\s+|galaxy\s+)?(?:z\s*)?(?:fold|flip)\b", plain, re.I):
+    if re.search(r"^(?:samsung\s+)?(?:galaxy\s+)?(?:z\s*)?(?:fold|flip)(?=\s|\d|$)", plain, re.I):
         return "Samsung Fold / Flip"
 
     if not has_brand:
         return ""
     if re.search(r"\b(?:galaxy\s*)?tab\s*s\s*\d*", plain, re.I):
         return "Samsung Tab S"
-    if re.search(r"\b(?:galaxy\s*)?(?:z\s*)?(?:fold|flip)\b", plain, re.I):
+    if re.search(r"\b(?:galaxy\s*)?(?:z\s*)?(?:fold|flip)(?=\s|\d|$)", plain, re.I):
         return "Samsung Fold / Flip"
     if re.search(r"\b(?:galaxy\s*)?buds\s*[34]\b", plain, re.I):
         return "Samsung Buds"

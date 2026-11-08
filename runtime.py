@@ -128,6 +128,7 @@ def merge_key(item):
         bare = FLAGS.sub("", title).strip()
         bare = re.sub(r"^\s*(?:samsung\s+galaxy|galaxy)\b", "Samsung", bare, flags=re.I)
         bare = re.sub(r"\b(S\d+)\s*plus\b", r"\1+", bare, flags=re.I)
+        bare = re.sub(r"\b(fold|flip)\s*(\d+)\b", r"\1 \2", bare, flags=re.I)
         # The currently listed Galaxy A18 is the LTE model; keep an explicit
         # 5G variant distinct if a supplier provides one.
         if re.search(r"\bSamsung\s+A18\b", bare, re.I):
