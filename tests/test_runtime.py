@@ -55,6 +55,38 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         pages = self.service.publisher.publish.call_args.args[0]
         self.assertIn("60 000", next(iter(pages.values())))
 
+    async def test_manual_hide_survives_sync_restart_and_restore_requires_fresh_sync(self):
+        await self.service.set_availability_hidden(True)
+        self.assertTrue(self.service.options()["availability_hidden"])
+        self.service.publisher.hide_existing.assert_awaited_once()
+        self.service.publisher.publish.assert_not_awaited()
+        with patch("runtime.is_open", return_value=True):
+            result = await self.service.sync(force=True)
+        self.assertIn("Наличие скрыто вручную", result)
+        self.service.publisher.publish.assert_not_awaited()
+        self.assertTrue(StateStore(self.state.path).get("options")["availability_hidden"])
+        await self.service.set_availability_hidden(False)
+        self.service.publisher.publish.assert_not_awaited()
+        with patch("runtime.is_open", return_value=True):
+            await self.service.sync(force=True)
+        pages = self.service.publisher.publish.await_args.args[0]
+        self.assertIn("60 000", "\n".join(pages.values()))
+
+    async def test_manual_hide_reopens_next_morning_and_fetches_fresh_prices(self):
+        evening = datetime(2026, 11, 8, 18, tzinfo=timezone.utc)
+        await self.service.set_availability_hidden(True, now=evening)
+        self.assertEqual(self.service.options()["availability_reopen_at"], "2026-11-09T07:00:00+00:00")
+        restored = SyncService(self.client, self.settings, StateStore(self.state.path))
+        self.assertFalse(restored._auto_enable_availability(datetime(2026, 11, 9, 6, 59, tzinfo=timezone.utc)))
+        self.assertTrue(restored._auto_enable_availability(datetime(2026, 11, 9, 7, tzinfo=timezone.utc)))
+        self.assertFalse(restored.options()["availability_hidden"])
+        self.assertEqual(restored.last_attempt, 0)
+        self.service.publisher.publish.assert_not_awaited()
+
+    async def test_hiding_before_opening_reopens_the_same_morning(self):
+        await self.service.set_availability_hidden(True, now=datetime(2026, 11, 9, 5, tzinfo=timezone.utc))
+        self.assertEqual(self.service.options()["availability_reopen_at"], "2026-11-09T07:00:00+00:00")
+
     async def test_before_start_one_open_supplier_hides_prices(self):
         with patch("runtime.is_open", return_value=False):
             result = await self.service.sync()

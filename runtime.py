@@ -5,7 +5,7 @@ import re
 import time
 from collections import OrderedDict
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from telethon import errors, utils
@@ -854,6 +854,10 @@ class SyncService:
 
     async def render(self, closed=False, items=None):
         options = self.options()
+        if options.get("availability_hidden", False):
+            changes = await self.publisher.hide_existing()
+            self.state.update({"last_publish": timestamp(), "published_items": 0})
+            return 0, changes
         original_order = options.get("physical_order")
         if "physical_order" not in options:
             # Adopt the already published layout once on upgrade. Empty orders
@@ -933,6 +937,7 @@ class SyncService:
 
     async def sync(self, force=False):
         async with self.lock:
+            self._auto_enable_availability()
             if not self.ready:
                 return self.startup_status()
             if not self.enabled() and not force:
@@ -1080,7 +1085,8 @@ class SyncService:
                     source_note += ("/" if source_note else "") + "Supernova: открыт"
                 account_note = " + аккаунт 2" if 2 in self.clients else ""
                 message = (
-                    f"Прайс обновлён: {count} позиций, изменений: {changes}; "
+                    ("Наличие скрыто вручную; " if self.options().get("availability_hidden", False)
+                     else f"Прайс обновлён: {count} позиций, изменений: {changes}; ") +
                     f"источники: {source_note}{account_note}"
                 )
                 self.state.set("last_result", message)
@@ -1105,6 +1111,45 @@ class SyncService:
     async def pause(self):
         async with self.lock:
             self.set_option("enabled", False)
+
+    async def set_availability_hidden(self, hidden, now=None):
+        async with self.lock:
+            options = self.options()
+            options["availability_hidden"] = bool(hidden)
+            if hidden:
+                local_now = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(self.settings.timezone))
+                opening = local_now.replace(hour=self.settings.open_hour, minute=0, second=0, microsecond=0)
+                if opening <= local_now:
+                    opening += timedelta(days=1)
+                options["availability_reopen_at"] = opening.astimezone(timezone.utc).isoformat()
+            else:
+                options.pop("availability_reopen_at", None)
+            self.state.set("options", options)
+            self.wake.set()
+            if hidden:
+                return await self.render(closed=True)
+            # Fetch before showing prices: cached offers may be stale or the
+            # suppliers may still be closed. The controller starts sync.
+            self.last_attempt = 0
+            return 0, 0
+
+    def _auto_enable_availability(self, now=None):
+        options = self.options()
+        if not options.get("availability_hidden") or not options.get("availability_reopen_at"):
+            return False
+        try:
+            opening = datetime.fromisoformat(options["availability_reopen_at"])
+            if opening.tzinfo is None:
+                return False
+        except (ValueError, TypeError):
+            return False
+        if (now or datetime.now(timezone.utc)) < opening:
+            return False
+        options["availability_hidden"] = False
+        options.pop("availability_reopen_at", None)
+        self.state.set("options", options)
+        self.last_attempt = 0
+        return True
 
     def _cached_source_statuses(self, cache):
         result = []
@@ -1148,6 +1193,7 @@ class SyncService:
             account_2 = "не подключён"
         lines = [
             "🟢 Синхронизация: включена" if self.enabled() else "⏸ Синхронизация: остановлена",
+            "📦 Наличие: скрыто вручную" if options.get("availability_hidden", False) else "📦 Наличие: показ включён",
             f"Telegram: аккаунт 1 — {account_1}; аккаунт 2 — {account_2}",
             f"Интервал: {options.get('poll_seconds', self.settings.poll_seconds) // 60} мин.",
             f"Базовая наценка (₽): {options.get('markup_base_rub', options.get('markup', str(self.settings.markup)))} + {options.get('markup_percent', str(self.settings.markup_percent))}%",
@@ -1189,6 +1235,7 @@ class SyncService:
         last_start_state = None
         while not self.stop_event.is_set() and not self.reload_requested:
             self.wake.clear()
+            self._auto_enable_availability()
             now = asyncio.get_running_loop().time()
             start_state = is_open(self.settings)
             interval = self.options().get("poll_seconds", self.settings.poll_seconds)

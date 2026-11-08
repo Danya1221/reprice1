@@ -62,9 +62,11 @@ class BotAPIController:
         print(f"🤖 Управляющий бот @{self.username} готов через Bot API — /start должен отвечать", flush=True)
 
     def menu(self):
+        hidden = getattr(self.service, "options", lambda: {})().get("availability_hidden", False)
         return {"inline_keyboard": [
             [{"text": "▶️ Запустить", "callback_data": "resume"}, {"text": "⏸ Остановить", "callback_data": "pause"}],
             [{"text": "🔄 Запросить сейчас", "callback_data": "sync"}, {"text": "📊 Статус", "callback_data": "status"}],
+            [{"text": "📦 Включить наличие" if hidden else "🚫 Скрыть наличие", "callback_data": "availability:toggle"}],
             [{"text": "👥 Telegram-аккаунты", "callback_data": "accounts"}],
             [{"text": "⏱ Интервал", "callback_data": "interval"}, {"text": "💰 Наценка", "callback_data": "markup"}],
             [{"text": "📦 Блоки", "callback_data": "blocks:0"}, {"text": "📱 SIM / eSIM", "callback_data": "sim"}],
@@ -362,6 +364,14 @@ class BotAPIController:
                 await self.send(chat_id, "Синхронизация остановлена", self.menu())
             elif data == "sync":
                 await self.request_sync(chat_id)
+            elif data == "availability:toggle":
+                hidden = not self.service.options().get("availability_hidden", False)
+                await self.service.set_availability_hidden(hidden)
+                if hidden:
+                    await self.send(chat_id, f"🚫 Наличие скрыто. Бот сам проверит поставщиков после {self.service.settings.open_hour:02d}:00 и включит показ, когда это возможно.", self.menu())
+                else:
+                    await self.send(chat_id, "📦 Показ включён. Сначала проверю свежие цены и статусы поставщиков.", self.menu())
+                    await self.request_sync(chat_id)
             elif data == "status":
                 await self.send(chat_id, self.service.status(), self.menu())
             elif data == "accounts":
