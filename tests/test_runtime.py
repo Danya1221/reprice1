@@ -379,6 +379,26 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🇮🇳", content)
         self.assertNotIn("🇹🇭", content)
 
+    async def test_samsung_preserves_russian_market_and_explicit_rst(self):
+        rows = parse_documents(["\n".join([
+            "Samsung S26 12/256 Black 🇦🇪 — 57 000",
+            "Samsung S26 12/256 Black 🇮🇳 — 58 000",
+            "Samsung S26 12/256 Black 🇷🇺 — 60 000",
+            "Samsung S26 12/256 Black РСТ 🇷🇺 — 61 000",
+            "Samsung S26 12/256 Black RST 🇷🇺 — 62 000",
+            "Samsung S26 12/256 Black 🇰🇿 — 59 000",
+            "Samsung S26 12/256 Black 🇭🇰 — 58 500",
+            "Samsung S26 12/256 Black 🇨🇳 — 59 500",
+        ])]).items
+        count, _ = await self.service.render(items=merge_lowest([rows]))
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 6)
+        for price in ("57 000", "58 500", "59 000", "59 500", "60 000", "61 000"):
+            self.assertIn(price, content)
+        self.assertNotIn("58 000", content)
+        self.assertNotIn("62 000", content)
+        self.assertEqual(content.count("РСТ"), 1)
+
     async def test_samsung_a18_4g_and_unlabelled_duplicates_keep_lowest(self):
         rows = parse_documents(["\n".join([
             "Galaxy A18 6/128 Black 🇷🇺 — 17 600",

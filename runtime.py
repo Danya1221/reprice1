@@ -199,20 +199,25 @@ def merge_lowest(sources, conflicted_books=None):
 
 
 def select_samsung_regions(items):
-    """Keep the cheapest offer and the cheapest HK, China and Kazakhstan offers.
+    """Keep the cheapest offer plus requested regions and explicitly marked RST.
 
     Compare only otherwise-identical descriptions; never strip condition,
     configuration, colour, SIM, or currency from the comparison key.
     """
-    protected = {"🇭🇰", "🇨🇳", "🇰🇿"}
+    protected = {"🇭🇰", "🇨🇳", "🇰🇿", "🇷🇺", "explicit-rst"}
+    rst_marker = re.compile(r"(?<!\w)(?:рст|pct|rst|ростест)(?!\w)", re.I)
     groups = OrderedDict()
     keep = set()
     for index, item in enumerate(items):
         if not item.block.startswith("Samsung") or item.accessory:
             keep.add(index)
             continue
-        key = merge_key(replace(item, title=FLAGS.sub("", item.title)))
-        groups.setdefault(key, []).append((index, item, set(FLAGS.findall(item.title))))
+        regions = set(FLAGS.findall(item.title))
+        if rst_marker.search(item.title):
+            regions.add("explicit-rst")
+        comparison_title = rst_marker.sub("", FLAGS.sub("", item.title))
+        key = merge_key(replace(item, title=comparison_title))
+        groups.setdefault(key, []).append((index, item, regions))
     for group in groups.values():
         # At equal price prefer a protected region, avoiding an extra row.
         chosen = min(group, key=lambda row: (row[1].price, not bool(row[2] & protected), row[0]))
