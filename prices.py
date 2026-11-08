@@ -851,6 +851,11 @@ def model_group_key(item):
     """A stable model family key used only for visual spacing in rendered price lists."""
     plain = FLAGS.sub("", normal_title(item.title)).strip()
 
+    if item.block == "MacBook / iMac":
+        group = macbook_configuration(plain)
+        if group:
+            return "macbook " + " ".join(group)
+
     model = iphone_model(plain)
     if model:
         return model.casefold()
@@ -903,6 +908,17 @@ def model_group_key(item):
     # If there is no reliable model signal, keep rows together rather than
     # inserting random gaps based on colour/accessory wording.
     return item.block.casefold()
+
+
+def macbook_configuration(title):
+    """Group clearly specified MacBooks by model, size, chip, RAM and storage."""
+    model = re.search(r"\b(?:macbook\s+)?(air|pro|neo)\s*(13|14|15|16)\b", title, re.I)
+    chip = re.search(r"\b(a18\s*pro|m\d+(?:\s*(?:pro|max))?)\b", title, re.I)
+    memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{3,4}|\d+\s*tb)(?:\s*gb)?\b", title, re.I)
+    if not (model and chip and memory):
+        return None
+    return (model.group(1).casefold(), model.group(2), clean(chip.group()).casefold(),
+            memory.group(1), re.sub(r"\s+", "", memory.group(2)).casefold())
 
 
 def display_title(item):
@@ -1071,6 +1087,9 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
         def full_sort(item):
             if block == "Dyson":
                 return (dyson_model_sort(item.title), item_sort(item))
+            if block == "MacBook / iMac":
+                group = macbook_configuration(FLAGS.sub("", item.title))
+                return (0 if group else 1, group or (), item_sort(item))
             if iphone_model(item.title):
                 return (SIM_ORDER.get(item.sim, 99), iphone_storage_rank(item), sorter(item))
             return (SIM_ORDER.get(item.sim, 99), 0, sorter(item))
@@ -1209,8 +1228,13 @@ def build_physical_message(sections, bundle=""):
         heading = " • ".join(brands)
 
     bodies = []
+    previous_title = None
     for section in sections:
-        bodies.append("<b>— " + html.escape(section["title"]) + " —</b>\n\n" + section["body"])
+        if section["title"] == previous_title:
+            bodies[-1] += "\n" + section["body"]
+        else:
+            bodies.append("<b>— " + html.escape(section["title"]) + " —</b>\n\n" + section["body"])
+        previous_title = section["title"]
     # Three newlines = a visible empty line between logical sections.
     return "<b>" + html.escape(heading) + "</b>\n\n" + "\n\n\n".join(bodies)
 

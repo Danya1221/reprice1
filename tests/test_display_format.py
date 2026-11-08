@@ -1,7 +1,7 @@
 import unittest
 
 from config import Settings
-from prices import display_title, parse_documents, render_blocks
+from prices import build_physical_message, display_title, parse_documents, render_blocks
 
 
 class DisplayFormatTests(unittest.TestCase):
@@ -69,6 +69,24 @@ iPhone 17 Pro Max 1TB Blue (1Sim+eSim) — 161300"""]).items
         self.assertIn("iPhone 17 Pro Max 1TB Orange SIM — 157 100", content)
         self.assertIn("iPhone 17 Pro Max 2TB Silver SIM — 173 100", content)
         self.assertNotIn("Apple iPhone", content)
+
+    def test_macbook_same_configuration_colours_are_adjacent(self):
+        items = parse_documents(["""Air 15 MC6J4 Silver (M4 24/512) — 138000
+Air 15 MC7C4 Sky Blue (M4 16/512) — 111500
+Air 15 MC6K4 Starlight (M4 24/512) — 129500
+Air 15 MC6L4 Midnight (M4 24/512) — 132500"""]).items
+        content = "\n".join(render_blocks(items, Settings()).values())
+        self.assertIn("MC6J4 Silver (M4 24/512) — 138 000</code>\n<code>", content)
+        self.assertIn("MC6K4 Starlight (M4 24/512) — 129 500</code>\n<code>", content)
+        self.assertIn("MC6L4 Midnight (M4 24/512) — 132 500", content)
+
+    def test_adjacent_macbook_chunks_share_one_heading_in_same_post(self):
+        content = build_physical_message([
+            {"title": "MacBook / iMac", "body": "<code>MacBook Air 1</code>", "part": 0},
+            {"title": "MacBook / iMac", "body": "<code>MacBook Air 2</code>", "part": 1},
+        ])
+        self.assertEqual(content.count("— MacBook / iMac —"), 1)
+        self.assertIn("<code>MacBook Air 1</code>\n<code>MacBook Air 2</code>", content)
 
 
 if __name__ == "__main__":
