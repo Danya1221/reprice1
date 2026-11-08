@@ -487,6 +487,26 @@ class SupplierReader:
                 self.last_read_stats["price_files"] += 1
                 documents.append(await self.document_text(message))
                 priorities.append(priority)
+        # A channel may publish an ordinary announcement after its closing
+        # notice. Compare the most recent explicit notice with the most recent
+        # price-bearing document instead of treating any old prices as open.
+        # Edited timestamps participate, just as they do for price rows.
+        if self.source.mode == "feed":
+            closed_at = None
+            price_at = None
+            for document, priority in zip(documents, priorities):
+                has_price = any(split_price(line, self.settings.currency) is not None
+                                for line in price_lines([document]))
+                if has_price:
+                    price_at = max(price_at, priority) if price_at is not None else priority
+                elif self.is_closed_text(document):
+                    closed_at = max(closed_at, priority) if closed_at is not None else priority
+            if closed_at is not None and (price_at is None or closed_at > price_at):
+                self.last_read_stats["price_rows"] = sum(
+                    split_price(line, self.settings.currency) is not None
+                    for line in price_lines(documents))
+                self.last_read_stats["parsed"] = 0
+                return parse_documents(["Продажи закрыты"], self.settings.currency)
         fallback_block = (
             "Dyson" if self.source.mode == "feed"
             and re.search(r"\bdyson\b", self.source.label, re.I) else ""

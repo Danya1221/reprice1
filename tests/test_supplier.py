@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -89,6 +90,33 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reader.last_read_stats["messages"], 3)
         self.assertEqual(self.reader.last_read_stats["ignored_media"], 2)
         self.assertEqual(self.reader.last_read_stats["price_files"], 0)
+
+    async def test_feed_close_notice_is_not_overridden_by_later_non_price_post(self):
+        self.reader.source = Source("@supplier", mode="feed")
+        self.client.rows = [message(1, "Dyson HS08 — 40000"),
+                            message(2, "Продажи закрыты"),
+                            message(3, "Спасибо всем, хорошего вечера!")]
+        result = await self.reader.fetch()
+        self.assertTrue(result.closed)
+        self.assertEqual(result.items, [])
+        self.client.rows.append(message(4, "Dyson HS08 — 41000"))
+        result = await self.reader.fetch()
+        self.assertFalse(result.closed)
+        self.assertEqual(result.items[0].price, 41000)
+
+    async def test_feed_price_edited_after_close_notice_is_a_newer_update(self):
+        self.reader.source = Source("@supplier", mode="feed")
+        price = message(1, "Dyson HS08 — 41000")
+        price.date = datetime(2026, 11, 8, 8, tzinfo=timezone.utc)
+        price.edit_date = datetime(2026, 11, 9, 8, tzinfo=timezone.utc)
+        closed = message(2, "Продажи закрыты")
+        closed.date = datetime(2026, 11, 8, 18, tzinfo=timezone.utc)
+        notice = message(3, "Спасибо всем!")
+        notice.date = datetime(2026, 11, 8, 19, tzinfo=timezone.utc)
+        self.client.rows = [price, closed, notice]
+        result = await self.reader.fetch()
+        self.assertFalse(result.closed)
+        self.assertEqual(result.items[0].price, 41000)
 
     async def test_diagnostics_count_duplicate_price_rows_and_skipped_captions(self):
         self.reader.source = Source("@supplier", mode="feed")
