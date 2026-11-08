@@ -25,11 +25,31 @@ class CatalogController(ChannelController):
 
     def known_blocks(self):
         """Every real physical Telegram message, including split overflow posts."""
+        entries = self.published_navigation()
+        if entries is not None:
+            return [entry["order_key"] for entry in entries]
         catalog = self.service.cached_items(include_closed=True)
         options = self.service.options()
         selected = select_items(catalog, self.service.settings, options)
         pages = render_blocks(selected, self.service.settings, options)
         return physical_page_labels(pages)
+
+    def published_navigation(self):
+        navigation = self.service.state.get("published_navigation")
+        published = self.service.state.get("published", {}) or {}
+        if not isinstance(navigation, dict) or navigation.get("binding") != published.get("binding"):
+            return None
+        entries = navigation.get("entries")
+        manifest = published.get("messages", {})
+        if not isinstance(entries, list):
+            return None
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("order_key") or not entry.get("label"):
+                return None
+            page = manifest.get(entry.get("page_key"), {})
+            if not page.get("id") or int(page["id"]) != entry.get("message_id"):
+                return None
+        return entries
 
     async def _edit_or_send(self, chat_id, message_id, text, reply_markup=None):
         """Edit the control message in place; only /order without a callback sends one."""
@@ -96,9 +116,11 @@ class CatalogController(ChannelController):
 
         rows = []
         buttons = []
+        entries = self.published_navigation()
+        labels = {entry["order_key"]: entry["label"] for entry in entries or []}
         for index, block in enumerate(order):
             buttons.append({
-                "text": ("✅ " if block == selected else "") + f"{index + 1}. {block}",
+                "text": ("✅ " if block == selected else "") + f"{index + 1}. {labels.get(block, block)}",
                 "callback_data": f"order:select:{block_id(block)}",
             })
         for start in range(0, len(buttons), 2):
@@ -109,7 +131,7 @@ class CatalogController(ChannelController):
 
         if order:
             if selected:
-                hint = f"\n\nВыбран: {selected}\nОтправь одним сообщением номер позиции от 1 до {len(order)}."
+                hint = f"\n\nВыбран: {labels.get(selected, selected)}\nОтправь одним сообщением номер позиции от 1 до {len(order)}."
             else:
                 hint = "\n\nНажми на нужное сообщение, затем просто отправь номер места."
             text = (

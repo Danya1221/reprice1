@@ -212,6 +212,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
     async def _update_catalog(self, pages, records):
         manifest = self.state.get("published", {}).get("messages", {})
         buttons = []
+        navigation = []
         contents = list(pages.values())
         labels = physical_page_labels(pages)
 
@@ -246,6 +247,8 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             if len(label) > 64:
                 label = label[:61].rstrip() + "…"
             buttons.append({"text": label, "url": link})
+            navigation.append({"order_key": title, "label": label, "page_key": key,
+                               "message_id": int(manifest[key]["id"])})
 
         # Preserve the exact physical post order. The catalog is navigation to
         # those posts, so it must not reorder or rename them independently.
@@ -279,6 +282,9 @@ class CatalogPublisher(PinnedBotAPIPublisher):
                     raise
             records.pop(index)
             self.save_catalog(records)
+        # The order editor must use the exact successfully published buttons,
+        # not a separate render of a potentially different cached stock set.
+        self.state.set("published_navigation", {"binding": self.binding(), "entries": navigation})
         return changes
 
     async def _repair_first_message_layout_once(self):

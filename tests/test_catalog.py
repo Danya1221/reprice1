@@ -61,6 +61,27 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([b["text"] for b in buttons], expected)
         self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{manifest[next(iter(pages))]['id']}")
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
+    async def test_order_editor_shows_published_buttons_even_when_cache_differs(self):
+        pages = {
+            "audio": "<b>Apple</b>\n\n<b>— AirPods —</b>\n\n<code>AirPods 4 — 10000</code>",
+            "tablet": "<b>Apple</b>\n\n<b>— iPad —</b>\n\n<code>iPad Air — 60000</code>",
+            "dyson": "<b>Dyson</b>\n\n<code>Dyson HS08 — 40000</code>",
+        }
+        await self.publisher.publish(pages)
+        public = [button["text"] for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        service = SimpleNamespace(state=self.state, settings=Settings(), options=lambda: {},
+                                  cached_items=lambda **kw: parse_documents(["Samsung S26 12/256 Black — 65000"]).items)
+        controller = CatalogController("TOKEN", service, [42])
+        controller.send = AsyncMock()
+        await controller.show_order(42, 42)
+        rows = controller.send.await_args.args[2]["inline_keyboard"]
+        controls = [button for row in rows for button in row if button["callback_data"].startswith("order:select:")]
+        self.assertEqual([button["text"].split(". ", 1)[1] for button in controls], public)
+        self.assertEqual(controller.known_blocks(), ["Apple", "Apple · 2", "Dyson"])
+        controller.order_selected[42] = "Apple · 2"
+        order, _ = controller._move_selected_to(42, 1)
+        self.assertEqual(order[0], "Apple · 2")
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
