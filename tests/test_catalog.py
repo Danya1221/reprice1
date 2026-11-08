@@ -87,7 +87,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], expected)
 
-    async def test_new_price_page_updates_existing_catalog_without_resending_it(self):
+    async def test_new_price_page_moves_catalog_to_end_without_notification(self):
         service = SyncService(None, Settings(send_delay=0), self.state)
         service.publisher = self.publisher
         service.set_option("physical_order", ["Dyson", "Apple", "iPhone 17"])
@@ -96,13 +96,15 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         items = self.items + parse_documents(["iPhone 18 256 Blue — 150000"]).items
         await service.render(items=items)
-        self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
+        new_catalog_id = self.state.get("catalog")["messages"][0]["id"]
+        self.assertNotEqual(new_catalog_id, catalog_id)
+        self.assertGreater(new_catalog_id, max(entry["id"] for entry in self.state.get("published")["messages"].values()))
         sends = [p for method, p in self.publisher.calls if method == "sendMessage"]
-        self.assertEqual(len(sends), 1)
-        self.assertTrue(sends[0].get("disable_notification"))
-        self.assertNotIn("КАТАЛОГ", sends[0]["text"])
-        self.assertFalse(any(method == "deleteMessage" and p.get("message_id") == catalog_id
-                             for method, p in self.publisher.calls))
+        self.assertEqual(len(sends), 2)
+        self.assertTrue(all(p.get("disable_notification") for p in sends))
+        self.assertTrue(any("КАТАЛОГ" in p["text"] for p in sends))
+        self.assertTrue(any(method == "deleteMessage" and p.get("message_id") == catalog_id
+                            for method, p in self.publisher.calls))
         self.publisher.calls.clear()
         await service.render(items=items)
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))

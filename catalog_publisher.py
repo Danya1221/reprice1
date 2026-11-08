@@ -167,7 +167,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
                 elif "message is not modified" not in error:
                     raise
         if not record.get("id"):
-            message = await self.api("sendMessage", **payload)
+            message = await self.api("sendMessage", disable_notification=True, **payload)
             record = {"id": int(message["message_id"])}
             changed = 1
         record.update({"hash": content_hash, "text": text})
@@ -181,17 +181,18 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         return changed
 
     async def _prepare_catalog(self, count):
-        """Reuse the catalog when new price posts appear after it."""
+        """Keep navigation after all current price posts."""
         records = self.catalog_records()
         stored = self.state.get("published", {}) or {}
         manifest = stored.get("messages", {}) if stored.get("binding") == self.binding() else {}
         price_ids = [int(entry["id"]) for entry in manifest.values() if entry.get("id")]
-        # Only repair the obsolete pinned catalog or an actual collision with a
-        # price post. A newer price message is not a reason to delete and resend
-        # the catalog: update its links in place instead.
+        catalog_ids = [int(record["id"]) for record in records if record.get("id")]
+        # Telegram cannot move a message. Recreate the catalog only when a new
+        # price post appears after it, or its old record needs repair.
         must_rebuild = bool(records) and (
             any(record.get("pinned") for record in records)
             or any(int(record["id"]) in price_ids for record in records if record.get("id"))
+            or bool(price_ids and catalog_ids and min(catalog_ids) <= max(price_ids))
         )
         if must_rebuild:
             for record in list(records):
