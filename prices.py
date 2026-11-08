@@ -847,9 +847,20 @@ def samsung_a_s25_sort(item):
     return 9, 0, 0, plain.casefold()
 
 
+def samsung_a_model(title):
+    plain = FLAGS.sub("", clean(title))
+    match = re.match(r"^(?:samsung\s+)?(?:galaxy\s+)?a\s*(\d{2,3})([a-z]?)\b", plain, re.I)
+    return (int(match.group(1)), match.group(2).casefold()) if match else None
+
+
 def model_group_key(item):
     """A stable model family key used only for visual spacing in rendered price lists."""
     plain = FLAGS.sub("", normal_title(item.title)).strip()
+
+    if item.block.startswith("Samsung"):
+        samsung_model = samsung_a_model(plain)
+        if samsung_model:
+            return f"samsung a{samsung_model[0]}{samsung_model[1]}"
 
     if item.block == "MacBook / iMac":
         group = macbook_configuration(plain)
@@ -1090,6 +1101,12 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
             if block == "MacBook / iMac":
                 group = macbook_configuration(FLAGS.sub("", item.title))
                 return (0 if group else 1, group or (), item_sort(item))
+            if block == "Samsung":
+                model = samsung_a_model(item.title)
+                if model:
+                    memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", item.title)
+                    return (0, model, tuple(map(int, memory.groups())) if memory else (999, 999), item_sort(item))
+                return (1, (0, ""), (0, 0), item_sort(item))
             if iphone_model(item.title):
                 return (SIM_ORDER.get(item.sim, 99), iphone_storage_rank(item), sorter(item))
             return (SIM_ORDER.get(item.sim, 99), 0, sorter(item))
@@ -1165,7 +1182,29 @@ def section_chunks(title, lines, limit=3200):
     chunk = []
     size = 0
     dyson_heading = None
-    for line in lines:
+    previous_samsung_model = None
+    for index, line in enumerate(lines):
+        # Keep an entire Samsung A-model together when it fits a message.
+        if title == "Samsung" and line.startswith("<code>"):
+            current = samsung_a_model(html.unescape(re.sub(r"^<code>", "", line)))
+            if current and current != previous_samsung_model:
+                end = index + 1
+                while end < len(lines):
+                    next_line = lines[end]
+                    if next_line.startswith("<code>"):
+                        next_model = samsung_a_model(html.unescape(re.sub(r"^<code>", "", next_line)))
+                        if next_model != current:
+                            break
+                    elif next_line.startswith("<b>"):
+                        break
+                    end += 1
+                group_size = sum(units(value) + 1 for value in lines[index:end])
+                if chunk and group_size <= limit and size + group_size > limit:
+                    while chunk and chunk[-1] == "":
+                        chunk.pop()
+                    result.append({"title": title, "body": "\n".join(chunk), "part": len(result)})
+                    chunk, size = [], 0
+            previous_samsung_model = current
         if title == "Dyson" and line.startswith("<b>— "):
             dyson_heading = line
         line_size = units(line) + 1
@@ -1500,7 +1539,7 @@ def render_blocks(items, settings, overrides=None, closed=False):
     logical_sections = []
     for block in names:
         lines = render_block_lines(block, groups[block], settings, overrides, closed=closed)
-        chunk_limit = 1800 if physical_section_family(block) == "apple" else 3200
+        chunk_limit = 1800 if physical_section_family(block) == "apple" else (3700 if block == "Samsung" else 3200)
         logical_sections.extend(section_chunks(block, lines, limit=chunk_limit))
 
     built = []

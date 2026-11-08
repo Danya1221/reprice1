@@ -379,6 +379,24 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🇮🇳", content)
         self.assertNotIn("🇹🇭", content)
 
+    async def test_samsung_a18_4g_and_unlabelled_duplicates_keep_lowest(self):
+        rows = parse_documents(["\n".join([
+            "Galaxy A18 6/128 Black 🇷🇺 — 17 600",
+            "Samsung A18 4G 6/128GB Black 🇷🇺 — 17 800",
+            "Samsung A18 5G 6/128GB Black 🇷🇺 — 21 000",
+            "Galaxy A08 6/128 Синий 🇷🇺 — 15 900",
+            "Samsung A08 6/128GB Blue 🇷🇺 — 16 000",
+            "Samsung A18 4G 6/128GB Black Уценка 🇷🇺 — 15 000",
+            "Samsung A18 4G 6/128GB Black 🇰🇿 — 18 000",
+        ])]).items
+        count, _ = await self.service.render(items=merge_lowest([rows]))
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 5)
+        self.assertNotIn("17 800", content)
+        self.assertNotIn("16 000", content)
+        for price in ("17 600", "21 000", "15 900", "15 000", "18 000"):
+            self.assertIn(price, content)
+
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
         rows = parse_documents(["\n".join([
             "Samsung A57 5G 12/256GB A.Icyblue 🇦🇪 — 40 300",

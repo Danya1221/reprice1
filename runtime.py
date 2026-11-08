@@ -128,6 +128,16 @@ def merge_key(item):
         bare = FLAGS.sub("", title).strip()
         bare = re.sub(r"^\s*(?:samsung\s+galaxy|galaxy)\b", "Samsung", bare, flags=re.I)
         bare = re.sub(r"\b(S\d+)\s*plus\b", r"\1+", bare, flags=re.I)
+        # The currently listed Galaxy A18 is the LTE model; keep an explicit
+        # 5G variant distinct if a supplier provides one.
+        if re.search(r"\bSamsung\s+A18\b", bare, re.I):
+            bare = re.sub(r"\b4\s*g\b|\blte\b", " ", bare, flags=re.I)
+        for pattern, colour in ((r"\bсини(?:й|я|е)\b", "blue"),
+                                (r"\bч[её]рн(?:ый|ая|ое)\b", "black"),
+                                (r"\bзел[её]н(?:ый|ая|ое)\b", "green"),
+                                (r"\bсеребро\b|\bсеребрист(?:ый|ая|ое)\b", "silver"),
+                                (r"\bграфит(?:овый|овая|овое)?\b", "graphite")):
+            bare = re.sub(pattern, colour, bare, flags=re.I)
         title = bare + " " + flags
     if item.block == "Realme" and not item.accessory:
         for pattern, color in ((r"\bбежев(?:ый|ая|ое)\b", "beige"),

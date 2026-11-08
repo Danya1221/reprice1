@@ -56,6 +56,21 @@ class PriceTests(unittest.TestCase):
         selected = select_items(items, Settings())
         self.assertEqual([item.title for item in selected], ["Sony WH-1000XM6 Black"])
 
+    def test_samsung_a18_variants_are_adjacent_and_kept_in_one_post(self):
+        rows = [f"Galaxy A07 4/128 Color{i:03d} 🇰🇿 — 12000" for i in range(50)]
+        rows += ["Galaxy A18 6/128 Black 🇷🇺 — 17600",
+                 "Samsung A18 4G 6/128GB Silver 🇰🇿 — 17800",
+                 "Samsung A18 4G 8/256GB Blue 🇷🇺 — 23400",
+                 "Galaxy A18 8/256 Gray 🇷🇺 — 23100",
+                 "Samsung Galaxy Watch 8 40mm Silver 🇮🇳 — 16800"]
+        pages = list(render_blocks(self.parse("\n".join(rows)).items, Settings()).values())
+        a18_pages = [page for page in pages if re.search(r"\bA18\b", page)]
+        self.assertEqual(len(a18_pages), 1)
+        self.assertEqual(len(re.findall(r"\bA18\b", a18_pages[0])), 4)
+        matches = re.findall(r"<code>([^<]+)</code>", a18_pages[0])
+        indexes = [i for i, row in enumerate(matches) if re.search(r"\bA18\b", row)]
+        self.assertEqual(indexes, list(range(indexes[0], indexes[0] + 4)))
+
     def test_dyson_text_price_after_camera_and_delivery_emojis(self):
         result = self.parse("""🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
 🇬🇧 Gen5 SV23 Detect Absolute Purple 62000 📷
