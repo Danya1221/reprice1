@@ -130,6 +130,26 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(matching), 1)
             self.assertEqual(matching[0].price, Decimal(low))
 
+    async def test_iphone_air_regions_with_same_variant_keep_lowest_offer(self):
+        rows = parse_documents(["\n".join([
+            "Apple iPhone 17 Air 256GB eSIM White — 77 200",
+            "iPhone 17 Air 256 White 🇨🇳 — 82 300",
+            "iPhone 17 Air 256 Gold 🇨🇳 — 81 200",
+            "iPhone 17 Air 256 Gold (eSim) — 74 300",
+            "iPhone 17 Air 256 Gold (eSim) ASIS — 65 000",
+            "iPhone 17 Air 512 Gold (eSim) — 79 000",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(sorted(item.price for item in merged),
+                         list(map(Decimal, (65000, 74300, 77200, 79000))))
+        count, _ = await self.service.render(items=merged)
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 4)
+        self.assertNotIn("82 300", content)
+        self.assertNotIn("81 200", content)
+        self.assertIn("74 300", content)
+        self.assertIn("77 200", content)
+
     async def test_user_examples_publish_one_cheapest_row_and_no_lego(self):
         rows = parse_documents(["\n".join([
             "Apple iPhone 17 256GB SIM+eSIM Black — 75 200",

@@ -119,6 +119,10 @@ def merge_key(item):
         return neo_key
     if iphone_model(title) and not item.accessory:
         title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
+        # iPhone Air uses eSIM in every market. Public output hides flags, so
+        # identical Air offers across markets must share one lowest-price row.
+        if iphone_model(title).casefold() == "iphone air" and item.sim == "esim":
+            title = FLAGS.sub("", title)
     if item.block.startswith("Samsung") and not item.accessory:
         flags = "".join(FLAGS.findall(title))
         bare = FLAGS.sub("", title).strip()

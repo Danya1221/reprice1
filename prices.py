@@ -911,6 +911,7 @@ def display_title(item):
     title = normal_title(ORIGINAL_PACKAGING.sub("", item.title))
     if iphone_model(title) and not item.accessory:
         title = FLAGS.sub("", title)
+        title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
         # The supplier may place the SIM marker anywhere in the name.
         sim_marker = (r"(?<!\w)(?:(?:1\s*)?(?:nano\s*)?sim\s*(?:\+|/|&|and|и)\s*e[\s-]*sim|"
                       r"e[\s-]*sim\s*(?:\+|/|&|and|и)\s*(?:1\s*)?(?:nano\s*)?sim|"

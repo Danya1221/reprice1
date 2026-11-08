@@ -40,7 +40,7 @@ iPhone 17 Pro Max 1TB Blue 🇯🇵 — 147600
 Dyson HS08 🇪🇺 — 40000"""]).items
         titles = [display_title(item) for item in items]
         self.assertEqual(titles[0], "iPhone 17 256 Black SIM")
-        self.assertEqual(titles[1], "Apple iPhone 17 256GB Black SIM")
+        self.assertEqual(titles[1], "iPhone 17 256GB Black SIM")
         self.assertEqual(titles[2], "iPhone 17 Pro 512 Blue ASIS eSIM")
         self.assertEqual(titles[3], "iPhone 17 Pro Max 1TB Blue eSIM")
         self.assertIn("🇪🇺", titles[4])
@@ -60,6 +60,15 @@ iPhone 17 Air 512 Black (eSim) — 87500"""]).items
         self.assertIn("512GB Blue eSIM — 79 800</code>\n<code>iPhone 17 Air 512 Black", content)
         self.assertIn("512 Black eSIM — 87 500</code>\n\n<code>iPhone 17 Air 1TB", content)
         self.assertNotIn("· eSIM", content)
+
+    def test_apple_prefix_is_removed_from_iphone_rows(self):
+        items = parse_documents(["""Apple iPhone 17 Pro Max 1TB SIM+eSIM Orange — 157100
+Apple iPhone 17 Pro Max 2TB SIM+eSIM Silver — 173100
+iPhone 17 Pro Max 1TB Blue (1Sim+eSim) — 161300"""]).items
+        content = "\n".join(render_blocks(items, Settings()).values())
+        self.assertIn("iPhone 17 Pro Max 1TB Orange SIM — 157 100", content)
+        self.assertIn("iPhone 17 Pro Max 2TB Silver SIM — 173 100", content)
+        self.assertNotIn("Apple iPhone", content)
 
 
 if __name__ == "__main__":
