@@ -120,13 +120,9 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         self.layout_lock = asyncio.Lock()
 
     def arrange_manifest(self, pages, manifest):
-        # Telegram cannot move posts. Reuse their chronological slots, then
-        # update the catalog from the final key -> message ID mapping.
-        slots = sorted(manifest.values(), key=lambda entry: int(entry["id"]))
-        arranged = {key: entry for key, entry in zip(pages, slots)}
-        for entry in slots[len(pages):]:
-            arranged["obsolete:" + str(entry["id"])] = entry
-        return arranged
+        # Keep each existing post bound to its page. Catalog buttons can be
+        # reordered independently without rewriting unrelated messages.
+        return manifest
 
     def catalog_records(self):
         stored = self.state.get("catalog", {}) or {}

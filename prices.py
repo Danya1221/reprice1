@@ -1431,7 +1431,28 @@ def merge_physical_order(previous, current):
             matched[max(candidates)[-1]] = name
         else:
             new.append(name)
-    return new + [matched.get(index, name) for index, name in enumerate(previous)]
+    ordered = [matched.get(index, name) for index, name in enumerate(previous)]
+
+    def family(name):
+        base = re.sub(r"\s+·\s+\d+$", "", name).strip()
+        bundle = iphone_bundle_key(base)
+        if bundle:
+            return bundle
+        lower = base.casefold()
+        if lower.startswith("samsung"):
+            return "samsung"
+        if lower.startswith("apple"):
+            return "apple"
+        return lower
+
+    unrelated = []
+    for name in new:
+        relatives = [i for i, existing in enumerate(ordered) if family(existing) == family(name)]
+        if relatives:
+            ordered.insert(relatives[-1] + 1, name)
+        else:
+            unrelated.append(name)
+    return unrelated + ordered
 
 
 def rendered_page_title(content):

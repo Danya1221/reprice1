@@ -289,6 +289,7 @@ class BotAPIPublisher:
             text=content,
             parse_mode="HTML",
             disable_web_page_preview=True,
+            disable_notification=True,
         )
 
     async def _edit(self, message_id, content):
