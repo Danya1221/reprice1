@@ -41,6 +41,7 @@ class BotAPIController:
         self.block_choices = {}
         self.login_flows = {}
         self.markup_flows = {}
+        self.price_source_flows = set()
         self.closed = False
 
     async def api(self, method, **payload):
@@ -66,6 +67,7 @@ class BotAPIController:
         return {"inline_keyboard": [
             [{"text": "▶️ Запустить", "callback_data": "resume"}, {"text": "⏸ Остановить", "callback_data": "pause"}],
             [{"text": "🔄 Запросить сейчас", "callback_data": "sync"}, {"text": "📊 Статус", "callback_data": "status"}],
+            [{"text": "🔎 Откуда цена", "callback_data": "price_source"}],
             [{"text": "📦 Включить наличие" if hidden else "🚫 Скрыть наличие", "callback_data": "availability:toggle"}],
             [{"text": "👥 Telegram-аккаунты", "callback_data": "accounts"}],
             [{"text": "⏱ Интервал", "callback_data": "interval"}, {"text": "💰 Наценка", "callback_data": "markup"}],
@@ -367,6 +369,11 @@ class BotAPIController:
                 await self.send(chat_id, "Синхронизация остановлена", self.menu())
             elif data == "sync":
                 await self.request_sync(chat_id)
+            elif data == "price_source":
+                self.price_source_flows.add(user_id)
+                self.markup_flows.pop(user_id, None)
+                getattr(self, "order_selected", {}).pop(user_id, None)
+                await self.send(chat_id, "🔎 Пришли название товара или его часть, например: iPhone 18 Pro 256 Black. /cancel — отмена.")
             elif data == "availability:toggle":
                 hidden = not self.service.options().get("availability_hidden", False)
                 await self.service.set_availability_hidden(hidden)
@@ -466,6 +473,38 @@ class BotAPIController:
         if recipient and self.username and recipient != self.username:
             return
 
+        if user_id in self.price_source_flows and not command.startswith("/"):
+            if not self.allowed(user_id, chat_type):
+                await self.explain_access(chat_id, user_id, chat_type)
+                return
+            snapshot = self.service.state.get("published_price_sources")
+            if self.service.options().get("availability_hidden") or self.service.state.get("published_items") == 0:
+                await self.send(chat_id, "Сейчас наличие скрыто. Источник цены можно посмотреть после публикации свежего прайса.")
+                return
+            if not snapshot:
+                await self.send(chat_id, "Данные об источниках появятся после следующего успешного обновления прайса.")
+                return
+            query = re.split(r"\s+[—–]\s+", text, maxsplit=1)[0].casefold()
+            tokens = re.findall(r"[\w]+", query)
+            rows = [row for row in snapshot.get("rows", []) if tokens and all(
+                token in row.get("title", "").casefold() for token in tokens)]
+            if not rows:
+                await self.send(chat_id, "В последнем опубликованном прайсе не нашёл. Попробуй часть названия.")
+                return
+            parts = [f"🔎 Последняя публикация: {snapshot.get('time', 'неизвестно')} (UTC)"]
+            for row in rows[:8]:
+                sources = row.get("sources", [])
+                detail = []
+                for source in sources[:5]:
+                    warning = " · ошибка последней проверки" if source.get("error") else ""
+                    detail.append(f"  {source['source']}{warning}\n  У поставщика: {source['title']}\n  Проверено: {source.get('checked') or 'неизвестно'}")
+                parts.append(f"{row['title']}\nЗакупка: {row['purchase']} · в прайсе: {row['public']}\n" +
+                             ("\n".join(detail) if detail else "Источник не подтверждён в сохранённых данных."))
+            if len(rows) > 8:
+                parts.append(f"Показано 8 из {len(rows)}. Уточни модель, память или цвет.")
+            await self.send(chat_id, "\n\n".join(parts))
+            return
+
         if user_id in self.login_flows and not command.startswith("/"):
             if not self.allowed(user_id, chat_type):
                 await self.explain_access(chat_id, user_id, chat_type)
@@ -508,7 +547,10 @@ class BotAPIController:
             elif command == "/accounts":
                 await self.accounts_menu(chat_id)
             elif command == "/cancel":
-                if user_id in self.markup_flows:
+                if user_id in self.price_source_flows:
+                    self.price_source_flows.discard(user_id)
+                    await self.send(chat_id, "Поиск источника отменён", self.menu())
+                elif user_id in self.markup_flows:
                     self.markup_flows.pop(user_id, None)
                     await self.send(chat_id, "Настройка наценки отменена", self.menu())
                 elif user_id in self.login_flows:

@@ -12,6 +12,7 @@ from telethon.errors import FloodWaitError
 
 from config import Settings, Source
 from control_catalog import CatalogController
+from control_botapi import BotAPIController
 from prices import Item, ParseResult, parse_documents, physical_page_labels
 from runtime import SyncService, is_open, LoginRequired, merge_lowest
 from state import StateStore
@@ -54,6 +55,24 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("1 позиций", result)
         pages = self.service.publisher.publish.call_args.args[0]
         self.assertIn("60 000", next(iter(pages.values())))
+
+    async def test_published_price_source_and_search_use_successful_publication(self):
+        with patch("runtime.is_open", return_value=True):
+            await self.service.sync()
+        snapshot = self.state.get("published_price_sources")
+        row = next(row for row in snapshot["rows"] if "iPhone 17" in row["title"])
+        self.assertIn("60 000", row["public"])
+        self.assertEqual(row["sources"][0]["source"], self.settings.sources[0].label + " · аккаунт 1")
+        controller = BotAPIController("token", self.service, [42])
+        controller.send = AsyncMock()
+        controller.answer_callback = AsyncMock()
+        await controller.handle_callback({"id": "cb", "from": {"id": 42}, "data": "price_source",
+                                          "message": {"chat": {"id": 42, "type": "private"}}})
+        await controller.handle_message({"from": {"id": 42}, "chat": {"id": 42, "type": "private"},
+                                         "text": "iPhone 17 256 Black"})
+        response = controller.send.await_args.args[1]
+        self.assertIn("60 000", response)
+        self.assertIn(self.settings.sources[0].label, response)
 
     async def test_manual_hide_survives_sync_restart_and_restore_requires_fresh_sync(self):
         await self.service.set_availability_hidden(True)

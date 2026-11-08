@@ -15,6 +15,7 @@ from config import Source
 from prices import (
     FLAGS, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
+    display_title, marked_price, price_text,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -852,6 +853,37 @@ class SyncService:
         groups.append(self.supernova_items())
         return merge_lowest(groups)
 
+    def price_sources_snapshot(self, selected, request_keys, options, fresh_only=False):
+        """Record evidence for the exact prices about to be published."""
+        offers = []
+        cache = self.state.get("sources", {})
+        for slot in (1, 2):
+            if slot == 2 and not self.account_configured(2):
+                continue
+            for source in self._slot_sources(slot):
+                if not self.source_visible(source, slot):
+                    continue
+                value = cache.get(self.source_cache_key(source, slot), {})
+                if value.get("status") != "open" or (fresh_only and value.get("error")):
+                    continue
+                for item in self.source_items(source, [Item.from_dict(row) for row in value.get("items", [])]):
+                    offers.append((resolve_iphone_sim(item), f"{source.label} · аккаунт {slot}", value.get("last_success"), value.get("error")))
+        snapshot = self.state.get("supernova_snapshot", {})
+        for item in self.supernova_items():
+            offers.append((resolve_iphone_sim(item), f"Supernova · аккаунт {snapshot.get('slot', '?')}", snapshot.get("file_time"), None))
+        conflicts = conflicting_galaxy_book_keys([item for item, *_ in offers] + list(selected))
+        index = {}
+        for item, label, checked, error in offers:
+            index.setdefault((comparison_key(item, conflicts), item.price), []).append({
+                "source": label, "title": item.title, "checked": checked, "error": error})
+        rows = []
+        for item in selected:
+            requested = item.key in request_keys
+            rows.append({"title": display_title(item), "purchase": price_text(item.price, item.currency),
+                         "public": "По запросу" if requested else price_text(marked_price(item, self.settings, options), item.currency),
+                         "sources": [] if requested else index.get((comparison_key(item, conflicts), item.price), [])})
+        return rows
+
     async def render(self, closed=False, items=None):
         options = self.options()
         if options.get("availability_hidden", False):
@@ -907,6 +939,7 @@ class SyncService:
         # Keep missing/disabled pages in the order so they return to their slots.
         if not closed:
             order = merge_physical_order(options.get("physical_order", []), physical_page_labels(pages))
+            price_sources = self.price_sources_snapshot(selected, render_options["_request_only_keys"], options, fresh_only=items is not None)
         changes = await self.publisher.publish(pages)
         if not closed:
             latest_options = self.options()
@@ -914,7 +947,9 @@ class SyncService:
             if latest_options.get("physical_order") == original_order and order != latest_options.get("physical_order"):
                 latest_options["physical_order"] = order
                 self.state.set("options", latest_options)
-        self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(selected)})
+        update = {"last_publish": timestamp(), "published_items": 0 if closed else len(selected)}
+        update["published_price_sources"] = {"time": timestamp(), "rows": [] if closed else price_sources}
+        self.state.update(update)
         return len(selected), changes
 
     @staticmethod
