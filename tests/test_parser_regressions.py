@@ -18,7 +18,7 @@ class ParserRegressionTests(unittest.TestCase):
 
     def test_redmi_note_and_oura_do_not_inherit_dji(self):
         items = self.parse("DJI\nOsmo Pocket 3 — 38000\nNote 17 8/256 Black — 21900\nOura Ring 4 Silver — 35000").items
-        self.assertEqual([i.block for i in items], ["DJI / Insta360", "Xiaomi", "Oura Ring"])
+        self.assertEqual([i.block for i in items], ["DJI / Insta360", "Redmi", "Oura Ring"])
         self.assertNotIn("DJI Note", items[1].title)
         self.assertNotIn("DJI Oura", items[2].title)
 

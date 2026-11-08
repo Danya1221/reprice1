@@ -382,12 +382,34 @@ RODE Wireless Pro 🇷🇺 — 23300
 DJI Osmo Pocket 4 Creator Combo — 44800
 Insta360 X6 Standard Bundle — 51100""").items
         self.assertEqual([item.block for item in items], [
-            "Xiaomi", "Xiaomi", "Rode", "Rode", "DJI / Insta360", "DJI / Insta360"
+            "Redmi", "Redmi", "Rode", "Rode", "DJI / Insta360", "DJI / Insta360"
         ])
         self.assertTrue(items[0].title.startswith("Note 14S"))
         self.assertTrue(items[2].title.startswith("RODE Wireless"))
         self.assertNotIn("DJI / Insta360 Note", items[0].title)
         self.assertNotIn("DJI / Insta360 RODE", items[2].title)
+
+    def test_poco_redmi_and_xiaomi_are_separate_price_sections(self):
+        items = self.parse("""Poco F8 Pro 12/512GB Black 🇪🇺 — 43300
+Xiaomi 15 12/256 White — 48000
+Redmi 17 4/128GB Blue 🇪🇺 — 14000
+POCO X8s 12/512 Blue 🇪🇺 — 41500
+Note 14S 8/256 Aurora Purple 🇪🇺 — 18400
+Xiaomi 15 Ultra 16/512 Black — 85000""").items
+        self.assertEqual([item.block for item in items], ["POCO", "Xiaomi", "Redmi", "POCO", "Redmi", "Xiaomi"])
+        pages = list(render_blocks(items, Settings()).values())
+        self.assertEqual(len(pages), 1)
+        content = pages[0]
+        self.assertIn("<b>— Xiaomi —</b>", content)
+        self.assertIn("<b>— Redmi —</b>", content)
+        self.assertIn("<b>— POCO —</b>", content)
+        self.assertLess(content.index("<b>— Xiaomi —</b>"), content.index("<b>— Redmi —</b>"))
+        self.assertLess(content.index("<b>— Redmi —</b>"), content.index("<b>— POCO —</b>"))
+        self.assertIn("F8 Pro", content)
+        self.assertIn("Xiaomi 15 Ultra", content)
+        self.assertEqual(len(select_items(items, Settings(), {"include_blocks": ["Xiaomi"]})), 6)
+        cached = Item.from_dict({"title": "Poco X8s 12/512 Blue 🇪🇺", "price": "41500", "currency": "RUB", "block": "Xiaomi", "sim": "unknown", "accessory": False})
+        self.assertEqual(cached.block, "POCO")
 
     def test_samsung_series_are_read_and_split_into_catalog_blocks(self):
         items = self.parse("""Samsung

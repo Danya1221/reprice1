@@ -418,6 +418,11 @@ def apple_accessory_block(title):
 
 
 def product_block(title):
+    plain = FLAGS.sub("", clean(title))
+    if re.search(r"\bpoco\b|^\s*x8\s+pro\s+max\b", plain, re.I):
+        return "POCO"
+    if re.search(r"\bredmi\b|^\s*note\s+\d{1,2}[a-z]*\b", plain, re.I):
+        return "Redmi"
     watch = apple_watch_block(title)
     if watch:
         return watch
@@ -442,7 +447,7 @@ def product_block(title):
 def ordered_blocks(blocks, preferred=()):
     defaults = ["iPhone", "AirPods", "Apple Accessories", "Mac mini", "Apple TV", "AirTag",
                 "Apple Watch", "iPad", "MacBook / iMac", "Mac Studio", "Apple", "Ray-Ban Meta", "Samsung", "Honor", "Realme", "Huawei", "Tecno",
-                "Xiaomi", "Google", "COROS", "Rode", "Dyson", "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
+                "Xiaomi", "Redmi", "POCO", "Google", "COROS", "Rode", "Dyson", "Oura Ring", "CPO", "ASIS", "Аксессуары", "Товары"]
     def order_key(name):
         if name in preferred:
             return (-1, preferred.index(name), (), "")
@@ -677,11 +682,12 @@ def select_items(items, settings, overrides=None):
         # LEGO is excluded from the published price regardless of its source or block.
         if re.search(r"\blego\b", item.title, re.I) or item.block.casefold() == "lego":
             continue
-        if item.block in disabled:
+        parent = "Xiaomi" if item.block in {"POCO", "Redmi"} else item.block
+        if item.block in disabled or (parent != item.block and parent in disabled):
             continue
-        if include_blocks and not matches_any(item.block, include_blocks):
+        if include_blocks and not (matches_any(item.block, include_blocks) or matches_any(parent, include_blocks)):
             continue
-        if matches_any(item.block, exclude_blocks):
+        if matches_any(item.block, exclude_blocks) or matches_any(parent, exclude_blocks):
             continue
         if include_items and not matches_any(item.title, include_items):
             continue

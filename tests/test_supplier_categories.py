@@ -39,7 +39,7 @@ X8 Pro Max. 12/256 Blue 🇪🇺 — 40 800
 EXPECTED_BLOCKS = (
     ["Oakley Meta"] * 3 + ["iPhone 16e"] + ["Аксессуары"] * 4
     + ["GoPro"] * 2 + ["Kodak / Fujifilm"] * 10 + ["Apple Accessories"]
-    + ["PLAUD"] * 2 + ["Sennheiser", "Xiaomi"] + ["Яндекс"] * 4
+    + ["PLAUD"] * 2 + ["Sennheiser", "POCO"] + ["Яндекс"] * 4
 )
 
 
