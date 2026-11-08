@@ -78,6 +78,14 @@ BRANDS = (
     ("Bowers & Wilkins", r"bowers|b&w|\bpx[78]\b"),
     ("Harman Kardon / Bose", r"harman\s*kardon|\bbose\b|\baura\s+studio\b|\bonyx\b|soundsticks"),
     ("Sennheiser", r"\bsennheiser\b"),
+    ("Bang & Olufsen", r"\bbang\s*&\s*olufsen\b|\bbeoplay\b"),
+    ("Amazon Kindle", r"\b(?:amazon\s+)?kindle\b"),
+    ("Logitech", r"\blogitech\b"),
+    ("Medicube", r"\bmedicube\b"),
+    ("Meta Quest", r"\b(?:meta\s+)?(?:oculus\s+)?quest\s*\d"),
+    ("Miele", r"\bmiele\b"),
+    ("Steam", r"\bsteam\s+(?:controller|deck)\b"),
+    ("XREAL", r"\bxreal\b"),
     ("PLAUD", r"\bplaud\b"),
     ("Яндекс", r"\bяндекс\b|\byandex\b"),
     ("Google", r"\bgoogle\b|\bpixel\b|\bfitbit\b"),
@@ -419,6 +427,10 @@ def apple_accessory_block(title):
 
 def product_block(title):
     plain = FLAGS.sub("", clean(title))
+    if re.match(r"^\s*(?:hd|hs|ht)\s*\d{2}(?:[- ]?[a-z])?\b", plain, re.I):
+        return "Dyson"
+    if re.match(r"^\s*5\s*(?:💿\s*)?(?:portal\b|дисковод\b)", plain, re.I):
+        return "PlayStation"
     if re.search(r"\bpoco\b|^\s*x8\s+pro\s+max\b", plain, re.I):
         return "POCO"
     if re.search(r"\bredmi\b|^\s*note\s+\d{1,2}[a-z]*\b", plain, re.I):
@@ -463,6 +475,11 @@ def ordered_blocks(blocks, preferred=()):
 
 def normal_title(title, context=""):
     title = strip_decoration(title)
+    # Explicit supplier shorthand must win over a preceding brand header.
+    if re.match(r"^\s*(?:hd|hs|ht)\s*\d{2}(?:[- ]?[a-z])?\b", FLAGS.sub("", title), re.I):
+        title = "Dyson " + title
+    elif re.match(r"^\s*5\s*(?:💿\s*)?(?:portal\b|дисковод\b)", FLAGS.sub("", title), re.I):
+        title = "PlayStation " + title
     title = re.sub(r"\bSM-[A-Za-z0-9/]+\b", "", title, flags=re.I)
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
     # A supplier abbreviates iPhone Pro Max as "17 Max" / "18 Max".

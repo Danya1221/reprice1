@@ -430,6 +430,31 @@ Xiaomi 15 Ultra 16/512 Black — 85000""").items
         cached = Item.from_dict({"title": "Poco X8s 12/512 Blue 🇪🇺", "price": "41500", "currency": "RUB", "block": "Xiaomi", "sim": "unknown", "accessory": False})
         self.assertEqual(cached.block, "POCO")
 
+    def test_reported_generic_items_are_classified_by_actual_product(self):
+        rows = ["5 Portal Black — 20300", "5 Portal White — 20000", "5 💿 Дисковод 🇯🇵 — 8000",
+                "Amazon Kindle 11Gen 16GB Black RS23CV 🇺🇸 — 12700",
+                "Bang&Olufsen BeoPlay H95 (Black) — 58500", "HD19 (Prussian Blue) 🇭🇰 — 33000",
+                "HS08 (Apricot Topaz) 🇬🇧 — 34000", "HS09 Max (Jasper Plum) Re 492491-01 🇬🇧 — 35000",
+                "HT03-A (Ceramic Pink) 🇬🇧 — 36000",
+                "Logitech MX Master 4 Mouse (Graphite) — 9000",
+                "Medicube AGE-R Booster Pro X2 (Pink) — 13900", "Meta Quest 3S 256GB 🇯🇵 — 39600",
+                "Miele HX1 Duoflex CarCare (Casa Grey) — 32400", "Steam Controller (Black) — 16000",
+                "XREAL 1S Glasses — 34700"]
+        items = self.parse("\n".join(rows)).items
+        self.assertEqual([i.block for i in items], ["PlayStation"] * 3 + ["Amazon Kindle", "Bang & Olufsen"]
+                         + ["Dyson"] * 4 + ["Logitech", "Medicube", "Meta Quest", "Miele", "Steam", "XREAL"])
+        self.assertTrue(all(i.title.startswith("Dyson ") for i in items[5:9]))
+        for item in items:
+            cached = item.to_dict()
+            cached["block"] = "Товары"
+            restored = Item.from_dict(cached)
+            self.assertEqual(restored.block, item.block)
+        dyson = Item.from_dict({"title": "HS08 (Apricot Topaz) 🇬🇧", "price": "34000", "currency": "RUB", "block": "Товары", "sim": "unknown", "accessory": False})
+        self.assertEqual(dyson.block, "Dyson")
+        self.assertTrue(dyson.title.startswith("Dyson HS08"))
+        discounted = Item.from_dict({"title": "Logitech MX Master 4 Mouse (Graphite) (скидка за внешний вид: мятая коробка)", "price": "9000", "currency": "RUB", "block": "Товары", "sim": "unknown", "accessory": False})
+        self.assertEqual(discounted.block, "Logitech")
+
     def test_samsung_series_are_read_and_split_into_catalog_blocks(self):
         items = self.parse("""Samsung
 Galaxy A

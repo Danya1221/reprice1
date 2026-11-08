@@ -275,6 +275,18 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("110 600", content)
         self.assertNotIn("По запросу", content)
 
+    async def test_expired_dyson_shorthand_shows_in_dyson_as_on_request(self):
+        self.service.supernova_expired_items = lambda: [Item.from_dict({
+            "title": "HS08 (Apricot Topaz) 🇬🇧", "price": "34000", "currency": "RUB",
+            "block": "Товары", "sim": "unknown", "accessory": False})]
+        _, _ = await self.service.render(items=[])
+        pages = self.service.publisher.publish.await_args.args[0]
+        content = "\n".join(pages.values())
+        self.assertIn("Dyson", content)
+        self.assertIn("HS08", content)
+        self.assertIn("По запросу", content)
+        self.assertNotIn("<b>Товары</b>", content)
+
     async def test_user_macbook_neo_pair_requires_all_specs_to_match(self):
         rows = parse_documents(["\n".join([
             "Apple MacBook Neo 13 A18 Pro 8/512GB Silver MHFC4 — 69 000",

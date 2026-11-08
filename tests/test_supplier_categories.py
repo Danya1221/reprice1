@@ -150,7 +150,7 @@ Google Pixel Watch 5 WI-FI 45mm Satin Pyrite Aluminum Case / Olive Active Band (
 
     def test_nearby_names_are_not_assigned_to_unrelated_brands(self):
         rows = [
-            ("Meta Quest 3 512GB White — 40000", "Товары", False),
+            ("Meta Quest 3 512GB White — 40000", "Meta Quest", False),
             ("Honor X8 8/128 Black — 20000", "Honor", False),
             ("X8 12/256 Blue — 20000", "Товары", False),
             ("Hero Stand Black — 2000", "Товары", False),
