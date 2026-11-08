@@ -135,6 +135,22 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(method == "editMessageText" and payload.get("text") == "Новый прайс"
                             for method, payload in publisher.calls))
 
+    async def test_large_unchanged_catalog_probes_one_message_per_update(self):
+        group_id = -100777
+        publisher = FakeBotPublisher(group_id, self.state, Settings(send_delay=0, admin_ids=(42,)),
+                                     {group_id: {"id": group_id, "type": "supergroup"}})
+        pages = {f"page:{i}": f"Раздел {i}" for i in range(40)}
+        await publisher.publish(pages)
+        publisher.calls.clear()
+        self.assertEqual(await publisher.publish(pages), 0)
+        probes = [payload["message_id"] for method, payload in publisher.calls if method == "editMessageText"]
+        self.assertEqual(len(probes), 1)
+        publisher.calls.clear()
+        await publisher.publish(pages)
+        next_probes = [payload["message_id"] for method, payload in publisher.calls if method == "editMessageText"]
+        self.assertEqual(len(next_probes), 1)
+        self.assertNotEqual(probes[0], next_probes[0])
+
     async def test_uneditable_existing_message_does_not_trigger_duplicate_publication(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
         group_id = -100777

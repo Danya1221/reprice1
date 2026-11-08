@@ -335,12 +335,17 @@ class BotAPIPublisher:
         if not manifest:
             return 0
 
-        for key, entry in list(manifest.items()):
-            if key not in pages or not entry.get("id"):
-                continue
+        candidates = [(key, entry) for key, entry in manifest.items()
+                      if key in pages and entry.get("id") and entry.get("content")]
+        if not candidates:
+            return 0
+        # Probe one existing post per cycle. Probing every unchanged post with
+        # editMessageText floods Telegram on large catalogs and stalls updates.
+        cursor = int(self.state.get("publication_probe_cursor", 0) or 0) % len(candidates)
+        key, entry = candidates[cursor]
+        self.state.set("publication_probe_cursor", (cursor + 1) % len(candidates))
+        for key, entry in [(key, entry)]:
             probe_content = entry.get("content")
-            if not probe_content:
-                continue
             try:
                 await self._edit(entry["id"], probe_content)
             except RuntimeError as exc:

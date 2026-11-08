@@ -352,8 +352,11 @@ class BotAPIController:
         if not self.allowed(user_id, chat_type):
             await self.answer_callback(callback["id"], f"Нет доступа. Твой ID: {user_id}", True)
             return
-        await self.answer_callback(callback["id"])
         data = callback.get("data") or ""
+        if data == "sync" and (self.service.busy or (self.task and not self.task.done())):
+            await self.answer_callback(callback["id"], "Обновление уже выполняется. Я сообщу, когда оно закончится.")
+            return
+        await self.answer_callback(callback["id"])
         try:
             if data == "resume":
                 self.service.set_option("enabled", True)
