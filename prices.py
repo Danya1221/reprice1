@@ -936,6 +936,11 @@ def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
     # Apply at render time so previously saved prices lose the note as well.
     title = normal_title(ORIGINAL_PACKAGING.sub("", item.title))
+    if item.block.startswith("Samsung"):
+        flags = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"
+        title = re.sub(r"^" + flags + r"(?:samsung\s+galaxy|galaxy)\s+",
+                       r"\1Samsung ", title, count=1, flags=re.I)
+        title = clean(re.sub(r"\(\s*\)", "", title))
     if iphone_model(title) and not item.accessory:
         title = FLAGS.sub("", title)
         title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
@@ -1123,7 +1128,7 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                     last_dyson_model = current_model
 
             if block == "Samsung A + S25":
-                samsung_section = "Galaxy S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Galaxy A"
+                samsung_section = "Samsung S25" if re.search(r"\bS\s*25\b", item.title, re.I) else "Samsung A"
                 if samsung_section != last_samsung_section:
                     if last_samsung_section is not None and lines and lines[-1] != "":
                         lines.append("")

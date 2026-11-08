@@ -88,6 +88,17 @@ Air 15 MC6L4 Midnight (M4 24/512) — 132500"""]).items
         self.assertEqual(content.count("— MacBook / iMac —"), 1)
         self.assertIn("<code>MacBook Air 1</code>\n<code>MacBook Air 2</code>", content)
 
+    def test_samsung_rows_have_one_brand_name_and_no_empty_parentheses(self):
+        items = parse_documents(["""Samsung S25 FE 5G 8/256GB () Navy 🇮🇳 — 42000
+Galaxy Z Fold7 12/256 Blue Shadow 🇰🇿 — 97600
+Samsung Galaxy Z Fold 7 12/256GB Blue Shadow 🇭🇰 — 98000
+Samsung Galaxy Watch 8 40mm Silver 🇮🇳 — 16800"""]).items
+        titles = [display_title(item) for item in items]
+        self.assertEqual(titles[0], "Samsung S25 FE 5G 8/256GB Navy 🇮🇳")
+        self.assertEqual(titles[1], "Samsung Z Fold7 12/256 Blue Shadow 🇰🇿")
+        self.assertEqual(titles[2], "Samsung Z Fold 7 12/256GB Blue Shadow 🇭🇰")
+        self.assertEqual(titles[3], "Samsung Watch 8 40mm Silver 🇮🇳")
+
 
 if __name__ == "__main__":
     unittest.main()

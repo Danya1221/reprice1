@@ -460,11 +460,11 @@ S26 Ultra 16/1TB Black 🇨🇱 - 117500""").items
         text = "\n".join(pages.values())
         self.assertIn("<b>Samsung</b>", text)
         self.assertIn("<b>— Samsung Buds —</b>", text)
-        self.assertIn("<b>— Galaxy A —</b>", text)
-        self.assertIn("<b>— Galaxy S25 —</b>", text)
+        self.assertIn("<b>— Samsung A —</b>", text)
+        self.assertIn("<b>— Samsung S25 —</b>", text)
         self.assertIn("<b>— Samsung S26 —</b>", text)
         combined = next(page for page in pages.values() if page.startswith("<b>Samsung</b>"))
-        self.assertLess(combined.index("Galaxy A"), combined.index("Galaxy S25"))
+        self.assertLess(combined.index("Samsung A"), combined.index("Samsung S25"))
 
     def test_all_apple_watches_share_one_block(self):
         items = self.parse("""Apple Watch
@@ -714,7 +714,7 @@ S25 Ultra 12/256 Black — 65000""").items
         page = next(value for value in render_blocks(items, Settings()).values() if value.startswith("<b>Samsung</b>"))
         self.assertIn("<b>— Samsung A + S25 —</b>", page)
         self.assertIn("A17 8/256GB Blue — 17 800</code>\n\n<code>A27", page)
-        self.assertIn("<b>— Galaxy S25 —</b>", page)
+        self.assertIn("<b>— Samsung S25 —</b>", page)
         self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>S25 Ultra", page)
 
     def test_iphone_models_are_separate_and_keep_activation_sections(self):
