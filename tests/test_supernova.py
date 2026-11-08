@@ -124,6 +124,15 @@ class SupernovaServiceTests(unittest.IsolatedAsyncioTestCase):
         self.client.download_media.assert_not_awaited()
         self.assertIsNone(self.state.get("supernova_snapshot"))
 
+    async def test_deleted_excel_message_removes_snapshot_and_refreshes(self):
+        await self.poll_at(2000000000)
+        self.service.refresh_format.reset_mock()
+        self.client.get_messages = AsyncMock(side_effect=[[], None])
+        await self.poll_at(2000000001)
+        self.assertEqual(self.service.supernova_items(now=2000000001), [])
+        self.assertEqual(self.state.get("supernova_snapshot")["offers"], [])
+        self.service.refresh_format.assert_awaited_once()
+
     async def test_broken_new_file_preserves_prior_snapshot(self):
         await self.poll_at(2000000000)
         original = self.state.get("supernova_snapshot")
@@ -226,15 +235,15 @@ class SupernovaServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("59 000", content)
             self.assertNotIn("Продажи закрыты", content)
 
-    async def test_failed_other_supplier_does_not_publish_incomplete_supernova_only_catalog(self):
+    async def test_failed_other_supplier_only_publishes_verified_supernova_catalog(self):
         await self.poll_at(2000000000)
         self.service.connect = AsyncMock()
         self.service.readers[0].fetch = AsyncMock(side_effect=ConnectionError("unavailable"))
         self.service.publisher.publish = AsyncMock(return_value=0)
         with patch("runtime.time.time", return_value=2000000000), patch("runtime.is_open", return_value=True):
             result = await self.service.sync(force=True)
-        self.assertIn("Прайс сохранён", result)
-        self.service.publisher.publish.assert_not_awaited()
+        self.assertIn("Supernova: открыт", result)
+        self.service.publisher.publish.assert_awaited_once()
 
     async def test_accounts_and_supernova_show_connected_account_identity(self):
         self.client.get_me.return_value = SimpleNamespace(id=42, bot=False, first_name="Кирилл",

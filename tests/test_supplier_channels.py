@@ -125,12 +125,13 @@ class ChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         feed = self.service.readers[2]
         feed.fetch = AsyncMock(return_value=ParseResult([phone], []))
         self.service.publisher.publish = AsyncMock(return_value=1)
+        self.service.publisher.hide_existing = AsyncMock(return_value=1)
         with patch("runtime.is_open", return_value=True):
             await self.service.sync(force=True)
             self.assertIn("45 000", "\n".join(self.service.publisher.publish.call_args.args[0].values()))
             await self.service.set_supplier_channel_visibility("@supplier_channel", visible=False)
             self.assertEqual(self.service.cached_items(), [])
-            self.assertEqual(self.service.publisher.publish.call_args.args[0], {})
+            self.service.publisher.hide_existing.assert_awaited()
             self.assertFalse(self.state.get("supplier_channels")[0]["visible"])
             await self.service.sync(force=True)
             self.assertEqual(feed.fetch.await_count, 2)
@@ -150,6 +151,7 @@ class ChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         failing = self.service.readers[2]
         failing.last_read_stats = {"messages": 12, "parsed": 0}
         failing.fetch = AsyncMock(side_effect=RuntimeError("Товары не распознаны"))
+        self.service.publisher.hide_existing = AsyncMock(return_value=0)
         with patch("runtime.is_open", return_value=True):
             await self.service.sync(force=True)
         cached = self.state.get("sources")["@supplier_channel"]
