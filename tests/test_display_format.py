@@ -99,6 +99,17 @@ Samsung Galaxy Watch 8 40mm Silver 🇮🇳 — 16800"""]).items
         self.assertEqual(titles[2], "Samsung Z Fold 7 12/256GB Blue Shadow 🇭🇰")
         self.assertEqual(titles[3], "Samsung Watch 8 40mm Silver 🇮🇳")
 
+    def test_cpo_groups_models_and_storage_with_single_blank_lines(self):
+        items = parse_documents(["""iPhone 16 Pro 256 Black CPO eSIM — 76500
+iPhone 14 Plus 128 Yellow CPO eSIM — 42500
+iPhone 16 Pro 128 White CPO eSIM — 70500
+iPhone 16 Pro 128 Black CPO eSIM — 70500
+iPhone 16 Pro 256 White CPO eSIM — 76500"""]).items
+        content = "\n".join(render_blocks(items, Settings()).values())
+        self.assertIn("14 Plus 128 Yellow CPO eSIM — 42 500</code>\n\n<code>iPhone 16 Pro 128", content)
+        self.assertIn("128 Black CPO eSIM — 70 500</code>\n<code>iPhone 16 Pro 128 White", content)
+        self.assertIn("128 White CPO eSIM — 70 500</code>\n\n<code>iPhone 16 Pro 256", content)
+
 
 if __name__ == "__main__":
     unittest.main()

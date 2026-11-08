@@ -1098,6 +1098,7 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
         last_samsung_section = None
         last_dyson_model = None
         last_model_key = None
+        last_iphone_model = None
         last_storage = None
         sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
 
@@ -1113,6 +1114,11 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                     memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", item.title)
                     return (0, model, tuple(map(int, memory.groups())) if memory else (999, 999), item_sort(item))
                 return (1, (0, ""), (0, 0), item_sort(item))
+            if block in {"CPO", "ASIS"}:
+                name = iphone_model(item.title).casefold()
+                natural = tuple(int(part) if part.isdigit() else part
+                                for part in re.split(r"(\d+)", name))
+                return (SIM_ORDER.get(item.sim, 99), natural, iphone_storage_rank(item), item_sort(item))
             if iphone_model(item.title):
                 return (SIM_ORDER.get(item.sim, 99), iphone_storage_rank(item), sorter(item))
             return (SIM_ORDER.get(item.sim, 99), 0, sorter(item))
@@ -1144,13 +1150,19 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                         lines.append("")
                     lines.append("<b>— " + label + " —</b>")
                     lines.append("")
+                last_storage = None
+                last_iphone_model = None
                 last_sim = item.sim
 
             if iphone_model(item.title):
                 storage = iphone_storage_key(item)
-                if (storage and last_storage is not None and storage != last_storage
+                model = iphone_model(item.title).casefold()
+                changed = ((last_iphone_model is not None and model != last_iphone_model)
+                           or (storage and last_storage is not None and storage != last_storage))
+                if (changed
                         and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
                     lines.append("")
+                last_iphone_model = model
                 if storage:
                     last_storage = storage
             else:
