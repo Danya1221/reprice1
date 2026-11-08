@@ -834,6 +834,7 @@ class SyncService:
 
     async def render(self, closed=False, items=None):
         options = self.options()
+        original_order = options.get("physical_order")
         if "physical_order" not in options:
             # Adopt the already published layout once on upgrade. Empty orders
             # explicitly saved by the Reset button still mean default order.
@@ -882,11 +883,13 @@ class SyncService:
         # Keep missing/disabled pages in the order so they return to their slots.
         if not closed:
             order = merge_physical_order(options.get("physical_order", []), physical_page_labels(pages))
+        changes = await self.publisher.publish(pages)
+        if not closed:
             latest_options = self.options()
-            if order != latest_options.get("physical_order"):
+            # Do not overwrite a manual reorder saved while publication ran.
+            if latest_options.get("physical_order") == original_order and order != latest_options.get("physical_order"):
                 latest_options["physical_order"] = order
                 self.state.set("options", latest_options)
-        changes = await self.publisher.publish(pages)
         self.state.update({"last_publish": timestamp(), "published_items": 0 if closed else len(selected)})
         return len(selected), changes
 

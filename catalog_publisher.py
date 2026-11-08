@@ -50,23 +50,22 @@ def apple_catalog_label(content):
         re.sub(r"\s+", " ", html.unescape(value)).strip()
         for value in re.findall(r"<b>—\s*(.*?)\s*—</b>", content, re.I)
     ]
-    lowered = [value.casefold() for value in sections]
-
-    has_airpods = any(value.startswith("airpods") for value in lowered)
-    has_watch = any(value.startswith("apple watch") for value in lowered)
-    if has_airpods and has_watch:
-        return "AirPods / Apple Watch"
-
-    has_ipad = any(value.startswith("ipad") for value in lowered)
-    has_mac = any(
-        value.startswith(("macbook", "mac mini", "mac studio", "imac"))
-        or value == "macbook / imac"
-        for value in lowered
-    )
-    if has_ipad and has_mac:
-        return "iPad / MacBook"
-
-    return ""
+    names = []
+    for section in sections:
+        value = section.casefold()
+        if value.startswith("airpods"):
+            label = "AirPods"
+        elif value.startswith("apple watch"):
+            label = "Apple Watch"
+        elif value.startswith("ipad"):
+            label = "iPad"
+        elif value.startswith(("macbook", "mac mini", "mac studio", "imac")):
+            label = "MacBook" if value.startswith(("macbook", "imac")) else section
+        else:
+            label = section
+        if label not in names:
+            names.append(label)
+    return " / ".join(names)
 
 
 def catalog_labels(content):
@@ -221,13 +220,12 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         contents = list(pages.values())
         labels = physical_page_labels(pages)
 
-        # The current Apple stock is physically split into two stable posts:
-        # 1) headphones + watches, 2) iPads + Macs. Name those posts by purpose
-        # instead of exposing meaningless "Apple" / "Apple · 2" buttons.
         apple_total = sum(
             1 for content in contents
             if page_title(content).casefold().strip() == "apple"
         )
+        apple_labels = [apple_catalog_label(content) for content in contents
+                        if page_title(content).casefold().strip() == "apple"]
         label_counts = {}
 
         for (key, content), title in zip(pages.items(), labels):
@@ -239,20 +237,16 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             is_apple = page_title(content).casefold().strip() == "apple"
             if is_apple and apple_total >= 2:
-                occurrence = re.fullmatch(r"Apple(?:\s+·\s+(\d+))?", title)
-                apple_index = int(occurrence.group(1) or 1) if occurrence else 1
-                if apple_index == 1:
-                    label = "AirPods / Apple Watch"
-                elif apple_index == 2:
-                    label = "iPad / MacBook"
-                else:
-                    label = f"Apple · {apple_index}"
-            else:
                 label = apple_catalog_label(content) or title
-                count = label_counts.get(label, 0) + 1
-                label_counts[label] = count
-                if count > 1:
-                    label = f"{label} · {count}"
+                occurrence = re.fullmatch(r"Apple\s+·\s+(\d+)", title)
+                if occurrence and label != title and apple_labels.count(label) > 1:
+                    label += " · " + occurrence.group(1)
+            else:
+                label = title
+            count = label_counts.get(label, 0) + 1
+            label_counts[label] = count
+            if count > 1:
+                label = f"{label} · {count}"
 
             if len(label) > 64:
                 label = label[:61].rstrip() + "…"
@@ -328,7 +322,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
             # Existing Telegram catalog messages may carry a hash produced by an
             # older button-layout algorithm.  Force one in-place keyboard rewrite
             # when this layout version changes; keep the same message ID.
-            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 9
+            force_catalog = int(self.state.get("catalog_layout_version", 0) or 0) < 10
             if force_catalog:
                 for record in records:
                     record["hash"] = ""
@@ -336,7 +330,7 @@ class CatalogPublisher(PinnedBotAPIPublisher):
 
             changes += await self._update_catalog(pages, records)
             if force_catalog:
-                self.state.set("catalog_layout_version", 9)
+                self.state.set("catalog_layout_version", 10)
             return changes
 
     async def set_first_message(self, text):

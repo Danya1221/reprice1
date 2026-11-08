@@ -84,6 +84,19 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([button["text"] for button in buttons], expected)
         self.assertEqual([button["url"] for button in buttons],
                          [f"https://t.me/c/777/{entry['id']}" for entry in slots])
+        await service.render(items=items)
+        buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
+        self.assertEqual([button["text"] for button in buttons], expected)
+
+    async def test_failed_publication_does_not_save_new_order(self):
+        service = SyncService(None, Settings(send_delay=0), self.state)
+        service.set_option("physical_order", ["Dyson", "Apple", "iPhone 17"])
+        service.publisher = self.publisher
+        service.publisher.publish = AsyncMock(side_effect=RuntimeError("offline"))
+        items = self.items + parse_documents(["iPhone 18 256 Blue — 150000"]).items
+        with self.assertRaises(RuntimeError):
+            await service.render(items=items)
+        self.assertEqual(service.options()["physical_order"], ["Dyson", "Apple", "iPhone 17"])
 
     async def test_moved_duplicate_apple_page_keeps_catalog_name_and_link(self):
         items = parse_documents(["\n".join(
@@ -275,14 +288,14 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.calls.clear()
         await self.publisher.publish(pages)
         self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
-        self.assertEqual(self.state.get("catalog_layout_version"), 9)
+        self.assertEqual(self.state.get("catalog_layout_version"), 10)
         edits = [payload for method, payload in self.publisher.calls if method == "editMessageText" and payload.get("reply_markup")]
         self.assertTrue(edits)
         buttons = [button for row in edits[-1]["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], ["Apple"])
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
 
-    async def test_two_physical_apple_posts_get_fixed_customer_labels(self):
+    async def test_two_physical_apple_posts_get_actual_customer_labels(self):
         pages = {
             "apple-one:0": (
                 "<b>Apple</b>\n\n"
@@ -302,7 +315,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(
             [button["text"] for button in buttons],
-            ["AirPods / Apple Watch", "iPad / MacBook"],
+            ["AirPods", "iPad"],
         )
         self.assertEqual(
             buttons[0]["url"],
