@@ -71,6 +71,22 @@ class PriceTests(unittest.TestCase):
         indexes = [i for i, row in enumerate(matches) if re.search(r"\bA18\b", row)]
         self.assertEqual(indexes, list(range(indexes[0], indexes[0] + 4)))
 
+    def test_all_samsung_a_series_share_one_section_including_cached_items(self):
+        items = self.parse("""Galaxy A07 4/128 Green 🇰🇿 — 12000
+Samsung A18 4G 6/128GB Black 🇷🇺 — 17800
+Galaxy A57 8/128 Navy 🇦🇪 — 29400
+Samsung Galaxy A08 6/128 Blue 🇰🇿 — 15900
+Samsung S25 12/256 Navy 🇮🇳 — 49000""").items
+        self.assertTrue(all(item.block == "Samsung A + S25" for item in items))
+        cached = Item.from_dict({"title": "Galaxy A18 6/128 Black 🇷🇺", "price": "17600",
+                                 "currency": "RUB", "block": "Samsung", "sim": "unknown",
+                                 "accessory": False})
+        self.assertEqual(cached.block, "Samsung A + S25")
+        content = "\n".join(render_blocks(items, Settings()).values())
+        indices = [content.index("Samsung " + value) for value in ("A07", "A08", "A18", "A57")]
+        self.assertEqual(indices, sorted(indices))
+        self.assertLess(indices[-1], content.index("Samsung S25 12/256"))
+
     def test_dyson_text_price_after_camera_and_delivery_emojis(self):
         result = self.parse("""🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
 🇬🇧 Gen5 SV23 Detect Absolute Purple 62000 📷

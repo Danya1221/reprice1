@@ -336,7 +336,7 @@ def samsung_block(title):
     # Supplier often omits "Samsung" from every product row.
     if re.search(r"^(?:samsung\s+|galaxy\s+)?buds\s*[34]\b", plain, re.I):
         return "Samsung Buds"
-    if re.search(r"^(?:samsung\s+|galaxy\s+)?a\s*(?:17|27|37|57)\b", plain, re.I):
+    if re.search(r"^(?:(?:samsung\s+)(?:galaxy\s+)?|galaxy\s+)a\s*\d{2,3}[a-z]?\b", plain, re.I) or re.search(r"^a\s*(?:17|27|37|57)\b", plain, re.I):
         return "Samsung A + S25"
     if re.search(r"^(?:samsung\s+|galaxy\s+)?s\s*25(?:\s*(?:fe|edge|ultra|\+|plus))?\b", plain, re.I):
         return "Samsung A + S25"
@@ -355,7 +355,7 @@ def samsung_block(title):
         return "Samsung Fold / Flip"
     if re.search(r"\b(?:galaxy\s*)?buds\s*[34]\b", plain, re.I):
         return "Samsung Buds"
-    if re.search(r"\b(?:galaxy\s+|samsung\s+(?:galaxy\s+)?)?a\s*(?:17|27|37|57)\b", plain, re.I):
+    if re.search(r"\b(?:galaxy\s+|samsung\s+(?:galaxy\s+)?)a\s*\d{2,3}[a-z]?\b", plain, re.I):
         return "Samsung A + S25"
     if re.search(r"\bgalaxy\s+s\s*25\b", plain, re.I):
         return "Samsung A + S25"
@@ -833,9 +833,10 @@ def dyson_model_sort(title):
 
 def samsung_a_s25_sort(item):
     plain = FLAGS.sub("", clean(item.title)).strip()
-    a = re.search(r"\bA\s*(17|27|37|57)\b", plain, re.I)
+    a = samsung_a_model(plain)
     if a:
-        return 0, int(a.group(1)), 0, plain.casefold()
+        memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", plain)
+        return 0, a[0], (a[1], tuple(map(int, memory.groups())) if memory else (999, 999)), plain.casefold()
     if re.search(r"\bS\s*25\s*FE\b", plain, re.I):
         return 1, 0, 0, plain.casefold()
     if re.search(r"\bS\s*25\s*Edge\b", plain, re.I):
@@ -1190,7 +1191,7 @@ def section_chunks(title, lines, limit=3200):
     previous_samsung_model = None
     for index, line in enumerate(lines):
         # Keep an entire Samsung A-model together when it fits a message.
-        if title == "Samsung" and line.startswith("<code>"):
+        if title in {"Samsung", "Samsung A + S25"} and line.startswith("<code>"):
             current = samsung_a_model(html.unescape(re.sub(r"^<code>", "", line)))
             if current and current != previous_samsung_model:
                 end = index + 1
