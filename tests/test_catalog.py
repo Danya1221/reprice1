@@ -46,6 +46,29 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         return [payload for method, payload in self.publisher.calls
                 if method == "editMessageText" and payload.get("reply_markup")][-1]
 
+    async def test_changed_page_key_reuses_message_and_updates_correct_button(self):
+        first = {"old": "<b>Xiaomi • Google</b>\n\n<code>Xiaomi 15 — 48000</code>"}
+        await self.publisher.publish(first)
+        old_id = self.state.get("published")["messages"]["old"]["id"]
+        old_catalog = self.state.get("catalog")["messages"][0]["id"]
+        self.publisher.calls.clear()
+        second = {"new": "<b>Xiaomi • Google • COROS</b>\n\n<code>Xiaomi 15 — 49000</code>"}
+        await self.publisher.publish(second)
+        self.assertEqual(self.state.get("published")["messages"]["new"]["id"], old_id)
+        self.assertEqual(self.state.get("catalog")["messages"][0]["id"], old_catalog)
+        self.assertFalse(any(method in {"sendMessage", "deleteMessage"} for method, _ in self.publisher.calls))
+        button = self.catalog_edit()["reply_markup"]["inline_keyboard"][0][0]
+        self.assertEqual(button["url"], f"https://t.me/c/777/{old_id}")
+        self.assertIn("COROS", button["text"])
+
+    async def test_new_unrelated_section_does_not_reuse_existing_page(self):
+        await self.publisher.publish({"old": "<b>Dyson</b>\n\n<code>Dyson HS08 — 40000</code>"})
+        old_id = self.state.get("published")["messages"]["old"]["id"]
+        self.publisher.calls.clear()
+        await self.publisher.publish({"new": "<b>Samsung</b>\n\n<code>Samsung S26 — 60000</code>"})
+        new_id = self.state.get("published")["messages"]["new"]["id"]
+        self.assertNotEqual(new_id, old_id)
+
     async def test_catalog_links_and_physical_post_order_follow_new_order(self):
         await self.publisher.publish(self.pages())
         before = {entry["id"] for entry in self.state.get("published")["messages"].values()}

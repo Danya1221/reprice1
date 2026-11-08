@@ -155,7 +155,7 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(method == "sendMessage" for method, _ in publisher.calls))
         self.assertEqual(self.state.get("published"), manifest)
 
-    async def test_deleted_saved_id_rebuilds_all_managed_price_posts(self):
+    async def test_deleted_saved_id_recreates_only_missing_price_post(self):
         settings = Settings(send_delay=0, admin_ids=(42,))
         group_id = -100777
         chats = {group_id: {"id": group_id, "type": "supergroup", "title": "Розница"}}
@@ -172,11 +172,12 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         new_manifest = self.state.get("published")["messages"]
         new_ids = [new_manifest[key]["id"] for key in pages]
 
-        self.assertNotEqual(old_ids, new_ids)
-        self.assertGreater(changes, 1)
-        self.assertTrue(any(method == "deleteMessage" and payload["message_id"] == old_ids[1]
-                            for method, payload in publisher.calls))
-        self.assertEqual(sum(1 for method, _ in publisher.calls if method == "sendMessage"), 2)
+        self.assertNotEqual(old_ids[0], new_ids[0])
+        self.assertEqual(old_ids[1], new_ids[1])
+        self.assertEqual(changes, 1)
+        self.assertFalse(any(method == "deleteMessage" and payload["message_id"] == old_ids[1]
+                             for method, payload in publisher.calls))
+        self.assertEqual(sum(1 for method, _ in publisher.calls if method == "sendMessage"), 1)
 
 
     async def test_failed_rebuild_keeps_old_live_posts_until_new_set_is_complete(self):
@@ -207,9 +208,11 @@ class BotPublisherTargetTests(unittest.IsolatedAsyncioTestCase):
         # until a complete new set has been sent successfully.
         self.assertFalse(any(method == "deleteMessage" and payload["message_id"] == old_ids[1]
                              for method, payload in publisher.calls))
-        staged = self.state.get("rebuild_old_manifest", {})
-        self.assertEqual(staged.get("binding"), publisher.binding())
-        self.assertEqual(len(staged.get("messages", {})), 2)
+        manifest = self.state.get("published")["messages"]
+        self.assertEqual(manifest["two:0"]["id"], old_ids[1])
+        publisher.api = original_api
+        await publisher.publish(pages)
+        self.assertEqual(self.state.get("published")["messages"]["two:0"]["id"], old_ids[1])
 
 
 

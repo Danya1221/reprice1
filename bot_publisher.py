@@ -324,19 +324,17 @@ class BotAPIPublisher:
         return manifest
 
     async def _verify_or_rebuild_manifest(self, pages, manifest, binding):
-        """Keep stored IDs while they exist; rebuild all managed price posts if one was deleted.
+        """Keep stored IDs while they exist; replace only deleted price posts.
 
         Bot API has no getMessage method. Editing a message with its current stored
         content is therefore the safest existence probe: a live unchanged message
         returns `message is not modified`, while a deleted/stale ID returns one of
-        Telegram's invalid-message errors. Rebuilding the whole managed price set
-        preserves the requested physical order instead of appending one recovered
-        block at the bottom.
+        Telegram's invalid-message errors. A missing post is recreated on its
+        own, leaving the other posts and their links intact.
         """
         if not manifest:
             return 0
 
-        missing = False
         for key, entry in list(manifest.items()):
             if key not in pages or not entry.get("id"):
                 continue
@@ -350,24 +348,12 @@ class BotAPIPublisher:
                 if "message is not modified" in text:
                     continue
                 if is_missing_message_error(exc):
-                    missing = True
-                    break
+                    # Only this message needs replacing. Preserve every other
+                    # published ID and its catalog link.
+                    manifest.pop(key, None)
+                    self.state.set("published", {"binding": binding, "messages": manifest})
+                    continue
                 raise
-
-        if not missing:
-            return 0
-
-        # Availability-safe rebuild: never erase the last complete price before a
-        # replacement exists. Keep the old manifest as a staging snapshot, publish
-        # a complete fresh set under new IDs, and delete the old live posts only
-        # after every replacement page has been checkpointed successfully.
-        snapshot = {key: dict(entry) for key, entry in manifest.items()}
-        self.state.set("rebuild_old_manifest", {
-            "binding": binding,
-            "messages": snapshot,
-        })
-        manifest.clear()
-        self.state.set("published", {"binding": binding, "messages": manifest})
         return 0
 
     async def publish(self, pages):
