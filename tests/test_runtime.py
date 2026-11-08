@@ -397,6 +397,37 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         for price in ("17 600", "21 000", "15 900", "15 000", "18 000"):
             self.assertIn(price, content)
 
+    async def test_s26_rows_group_by_model_and_monarch_never_published(self):
+        rows = parse_documents(["\n".join([
+            "Galaxy S26 12/256 Sky Blue 🇰🇿 — 58 500",
+            "Galaxy S26 FE 8/128 Graphite 🇿🇦 — 42 300",
+            "Galaxy S26 Ultra 12/256 White 🇲🇾 — 77 500",
+            "Samsung S26+ 12/512 Black 🇰🇿 — 76 000",
+            "MONARCH для Samsung Galaxy S26 Ultra Без рамки — 900",
+            "Samsung S26 12/256GB Sky Blue 🇰🇿 — 59 000",
+            "Samsung S26 12/128GB Black 🇪🇺 — 56 800",
+            "Samsung S26 FE 5G 8/256GB Pistachio 🇦🇪 — 46 000",
+            "Samsung S26 Ultra 12/512 White 🇨🇱 — 91 300",
+            "Samsung S26+ 12/512 Black 🇨🇱 — 75 800",
+            "Samsung Z Fold7 12/256 Blue Shadow 🇭🇰 — 97 600",
+            "Samsung Z Flip8 12/256 Graphite 🇰🇿 — 64 000",
+        ])]).items
+        count, _ = await self.service.render(items=merge_lowest([rows]))
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertNotIn("MONARCH", content)
+        self.assertNotIn("59 000", content)
+        self.assertIn("58 500", content)
+        self.assertIn("76 000", content)  # protected Kazakhstan
+        self.assertIn("75 800", content)  # lowest elsewhere
+        base = content.index("Samsung S26 12/128")
+        fe = content.index("Samsung S26 FE 8/128")
+        plus = content.index("Samsung S26+ 12/512")
+        ultra = content.index("Samsung S26 Ultra 12/256")
+        self.assertLess(base, fe)
+        self.assertLess(fe, plus)
+        self.assertLess(plus, ultra)
+        self.assertGreater(count, 0)
+
     async def test_galaxy_fold_prefix_and_model_spacing_merge_in_same_region(self):
         rows = parse_documents(["\n".join([
             "Galaxy Z Fold7 12/256 Blue Shadow 🇰🇿 — 97 600",

@@ -125,6 +125,8 @@ def clean(text):
 
 
 def is_accessory(title):
+    if re.search(r"\bmonarch\b.*\bsamsung\b", title, re.I):
+        return True
     # A TX/RX kit is a microphone system. Its included Charging Case does not
     # turn it into an accessory; a case sold on its own still is an accessory.
     kit = DJI_MIC_KIT.search(title)
@@ -670,6 +672,8 @@ def select_items(items, settings, overrides=None):
     result = []
     for item in items:
         item = resolve_iphone_sim(item)
+        if re.search(r"\bmonarch\b.*\bsamsung\b", item.title, re.I):
+            continue
         # LEGO is excluded from the published price regardless of its source or block.
         if re.search(r"\blego\b", item.title, re.I) or item.block.casefold() == "lego":
             continue
@@ -854,14 +858,42 @@ def samsung_a_model(title):
     return (int(match.group(1)), match.group(2).casefold()) if match else None
 
 
+def samsung_s_model(title):
+    plain = FLAGS.sub("", clean(title))
+    match = re.match(r"^(?:samsung\s+)?(?:galaxy\s+)?s\s*(\d{2,3})\s*(ultra\b|plus\b|\+|fe\b|edge\b)?", plain, re.I)
+    if not match:
+        return None
+    variant = (match.group(2) or "").casefold()
+    return (int(match.group(1)), {"": 0, "fe": 1, "+": 2, "plus": 2, "edge": 3, "ultra": 4}[variant])
+
+
+def samsung_z_model(title):
+    plain = FLAGS.sub("", clean(title))
+    match = re.match(r"^(?:samsung\s+)?(?:galaxy\s+)?(?:z\s*)?(fold|flip)\s*(\d+)\b", plain, re.I)
+    return (match.group(1).casefold(), int(match.group(2))) if match else None
+
+
+def samsung_phone_group(title):
+    model = samsung_a_model(title)
+    if model:
+        return ("a", *model)
+    model = samsung_s_model(title)
+    if model:
+        return ("s", *model)
+    model = samsung_z_model(title)
+    if model:
+        return ("z", *model)
+    return None
+
+
 def model_group_key(item):
     """A stable model family key used only for visual spacing in rendered price lists."""
     plain = FLAGS.sub("", normal_title(item.title)).strip()
 
     if item.block.startswith("Samsung"):
-        samsung_model = samsung_a_model(plain)
+        samsung_model = samsung_phone_group(plain)
         if samsung_model:
-            return f"samsung a{samsung_model[0]}{samsung_model[1]}"
+            return "samsung " + " ".join(map(str, samsung_model))
 
     if item.block == "MacBook / iMac":
         group = macbook_configuration(plain)
@@ -1114,6 +1146,11 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                     memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", item.title)
                     return (0, model, tuple(map(int, memory.groups())) if memory else (999, 999), item_sort(item))
                 return (1, (0, ""), (0, 0), item_sort(item))
+            if block in {"Samsung S26", "Samsung Fold / Flip"}:
+                model = samsung_phone_group(item.title)
+                memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\b", item.title)
+                return (0 if model else 1, model or (),
+                        tuple(map(int, memory.groups())) if memory else (999, 999), item_sort(item))
             if block in {"CPO", "ASIS"}:
                 name = iphone_model(item.title).casefold()
                 natural = tuple(int(part) if part.isdigit() else part
@@ -1203,14 +1240,14 @@ def section_chunks(title, lines, limit=3200):
     previous_samsung_model = None
     for index, line in enumerate(lines):
         # Keep an entire Samsung A-model together when it fits a message.
-        if title in {"Samsung", "Samsung A + S25"} and line.startswith("<code>"):
-            current = samsung_a_model(html.unescape(re.sub(r"^<code>", "", line)))
+        if title in {"Samsung", "Samsung A + S25", "Samsung S26", "Samsung Fold / Flip"} and line.startswith("<code>"):
+            current = samsung_phone_group(html.unescape(re.sub(r"^<code>", "", line)))
             if current and current != previous_samsung_model:
                 end = index + 1
                 while end < len(lines):
                     next_line = lines[end]
                     if next_line.startswith("<code>"):
-                        next_model = samsung_a_model(html.unescape(re.sub(r"^<code>", "", next_line)))
+                        next_model = samsung_phone_group(html.unescape(re.sub(r"^<code>", "", next_line)))
                         if next_model != current:
                             break
                     elif next_line.startswith("<b>"):
