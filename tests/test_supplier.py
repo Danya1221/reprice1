@@ -18,10 +18,6 @@ class FakeSource:
         self.handlers = []
 
     async def get_messages(self, *args, **kwargs):
-        if "ids" in kwargs:
-            rows = {m.id: m for m in self.rows}
-            ids = kwargs["ids"]
-            return [rows.get(i) for i in ids] if isinstance(ids, list) else rows.get(ids)
         return list(reversed(self.rows))
 
     def add_event_handler(self, handler, builder):
@@ -65,13 +61,13 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
         replies = await self.reader.collect_action(action)
         self.assertEqual([m.id for m in replies], [2, 3])
 
-    async def test_deleted_reply_is_not_treated_as_current_price(self):
+    async def test_deleted_reply_is_retained_from_event(self):
         async def action():
             event = SimpleNamespace(message=message(2, "iPhone 17 256 Black — 60000"))
             await self.client.handlers[0](event)
             # The message never reaches history: supplier deleted it immediately.
-        with self.assertRaises(SupplierTimeout):
-            await self.reader.collect_action(action)
+        replies = await self.reader.collect_action(action)
+        self.assertEqual([m.id for m in replies], [2])
 
     async def test_cleanup_after_action_error(self):
         async def action():
@@ -95,13 +91,12 @@ class SupplierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reader.last_read_stats["ignored_media"], 2)
         self.assertEqual(self.reader.last_read_stats["price_files"], 0)
 
-    async def test_feed_with_deleted_price_messages_is_empty(self):
+    async def test_empty_feed_is_a_successful_empty_result(self):
         self.reader.source = Source("@supplier", mode="feed")
-        for rows in ([], [message(1, "Добрый вечер")]):
-            self.client.rows = rows
-            result = await self.reader.fetch()
-            self.assertEqual(result.items, [])
-            self.assertFalse(result.closed)
+        self.client.rows = []
+        result = await self.reader.fetch()
+        self.assertEqual(result.items, [])
+        self.assertFalse(result.closed)
 
     async def test_feed_close_notice_is_not_overridden_by_later_non_price_post(self):
         self.reader.source = Source("@supplier", mode="feed")

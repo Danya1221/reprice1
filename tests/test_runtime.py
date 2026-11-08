@@ -112,6 +112,25 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Продажи закрыты", text)
         self.assertNotIn("60 000", text)
 
+    async def test_closed_bot_and_empty_feed_hide_the_price(self):
+        self.service.readers[0].fetch.return_value = ParseResult([], [], closed=True)
+        self.service.readers[1].fetch.return_value = ParseResult([], [])
+        with patch("runtime.is_open", return_value=True):
+            result = await self.service.sync()
+        self.assertIn("цены скрыты", result)
+        self.assertEqual(self.state.get("sources")["@two"]["status"], "empty")
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertNotIn("60 000", content)
+
+    async def test_failed_feed_is_not_mistaken_for_an_empty_feed(self):
+        self.service.readers[0].fetch.return_value = ParseResult([], [], closed=True)
+        self.service.readers[1].fetch.side_effect = ConnectionError("offline")
+        with patch("runtime.is_open", return_value=True):
+            result = await self.service.sync()
+        self.assertIn("Прайс сохранён", result)
+        self.service.publisher.hide_existing.assert_not_awaited()
+        self.service.publisher.publish.assert_not_awaited()
+
     async def test_three_distinct_closed_suppliers_hide_all_even_with_fresh_supernova(self):
         settings = Settings(sources=(Source("@one"), Source("@two"), Source("@three"), Source("@four")), off_hours=False)
         service = SyncService(self.client, settings, self.state)
@@ -162,33 +181,15 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         pages = self.service.publisher.publish.call_args.args[0]
         self.assertIn("61 000", next(iter(pages.values())))
 
-    async def test_timed_out_supplier_does_not_keep_stale_prices(self):
+    async def test_timed_out_supplier_preserves_published_price(self):
         async def stuck():
             await asyncio.Event().wait()
         self.service.readers[1].fetch.side_effect = stuck
         with patch("runtime.MAX_SOURCE_SECONDS", 0.01), patch("runtime.is_open", return_value=True):
             result = await self.service.sync()
-        self.assertIn("Прайс обновлён", result)
-        self.service.publisher.publish.assert_awaited_once()
+        self.assertIn("Последний опубликованный прайс сохранён", result)
+        self.service.publisher.publish.assert_not_awaited()
         self.assertFalse(self.service.busy)
-
-    async def test_closed_and_failed_suppliers_hide_unconfirmed_offers(self):
-        self.service.readers[0].fetch.return_value = ParseResult([], [], closed=True)
-        self.service.readers[1].fetch.side_effect = ConnectionError("offline")
-        with patch("runtime.is_open", return_value=True):
-            result = await self.service.sync()
-        self.assertIn("Цены скрыты", result)
-        self.service.publisher.hide_existing.assert_awaited_once()
-        self.assertEqual(self.service.cached_items(), [])
-
-    async def test_empty_feed_removes_previous_items(self):
-        self.service.readers[0].fetch.return_value = ParseResult([], [])
-        self.service.readers[1].fetch.return_value = ParseResult([], [])
-        with patch("runtime.is_open", return_value=True):
-            result = await self.service.sync()
-        self.assertIn("Цены скрыты", result)
-        self.assertEqual(self.state.get("sources")["@one"]["items"], [])
-        self.assertEqual(self.state.get("sources")["@one"]["status"], "empty")
 
     async def test_same_iphone_sim_spelling_merges_but_distinct_variants_do_not(self):
         rows = parse_documents(["\n".join([

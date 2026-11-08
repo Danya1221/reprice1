@@ -455,13 +455,6 @@ class SyncService:
                               and getattr(m, "file", None) is not None
                               and (getattr(m.file, "name", "") or "").casefold().endswith(".xlsx")), None)
             snapshot = self.state.get("supernova_snapshot", {})
-            if (snapshot.get("bot") == SUPERNOVA_BOT and snapshot.get("account_id") == account_id
-                    and snapshot.get("slot") == slot and snapshot.get("message_id")
-                    and not any(getattr(m, "id", None) == snapshot["message_id"] for m in messages)):
-                existing = await client.get_messages(peer, ids=snapshot["message_id"])
-                if not existing:
-                    snapshot = {**snapshot, "offers": [], "count": 0}
-                    self.state.set("supernova_snapshot", snapshot)
             if candidate is not None:
                 observed = candidate.date.timestamp()
                 same_account = (snapshot.get("bot") == SUPERNOVA_BOT and snapshot.get("account_id") == account_id and snapshot.get("slot") == slot)
@@ -506,11 +499,10 @@ class SyncService:
         view = (tuple(sorted((item.key, str(item.price)) for item in items)),
                 tuple(sorted(item.key for item in expired)))
         if self.supernova_last_view != view:
-            previous_view = self.supernova_last_view
             self.supernova_last_view = view
             source_statuses = self._cached_source_statuses(self.state.get("sources", {}))
             within_hours = is_open(self.settings) or self._both_fresh_open(source_statuses)
-            if self.ready and self.enabled() and within_hours and (items or expired or previous_view):
+            if self.ready and self.enabled() and within_hours and (items or expired):
                 try:
                     await self.request_supernova_refresh()
                 except Exception as exc:
@@ -853,7 +845,7 @@ class SyncService:
                 if not self.source_visible(source, slot):
                     continue
                 value = cache.get(self.source_cache_key(source, slot), {})
-                if not include_closed and (value.get("status") != "open" or value.get("error")):
+                if value.get("status") in ("closed", "empty") and not include_closed:
                     continue
                 if value.get("items"):
                     groups.append(self.source_items(source, [Item.from_dict(item) for item in value["items"]]))
@@ -967,6 +959,7 @@ class SyncService:
                 errors_found = []
                 fresh_by_source = {index: [] for index in range(len(self.settings.sources))}
                 fresh_open_groups = []
+                timed_out_visible = []
                 entries = list(self.active_reader_entries())
 
                 for position, (slot, reader) in enumerate(entries, 1):
@@ -978,8 +971,8 @@ class SyncService:
                         budget = min(MAX_SOURCE_SECONDS, self.settings.response_timeout * (len(reader.source.buttons) + self.settings.catalog_pages + 1) * 2 + 120)
                         result = await asyncio.wait_for(reader.fetch(), timeout=budget)
                         previous = cache.get(key, {})
-                        eligible = self.source_items(reader.source, result.items)
                         status = "closed" if result.closed else ("open" if result.items else "empty")
+                        eligible = self.source_items(reader.source, result.items)
                         retained = self.source_items(reader.source, [
                             Item.from_dict(item) for item in previous.get("items", [])
                         ]) if result.closed else eligible
@@ -1024,6 +1017,8 @@ class SyncService:
                         fresh_by_source[index].append("error")
                         errors_found.append(label + ": " + error)
                     except Exception as exc:
+                        if isinstance(exc, asyncio.TimeoutError) and self.source_visible(reader.source, slot):
+                            timed_out_visible.append(label)
                         log.warning("Не удалось прочитать %s: %s", label, type(exc).__name__)
                         old = cache.get(key, {})
                         stats = getattr(reader, "last_read_stats", None) or {}
@@ -1054,18 +1049,20 @@ class SyncService:
                     message = "Три поставщика закрыты: цены скрыты"
                     self.state.set("last_result", message)
                     return message
+                if timed_out_visible:
+                    message = "Не удалось вовремя прочитать: " + ", ".join(timed_out_visible) + ". Последний опубликованный прайс сохранён."
+                    self.state.set("last_result", message)
+                    return message
                 fresh_supernova = self.supernova_items()
-                if (self.settings.sources and statuses and all(status == "closed" for status in statuses)
+                if (self.settings.sources and statuses and all(status in ("closed", "empty") for status in statuses)
                         and not fresh_supernova):
                     await self.render(closed=True)
-                    message = "Все поставщики закрыты: цены скрыты"
+                    message = "Все поставщики закрыты или прайсы удалены: цены скрыты"
                     self.state.set("last_result", message)
                     return message
 
-                if not fresh_open_groups and not fresh_supernova:
-                    await self.publisher.hide_existing()
-                    self.state.update({"last_publish": timestamp(), "published_items": 0})
-                    message = "Цены скрыты: нет подтверждённых актуальных предложений"
+                if not fresh_open_groups and (not fresh_supernova or errors_found):
+                    message = "Прайс сохранён; нет свежего открытого источника"
                     if errors_found:
                         message += ": " + " | ".join(errors_found)
                     self.state.set("last_result", message)
@@ -1112,6 +1109,10 @@ class SyncService:
             finally:
                 self.busy = False
                 self.sync_phase = ""
+                # Measure the polling interval from the end of the request.
+                # A slow supplier or a large publication must not trigger a
+                # new request immediately after the current one finishes.
+                self.last_attempt = asyncio.get_running_loop().time()
 
     async def pause(self):
         async with self.lock:
@@ -1181,13 +1182,9 @@ class SyncService:
             cache = self.state.get("sources", {})
             statuses = self._cached_source_statuses(cache)
             closed = (self._three_suppliers_closed(statuses) or
-                      (bool(statuses) and all(status == "closed" for status in statuses) and not self.supernova_items()))
+                      (bool(statuses) and all(status in ("closed", "empty") for status in statuses) and not self.supernova_items()))
             if closed:
                 return await self.render(closed=True)
-            if not self.cached_items() and not self.supernova_expired_items():
-                changes = await self.publisher.hide_existing()
-                self.state.update({"last_publish": timestamp(), "published_items": 0})
-                return 0, changes
             return await self.render(closed=False)
 
     def status(self):

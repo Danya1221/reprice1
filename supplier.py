@@ -306,16 +306,7 @@ class SupplierReader:
                         accept(message)
                     if time.monotonic() - changed_at < s.quiet_seconds:
                         continue
-                    # Events can describe messages the supplier has already
-                    # deleted. Verify the complete reply against Telegram
-                    # before treating it as a current price.
-                    ids = sorted(collected)
-                    verified = await self.client.get_messages(self.entity, ids=ids)
-                    verified = verified if isinstance(verified, (list, tuple)) else [verified]
-                    present = {m.id: m for m in verified if m is not None}
-                    if set(present) != set(ids):
-                        raise SupplierTimeout("Ответ поставщика удалён или неполон; цены не подтверждены")
-                    return [present[k] for k in ids]
+                    return [collected[k] for k in sorted(collected)]
                 await asyncio.sleep(s.action_delay)
             if collected:
                 raise SupplierTimeout("Ответ поставщика не завершён: увеличь RESPONSE_TIMEOUT")
@@ -533,7 +524,7 @@ class SupplierReader:
         self.last_read_stats["parsed"] = len(result.items)
         if not result.items and any(self.is_closed_text(text) for text in documents):
             result.closed = True
-        if not result.items and not result.closed and self.source.mode == "feed" and not self.last_read_stats["price_rows"]:
+        if self.source.mode == "feed" and not result.items and not result.closed and not self.last_read_stats["price_rows"]:
             return ParseResult([], [])
         if not result.items and not result.closed:
             raise RuntimeError("В ответе нет распознанных товаров. Прайс в канале сохранён")
