@@ -88,6 +88,25 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], expected)
 
+    async def test_new_price_page_updates_existing_catalog_without_resending_it(self):
+        service = SyncService(None, Settings(send_delay=0), self.state)
+        service.publisher = self.publisher
+        service.set_option("physical_order", ["Dyson", "Apple", "iPhone 17"])
+        await service.render(items=self.items)
+        catalog_id = self.state.get("catalog")["messages"][0]["id"]
+        self.publisher.calls.clear()
+        items = self.items + parse_documents(["iPhone 18 256 Blue — 150000"]).items
+        await service.render(items=items)
+        self.assertEqual(self.state.get("catalog")["messages"][0]["id"], catalog_id)
+        sends = [p for method, p in self.publisher.calls if method == "sendMessage"]
+        self.assertEqual(len(sends), 1)
+        self.assertNotIn("КАТАЛОГ", sends[0]["text"])
+        self.assertFalse(any(method == "deleteMessage" and p.get("message_id") == catalog_id
+                             for method, p in self.publisher.calls))
+        self.publisher.calls.clear()
+        await service.render(items=items)
+        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
     async def test_failed_publication_does_not_save_new_order(self):
         service = SyncService(None, Settings(send_delay=0), self.state)
         service.set_option("physical_order", ["Dyson", "Apple", "iPhone 17"])

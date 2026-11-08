@@ -185,19 +185,17 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         return changed
 
     async def _prepare_catalog(self, count):
-        """Ensure catalog messages exist strictly after every managed price post."""
+        """Reuse the catalog when new price posts appear after it."""
         records = self.catalog_records()
         stored = self.state.get("published", {}) or {}
         manifest = stored.get("messages", {}) if stored.get("binding") == self.binding() else {}
         price_ids = [int(entry["id"]) for entry in manifest.values() if entry.get("id")]
-        catalog_ids = [int(record["id"]) for record in records if record.get("id")]
-
-        # Old versions pinned the catalog and sometimes reused the first price slot.
-        # Recreate such records once so the custom intro remains the only pin and
-        # the catalog becomes physically the last managed message.
+        # Only repair the obsolete pinned catalog or an actual collision with a
+        # price post. A newer price message is not a reason to delete and resend
+        # the catalog: update its links in place instead.
         must_rebuild = bool(records) and (
             any(record.get("pinned") for record in records)
-            or (price_ids and catalog_ids and min(catalog_ids) <= max(price_ids))
+            or any(int(record["id"]) in price_ids for record in records if record.get("id"))
         )
         if must_rebuild:
             for record in list(records):
