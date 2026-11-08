@@ -80,6 +80,46 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Продажи закрыты", text)
         self.assertNotIn("60 000", text)
 
+    async def test_three_distinct_closed_suppliers_hide_all_even_with_fresh_supernova(self):
+        settings = Settings(sources=(Source("@one"), Source("@two"), Source("@three"), Source("@four")), off_hours=False)
+        service = SyncService(self.client, settings, self.state)
+        service.publisher.publish = AsyncMock(return_value=0)
+        service.publisher.hide_existing = AsyncMock(return_value=0)
+        for reader in service.readers[:3]:
+            reader.fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        service.readers[3].fetch = AsyncMock(return_value=ParseResult([self.item], []))
+        service.supernova_items = lambda now=None: [self.item]
+        with patch("runtime.is_open", return_value=True):
+            result = await service.sync()
+        self.assertIn("Три поставщика закрыты", result)
+        content = "\n".join(service.publisher.publish.await_args.args[0].values())
+        self.assertIn("Продажи закрыты", content)
+        self.assertNotIn("60 000", content)
+        service.publisher.publish.reset_mock()
+        await service.refresh_format()
+        content = "\n".join(service.publisher.publish.await_args.args[0].values())
+        self.assertIn("Продажи закрыты", content)
+        self.assertNotIn("60 000", content)
+        service.readers[0].fetch = AsyncMock(return_value=ParseResult([self.item], []))
+        with patch("runtime.is_open", return_value=True):
+            result = await service.sync()
+        self.assertIn("Прайс обновлён", result)
+        content = "\n".join(service.publisher.publish.await_args.args[0].values())
+        self.assertIn("60 000", content)
+
+    async def test_three_suppliers_rule_does_not_count_errors_as_closed(self):
+        settings = Settings(sources=(Source("@one"), Source("@two"), Source("@three")), off_hours=False)
+        service = SyncService(self.client, settings, self.state)
+        service.publisher.publish = AsyncMock(return_value=0)
+        for reader in service.readers[:2]:
+            reader.fetch = AsyncMock(return_value=ParseResult([], [], closed=True))
+        service.readers[2].fetch = AsyncMock(side_effect=ConnectionError("offline"))
+        service.supernova_items = lambda now=None: [self.item]
+        with patch("runtime.is_open", return_value=True):
+            result = await service.sync()
+        self.assertNotIn("Три поставщика закрыты", result)
+        self.assertEqual(service._cached_source_statuses(service.state.get("sources")), ["closed", "closed", "error"])
+
     async def test_source_failure_uses_fresh_open_source_after_start(self):
         newer = Item("iPhone 17 256 Black", Decimal(61000), "RUB", "iPhone 17")
         self.service.readers[0].fetch.return_value = ParseResult([newer], [])

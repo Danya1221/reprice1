@@ -925,6 +925,12 @@ class SyncService:
     def _both_fresh_open(self, source_statuses):
         return len(self.base_sources) >= 2 and all(status == "open" for status in source_statuses[:len(self.base_sources)])
 
+    @staticmethod
+    def _three_suppliers_closed(source_statuses):
+        # Each entry is one configured supplier, already aggregated across its
+        # accounts. An error or a missing response is not a closure.
+        return sum(status == "closed" for status in source_statuses) >= 3
+
     async def sync(self, force=False):
         async with self.lock:
             if not self.ready:
@@ -1029,13 +1035,17 @@ class SyncService:
                         errors_found.append(label + ": " + str(exc))
 
                 self.state.set("sources", cache)
+                statuses = [self._aggregate_status(fresh_by_source[index])
+                            for index in range(len(self.settings.sources))]
+                if self._three_suppliers_closed(statuses):
+                    await self.render(closed=True)
+                    message = "Три поставщика закрыты: цены скрыты"
+                    self.state.set("last_result", message)
+                    return message
                 if timed_out_visible:
                     message = "Не удалось вовремя прочитать: " + ", ".join(timed_out_visible) + ". Последний опубликованный прайс сохранён."
                     self.state.set("last_result", message)
                     return message
-                statuses = [self._aggregate_status(fresh_by_source[index])
-                            for index in range(len(self.settings.sources))]
-
                 fresh_supernova = self.supernova_items()
                 if (self.settings.sources and statuses and all(status == "closed" for status in statuses)
                         and not fresh_supernova):
@@ -1106,7 +1116,9 @@ class SyncService:
                 if source not in self._slot_sources(slot):
                     continue
                 value = cache.get(self.source_cache_key(source, slot), {})
-                if value.get("status"):
+                if value.get("error"):
+                    values.append("error")
+                elif value.get("status"):
                     values.append(value.get("status"))
             result.append(self._aggregate_status(values))
         return result
@@ -1118,7 +1130,8 @@ class SyncService:
             await self.connect()
             cache = self.state.get("sources", {})
             statuses = self._cached_source_statuses(cache)
-            closed = bool(statuses) and all(status == "closed" for status in statuses) and not self.supernova_items()
+            closed = (self._three_suppliers_closed(statuses) or
+                      (bool(statuses) and all(status == "closed" for status in statuses) and not self.supernova_items()))
             if closed:
                 return await self.render(closed=True)
             return await self.render(closed=False)
