@@ -176,9 +176,11 @@ class ChannelController(FirstMessageController):
         items = [Item.from_dict(data) for data in cached.get("items", [])]
         eligible = self.service.source_items(source, items)
         after_filters = select_items(eligible, self.service.settings, self.service.options())
+        iphone_blocked = item.get("exclude_iphone", str(item["title"]).strip().casefold() == "прайс")
         text = (
             f"🔎 Канал: {item['title']} · аккаунт {slot}\n\n"
             f"{reading}\n{stats}\n{visibility}\n"
+            f"iPhone в общем прайсе из этого канала: {'⛔ исключены' if iphone_blocked else '✅ включены'}\n"
             f"Последняя проверка: {self.msk(cached.get('checked'))}\n"
             f"Успешное чтение: {self.msk(cached.get('last_success'))}\n"
             f"Сохранено позиций: {len(items)}\n"
@@ -222,6 +224,8 @@ class ChannelController(FirstMessageController):
               "callback_data": "channels:toggle:" + token}],
             [{"text": "📝 Отключить чтение подписей" if item.get("read_captions", False) else
                       "📝 Читать только текст подписей", "callback_data": "channels:captions:" + token}],
+            [{"text": "📱 Включить iPhone" if iphone_blocked else "🚫 Исключить iPhone",
+              "callback_data": "channels:iphone:" + token}],
             [{"text": "🔄 Проверить чтение", "callback_data": "channels:check"}],
             [{"text": "⚙️ Категории прайса", "callback_data": "blocks:0"}],
             [{"text": "⬅️ К списку каналов", "callback_data": "channels:show:0"}],
@@ -390,7 +394,7 @@ class ChannelController(FirstMessageController):
         elif data == "channels:check":
             await self.request_sync(chat_id)
             await self.send(chat_id, "После проверки открой «Каналы поставщиков», чтобы увидеть результат.")
-        elif data.startswith(("channels:details:", "channels:toggle:", "channels:captions:")):
+        elif data.startswith(("channels:details:", "channels:toggle:", "channels:captions:", "channels:iphone:")):
             token = data.rsplit(":", 1)[1]
             item = next((candidate for candidate in self.service.state.get("supplier_channels", [])
                          if channel_token(candidate["peer"], candidate.get("slot", 1)) == token), None)
@@ -398,6 +402,15 @@ class ChannelController(FirstMessageController):
                 await self.show_channels(chat_id, notice="Канал не найден.")
                 return
             if data.startswith("channels:details:"):
+                await self.show_channel_details(chat_id, item)
+            elif data.startswith("channels:iphone:"):
+                enabled = not item.get("exclude_iphone", str(item["title"]).strip().casefold() == "прайс")
+                try:
+                    await self.service.set_supplier_channel_iphone_filter(item["peer"], slot=item.get("slot", 1), enabled=enabled)
+                except Exception as exc:
+                    await self.send(chat_id, "Не удалось изменить фильтр iPhone: " + str(exc)[:300])
+                    return
+                item["exclude_iphone"] = enabled
                 await self.show_channel_details(chat_id, item)
             elif data.startswith("channels:captions:"):
                 enabled = not item.get("read_captions", False)

@@ -537,6 +537,7 @@ class SyncService:
     def _load_channel_sources(self):
         self.channel_sources = {1: [], 2: []}
         self.channel_visibility = {}
+        self.channel_exclude_iphone = {}
         for item in self.state.get("supplier_channels", []):
             if not isinstance(item, dict) or not item.get("peer") or not item.get("title"):
                 continue
@@ -548,6 +549,7 @@ class SyncService:
                             read_captions=item.get("read_captions", False) is True)
             self.channel_sources[slot].append(source)
             self.channel_visibility[(slot, str(source.peer))] = item.get("visible", True) is not False
+            self.channel_exclude_iphone[str(source.peer)] = item.get("exclude_iphone", str(item["title"]).strip().casefold() == "прайс")
         self.settings.sources = self.base_sources + tuple(
             source for slot in (1, 2) for source in self.channel_sources[slot]
         )
@@ -668,6 +670,22 @@ class SyncService:
             self._replace_channel_readers()
             # This is a parser change, not a publication-only toggle.
             # Full Telegram feed must be read again; cached items cannot help.
+        return bool(enabled)
+
+    async def set_supplier_channel_iphone_filter(self, peer, slot=1, enabled=True):
+        async with self.lock:
+            channels = self.state.get("supplier_channels", [])
+            match = next((item for item in channels if str(item.get("peer")) == str(peer)
+                          and item.get("slot", 1) == int(slot)), None)
+            if match is None:
+                raise ValueError("Канал не найден")
+            match["exclude_iphone"] = bool(enabled)
+            self.state.set("supplier_channels", channels)
+            self._load_channel_sources()
+            self.last_attempt = 0
+            self.wake.set()
+        if self.ready:
+            await self.refresh_format()
         return bool(enabled)
 
     async def remove_supplier_channel(self, peer, slot=1):
@@ -825,6 +843,8 @@ class SyncService:
         # Source 1 is HI, including its account-2 price comparison. Apply the
         # restriction before merging so an outdated HI price cannot win for
         # Samsung or another non-Apple product. Other suppliers stay unrestricted.
+        if self.channel_exclude_iphone.get(str(source.peer), False):
+            items = [item for item in items if item.accessory or not iphone_model(item.title)]
         if not self.base_sources or source != self.base_sources[0]:
             return list(items)
         result = []

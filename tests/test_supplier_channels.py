@@ -26,6 +26,20 @@ class ChannelServiceTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    async def test_channel_named_price_excludes_iphones_only_for_that_channel(self):
+        with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())), patch("runtime.utils.get_peer_id", return_value=-100123):
+            await self.service.add_supplier_channel("@supplier_channel")
+        channel = self.service.settings.sources[-1]
+        iphone = Item("iPhone 17 256 Black", Decimal("60000"), "RUB", "iPhone 17")
+        samsung = Item("Samsung S26 256 Black", Decimal("50000"), "RUB", "Samsung")
+        self.assertEqual(self.service.source_items(channel, [iphone, samsung]), [samsung])
+        self.assertEqual(self.service.source_items(self.service.base_sources[0], [iphone]), [iphone])
+        restarted = SyncService(self.client, Settings(sources=self.service.base_sources), StateStore(self.state.path))
+        self.assertEqual(restarted.source_items(restarted.settings.sources[-1], [iphone, samsung]), [samsung])
+        restarted.ready = False
+        await restarted.set_supplier_channel_iphone_filter(channel.peer, enabled=False)
+        self.assertEqual(restarted.source_items(channel, [iphone, samsung]), [iphone, samsung])
+
     async def test_channel_is_persistent_and_not_read_by_second_account(self):
         with patch("runtime.resolve_input_peer", AsyncMock(return_value=object())), patch("runtime.utils.get_peer_id", return_value=-100123):
             await self.service.add_supplier_channel("@supplier_channel")
