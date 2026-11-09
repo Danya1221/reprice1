@@ -220,9 +220,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             "iPhone 17 256 Black SIM + eSIM Актив 🇪🇺 — 56000",
         ])]).items
         merged = merge_lowest([rows])
-        self.assertEqual(len(merged), 5)
+        self.assertEqual(len(merged), 4)
         self.assertEqual(sorted(item.price for item in merged),
-                         list(map(Decimal, (56000, 57000, 58000, 59000, 70000))))
+                         list(map(Decimal, (56000, 57000, 58000, 70000))))
 
     async def test_all_ten_user_iphone_17_color_storage_pairs_keep_lowest_price(self):
         pairs = [
@@ -300,9 +300,27 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             "iPhone 17 256 Black (1Sim+eSim) ASIS — 65 000",
         ])]).items
         merged = merge_lowest([rows])
-        self.assertEqual(len(merged), 8)
+        self.assertEqual(len(merged), 7)
         self.assertEqual(sorted(item.price for item in merged),
-                         list(map(Decimal, (62000, 65000, 67000, 70000, 73200, 75000, 90000, 157100))))
+                         list(map(Decimal, (62000, 65000, 67000, 70000, 75000, 90000, 157100))))
+
+    async def test_iphone_18_same_sim_memory_and_colour_selects_cheapest(self):
+        rows = parse_documents(["\n".join([
+            "iPhone 18 Pro Max 512 Black (1Sim+eSim) 🇭🇰 — 142700",
+            "Apple iPhone 18 Pro Max 512GB SIM+eSIM Black 🇪🇺 — 143500",
+            "iPhone 18 Pro Max 512GB Black SIM — 144000",
+            "iPhone 18 Pro Max 1TB Burgundy SIM+eSIM 🇭🇰 — 195500",
+            "iPhone 18 Pro Max 1TB Burgundy SIM+eSIM 🇪🇺 — 194500",
+            "iPhone 18 Pro 256 Black eSIM 🇯🇵 — 106200",
+            "Apple iPhone 18 Pro 256GB eSIM Black 🇺🇸 — 106000",
+            "iPhone 18 Pro 256 Black 1Sim+eSim 🇭🇰 — 117700",
+            "iPhone 18 Pro 256 Black ACTIVE eSIM 🇺🇸 — 104500",
+            "iPhone 18 Pro 256 Black eSIM ASIS 🇺🇸 — 100000",
+            "iPhone 18 Pro 256 Black eSIM Уценка 🇺🇸 — 99000",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(sorted(item.price for item in merged),
+                         list(map(Decimal, (99000, 100000, 104500, 106000, 117700, 142700, 194500))))
 
     async def test_user_samsung_pairs_merge_only_with_matching_specs_and_region(self):
         rows = parse_documents(["\n".join([

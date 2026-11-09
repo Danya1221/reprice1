@@ -120,9 +120,9 @@ def merge_key(item):
         return neo_key
     if iphone_model(title) and not item.accessory:
         title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
-        # iPhone Air uses eSIM in every market. Public output hides flags, so
-        # identical Air offers across markets must share one lowest-price row.
-        if iphone_model(title).casefold() == "iphone air" and item.sim == "esim":
+        # Once the SIM variant is known, equivalent market offers are shown
+        # as one row. Keep flags for unknown SIM variants rather than guessing.
+        if item.sim != "unknown":
             title = FLAGS.sub("", title)
     if item.block.startswith("Samsung") and not item.accessory:
         flags = "".join(FLAGS.findall(title))
@@ -158,7 +158,10 @@ def merge_key(item):
             "sim": r"\b(?:physical\s*sim|физическ\w*\s*sim|(?:1\s*)?(?:nano\s*)?sim)\b",
         }
         title = re.sub(patterns[item.sim], " ", title, flags=re.I)
-    return identity(title, item.sim, item.currency)
+    # The public SIM section combines supplier labels "SIM" and "SIM+eSIM";
+    # keep eSIM-only and two-physical-SIM variants separate.
+    merge_sim = "hybrid" if iphone_model(title) and item.sim in {"sim", "hybrid"} else item.sim
+    return identity(title, merge_sim, item.currency)
 
 
 def conflicting_galaxy_book_keys(items):
