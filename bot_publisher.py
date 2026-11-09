@@ -380,6 +380,10 @@ class BotAPIPublisher:
             changes = 0
             if not rebuilding:
                 changes = await self._verify_or_rebuild_manifest(pages, manifest, binding)
+                # If a saved message disappeared, compact the surviving slots
+                # before writing so a replacement is appended at the end.
+                manifest = self.arrange_manifest(pages, manifest)
+                self.state.set("published", {"binding": binding, "messages": manifest})
 
             for key, content in pages.items():
                 entry = manifest.get(key)

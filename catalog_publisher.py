@@ -120,52 +120,18 @@ class CatalogPublisher(PinnedBotAPIPublisher):
         self.layout_lock = asyncio.Lock()
 
     def arrange_manifest(self, pages, manifest):
-        # A packed page's key changes when sections are added/removed. Rebind
-        # an unmatched page to the same published slot when its stable order
-        # label (or an unambiguous overlapping heading) identifies that page.
-        arranged = dict(manifest)
-        old_navigation = self.state.get("published_navigation", {}) or {}
-        if old_navigation.get("binding") == self.binding():
-            old_labels = {entry.get("page_key"): entry.get("order_key")
-                          for entry in old_navigation.get("entries", [])}
-        else:
-            old_labels = {}
-        old_keys = list(manifest)
-        inferred = physical_message_labels([manifest[key].get("content", "") for key in old_keys])
-        for key, label in zip(old_keys, inferred):
-            old_labels.setdefault(key, label)
-        new_labels = dict(zip(pages, physical_page_labels(pages)))
-        available = {key for key in manifest if key not in pages}
-
-        def parts(label):
-            match = re.fullmatch(r"(.+?)\s+·\s+(\d+)", label or "")
-            base = (match.group(1) if match else (label or "")).strip().casefold()
-            occurrence = int(match.group(2)) if match else 1
-            bundle = iphone_bundle_key(base)
-            return ({bundle} if bundle else {x.strip() for x in base.split("•") if x.strip()}), occurrence
-
-        for key in pages:
-            if key in arranged:
-                continue
-            label = new_labels[key]
-            exact = [old for old in old_keys if old in available and old_labels.get(old) == label]
-            candidate = exact[0] if len(exact) == 1 else None
-            if candidate is None and not exact:
-                names, occurrence = parts(label)
-                scores = []
-                for old in old_keys:
-                    if old not in available:
-                        continue
-                    previous, previous_occurrence = parts(old_labels.get(old))
-                    common = len(names & previous)
-                    if common and occurrence == previous_occurrence:
-                        scores.append((common / len(names | previous), old))
-                scores.sort(reverse=True)
-                if scores and (len(scores) == 1 or scores[0][0] > scores[1][0]):
-                    candidate = scores[0][1]
-            if candidate is not None:
-                arranged[key] = arranged.pop(candidate)
-                available.remove(candidate)
+        """Assign ordered pages to existing Telegram slots in chronological order."""
+        slots = sorted((entry for entry in manifest.values() if entry.get("id")),
+                       key=lambda entry: int(entry["id"]))
+        arranged = {}
+        for key, entry in zip(pages, slots):
+            arranged[key] = entry
+        # Retain surplus IDs until publish() successfully deletes them.
+        for entry in slots[len(pages):]:
+            key = f"__surplus_slot__:{entry['id']}"
+            while key in pages or key in arranged:
+                key += ":old"
+            arranged[key] = entry
         return arranged
 
     def catalog_records(self):

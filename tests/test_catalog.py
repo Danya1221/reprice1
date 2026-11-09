@@ -61,13 +61,13 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(button["url"], f"https://t.me/c/777/{old_id}")
         self.assertIn("COROS", button["text"])
 
-    async def test_new_unrelated_section_does_not_reuse_existing_page(self):
+    async def test_new_unrelated_section_reuses_existing_slot(self):
         await self.publisher.publish({"old": "<b>Dyson</b>\n\n<code>Dyson HS08 — 40000</code>"})
         old_id = self.state.get("published")["messages"]["old"]["id"]
         self.publisher.calls.clear()
         await self.publisher.publish({"new": "<b>Samsung</b>\n\n<code>Samsung S26 — 60000</code>"})
         new_id = self.state.get("published")["messages"]["new"]["id"]
-        self.assertNotEqual(new_id, old_id)
+        self.assertEqual(new_id, old_id)
 
     async def test_catalog_links_and_physical_post_order_follow_new_order(self):
         await self.publisher.publish(self.pages())
@@ -78,11 +78,29 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         pages = self.pages(["Dyson", "Apple", "iPhone 17"])
         await self.publisher.publish(pages)
         manifest = self.state.get("published")["messages"]
+        self.assertEqual([manifest[key]["id"] for key in pages], sorted(entry["id"] for entry in manifest.values()))
         self.assertEqual(before, {entry["id"] for entry in manifest.values()})
         buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
         expected = expected_catalog_titles(pages)
         self.assertEqual([b["text"] for b in buttons], expected)
         self.assertEqual(buttons[0]["url"], f"https://t.me/c/777/{manifest[next(iter(pages))]['id']}")
+        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+
+    async def test_scrambled_iphone_messages_are_reordered_into_existing_slots(self):
+        pages = {f"iphone-{year}": f"<b>iPhone {year}</b>\n\n<code>iPhone {year} 256 Black — 60000</code>"
+                 for year in (11, 16, 17, 18)}
+        scrambled = {key: pages[key] for key in ("iphone-18", "iphone-16", "iphone-11", "iphone-17")}
+        await self.publisher.publish(scrambled)
+        old_ids = sorted(entry["id"] for entry in self.state.get("published")["messages"].values())
+        self.publisher.calls.clear()
+        await self.publisher.publish(pages)
+        manifest = self.state.get("published")["messages"]
+        self.assertEqual([manifest[key]["id"] for key in pages], old_ids)
+        buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertEqual([b["url"] for b in buttons], [f"https://t.me/c/777/{ident}" for ident in old_ids])
+        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
+        self.publisher.calls.clear()
+        await self.publisher.publish(pages)
         self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
 
     async def test_order_editor_shows_published_buttons_even_when_cache_differs(self):
@@ -121,7 +139,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         manifest = self.state.get("published")["messages"]
         slots = sorted(manifest.values(), key=lambda entry: entry["id"])
         self.assertTrue(original_ids.issubset({entry["id"] for entry in slots}))
-        self.assertEqual(physical_message_labels([entry["content"] for entry in slots]), ["Dyson", "Apple", "iPhone 17", "iPhone 18"])
+        self.assertEqual(physical_message_labels([entry["content"] for entry in slots]), expected)
         buttons = [button for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for button in row]
         self.assertEqual([button["text"] for button in buttons], expected)
         by_title = {physical_message_labels([entry["content"]])[0]: entry for entry in slots}
@@ -236,10 +254,10 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         second = {"new:0": "<b>Samsung</b>\n\n<b>— Samsung S26 —</b>\n<code>S26 12/256 — 65000</code>"}
         await self.publisher.publish(second)
         manifest = self.state.get("published")["messages"]
-        self.assertNotEqual(next(iter(manifest.values()))["id"], message_id)
+        self.assertEqual(next(iter(manifest.values()))["id"], message_id)
         buttons = [b for row in self.catalog_edit()["reply_markup"]["inline_keyboard"] for b in row]
         self.assertEqual([b["text"] for b in buttons], ["Samsung"])
-        self.assertTrue(any(method == "sendMessage" for method, _ in self.publisher.calls))
+        self.assertFalse(any(method == "sendMessage" for method, _ in self.publisher.calls))
 
     async def test_existing_price_slots_stay_prices_and_catalog_is_last(self):
         await self.publisher.ensure_target()
@@ -249,8 +267,8 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         entries = self.state.get("published")["messages"].values()
         self.assertEqual(len(entries), len(self.pages()))
         price_ids = [entry["id"] for entry in entries]
-        self.assertNotIn(20, price_ids)
-        self.assertNotIn(21, price_ids)
+        self.assertIn(20, price_ids)
+        self.assertIn(21, price_ids)
         self.assertGreater(self.state.get("catalog")["messages"][0]["id"], max(price_ids))
 
     async def test_catalog_stays_compact_even_with_many_price_blocks(self):
