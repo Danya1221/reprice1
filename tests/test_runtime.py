@@ -12,13 +12,17 @@ from telethon.errors import FloodWaitError
 
 from config import Settings, Source
 from control_catalog import CatalogController
-from control_botapi import BotAPIController
+from control_botapi import BotAPIController, moscow_time
 from prices import Item, ParseResult, parse_documents, physical_page_labels
 from runtime import SyncService, is_open, LoginRequired, merge_lowest
 from state import StateStore
 
 
 class HoursTests(unittest.TestCase):
+    def test_source_time_is_converted_to_moscow(self):
+        self.assertEqual(moscow_time("2026-11-11T15:44:23+00:00"), "11.11.2026 18:44 МСК")
+        self.assertEqual(moscow_time(0), "01.01.1970 03:00 МСК")
+        self.assertEqual(moscow_time("2026-11-11T15:44:23"), "неизвестно")
     def test_moscow_start_has_no_fixed_close(self):
         settings = Settings()
         # UTC -> Moscow (+3): 06=09 (before start), 07=10 (start),

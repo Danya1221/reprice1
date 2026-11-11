@@ -9,6 +9,8 @@ import hashlib
 import logging
 import re
 from contextlib import suppress
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from telethon import TelegramClient
@@ -26,6 +28,21 @@ from config import decimal_value
 from prices import marked_price
 
 log = logging.getLogger(__name__)
+
+
+def moscow_time(value):
+    if value is None or value == "":
+        return "неизвестно"
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            dt = datetime.fromtimestamp(value, timezone.utc)
+        else:
+            dt = datetime.fromisoformat(str(value))
+            if dt.tzinfo is None:
+                return "неизвестно"
+        return dt.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M МСК")
+    except (ValueError, TypeError, OverflowError, OSError):
+        return "неизвестно"
 
 
 class BotAPIController:
@@ -491,13 +508,13 @@ class BotAPIController:
             if not rows:
                 await self.send(chat_id, "В последнем опубликованном прайсе не нашёл. Попробуй часть названия.")
                 return
-            parts = [f"🔎 Последняя публикация: {snapshot.get('time', 'неизвестно')} (UTC)"]
+            parts = [f"🔎 Последняя публикация: {moscow_time(snapshot.get('time'))}"]
             for row in rows[:8]:
                 sources = row.get("sources", [])
                 detail = []
                 for source in sources[:5]:
                     warning = " · ошибка последней проверки" if source.get("error") else ""
-                    detail.append(f"  {source['source']}{warning}\n  У поставщика: {source['title']}\n  Проверено: {source.get('checked') or 'неизвестно'}")
+                    detail.append(f"  {source['source']}{warning}\n  У поставщика: {source['title']}\n  Проверено: {moscow_time(source.get('checked'))}")
                 parts.append(f"{row['title']}\nЗакупка: {row['purchase']} · в прайсе: {row['public']}\n" +
                              ("\n".join(detail) if detail else "Источник не подтверждён в сохранённых данных."))
             if len(rows) > 8:
