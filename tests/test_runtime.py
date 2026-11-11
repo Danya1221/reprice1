@@ -14,11 +14,17 @@ from config import Settings, Source
 from control_catalog import CatalogController
 from control_botapi import BotAPIController, moscow_time
 from prices import Item, ParseResult, parse_documents, physical_page_labels
-from runtime import SyncService, is_open, LoginRequired, merge_lowest
+from runtime import SyncService, is_open, LoginRequired, merge_lowest, sync_due
 from state import StateStore
 
 
 class HoursTests(unittest.TestCase):
+    def test_interval_counts_from_start_with_gap_after_long_run(self):
+        self.assertFalse(sync_due(399, 100, 280, 300))
+        self.assertTrue(sync_due(400, 100, 280, 300))
+        self.assertFalse(sync_due(519, 100, 490, 300))
+        self.assertTrue(sync_due(520, 100, 490, 300))
+        self.assertTrue(sync_due(1, 0, 0, 300))
     def test_source_time_is_converted_to_moscow(self):
         self.assertEqual(moscow_time("2026-11-11T15:44:23+00:00"), "11.11.2026 18:44 МСК")
         self.assertEqual(moscow_time(0), "01.01.1970 03:00 МСК")
@@ -325,6 +331,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         merged = merge_lowest([rows])
         self.assertEqual(sorted(item.price for item in merged),
                          list(map(Decimal, (99000, 100000, 104500, 106000, 117700, 142700, 194500))))
+        await self.service.render(items=merged)
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertNotIn("256GB", content)
+        self.assertNotIn("512GB", content)
+        self.assertEqual(content.count("iPhone 18 Pro Max 512 Black SIM"), 1)
 
     async def test_user_samsung_pairs_merge_only_with_matching_specs_and_region(self):
         rows = parse_documents(["\n".join([

@@ -180,7 +180,7 @@ class ChannelController(FirstMessageController):
         text = (
             f"🔎 Канал: {item['title']} · аккаунт {slot}\n\n"
             f"{reading}\n{stats}\n{visibility}\n"
-            f"iPhone в общем прайсе из этого канала: {'⛔ исключены' if iphone_blocked else '✅ включены'}\n"
+            f"Apple в общем прайсе из этого канала: {'⛔ исключена' if iphone_blocked else '✅ включена'}\n"
             f"Последняя проверка: {self.msk(cached.get('checked'))}\n"
             f"Успешное чтение: {self.msk(cached.get('last_success'))}\n"
             f"Сохранено позиций: {len(items)}\n"
@@ -224,7 +224,7 @@ class ChannelController(FirstMessageController):
               "callback_data": "channels:toggle:" + token}],
             [{"text": "📝 Отключить чтение подписей" if item.get("read_captions", False) else
                       "📝 Читать только текст подписей", "callback_data": "channels:captions:" + token}],
-            [{"text": "📱 Включить iPhone" if iphone_blocked else "🚫 Исключить iPhone",
+            [{"text": "🍎 Включить Apple" if iphone_blocked else "🚫 Исключить Apple",
               "callback_data": "channels:iphone:" + token}],
             [{"text": "🔄 Проверить чтение", "callback_data": "channels:check"}],
             [{"text": "⚙️ Категории прайса", "callback_data": "blocks:0"}],
@@ -408,7 +408,7 @@ class ChannelController(FirstMessageController):
                 try:
                     await self.service.set_supplier_channel_iphone_filter(item["peer"], slot=item.get("slot", 1), enabled=enabled)
                 except Exception as exc:
-                    await self.send(chat_id, "Не удалось изменить фильтр iPhone: " + str(exc)[:300])
+                    await self.send(chat_id, "Не удалось изменить фильтр Apple: " + str(exc)[:300])
                     return
                 item["exclude_iphone"] = enabled
                 await self.show_channel_details(chat_id, item)

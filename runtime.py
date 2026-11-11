@@ -25,6 +25,13 @@ from supernova_auto import SupernovaAutoError, request_supernova_export
 log = logging.getLogger(__name__)
 SUPERNOVA_BOT = "@vodorod00bot"
 MAX_SOURCE_SECONDS = 300
+MIN_SYNC_GAP_SECONDS = 30
+
+
+def sync_due(now, last_attempt, last_finished, interval):
+    if not last_attempt:
+        return True
+    return now >= max(last_attempt + interval, last_finished + MIN_SYNC_GAP_SECONDS)
 
 
 class LoginRequired(RuntimeError):
@@ -258,6 +265,7 @@ class SyncService:
         self.stop_event = asyncio.Event()
         self.busy = False
         self.last_attempt = 0.0
+        self.last_finished = 0.0
         self.retry_after = 0.0
         self.ready = client is not None
         self.startup_error = None
@@ -847,7 +855,12 @@ class SyncService:
         # restriction before merging so an outdated HI price cannot win for
         # Samsung or another non-Apple product. Other suppliers stay unrestricted.
         if self.channel_exclude_iphone.get(str(source.peer), False):
-            items = [item for item in items if item.accessory or not iphone_model(item.title)]
+            def is_apple(item):
+                block = physical_brand_label(item.block)
+                title = FLAGS.sub("", item.title)
+                return (block in {"Apple", "iPhone"} or bool(iphone_model(title)) or
+                        bool(re.search(r"\b(?:apple|macbook|imac|ipad|airpods|airtag|homepod|mac\s+(?:mini|studio)|apple\s+watch)\b", title, re.I)))
+            items = [item for item in items if not is_apple(item)]
         if not self.base_sources or source != self.base_sources[0]:
             return list(items)
         result = []
@@ -1006,10 +1019,10 @@ class SyncService:
                 return "Ожидаю завершения FloodWait от Telegram"
             self.busy = True
             self.sync_started_at = time.monotonic()
+            self.last_attempt = asyncio.get_running_loop().time()
             self.sync_phase = "Подключаюсь к Telegram"
             try:
                 await self.connect()
-                self.last_attempt = asyncio.get_running_loop().time()
                 self.state.set("last_check", timestamp())
 
                 old_cache = self.state.get("sources", {})
@@ -1167,10 +1180,7 @@ class SyncService:
             finally:
                 self.busy = False
                 self.sync_phase = ""
-                # Measure the polling interval from the end of the request.
-                # A slow supplier or a large publication must not trigger a
-                # new request immediately after the current one finishes.
-                self.last_attempt = asyncio.get_running_loop().time()
+                self.last_finished = asyncio.get_running_loop().time()
 
     async def pause(self):
         async with self.lock:
@@ -1296,15 +1306,15 @@ class SyncService:
         self.ready = False
 
     async def run(self):
-        last_start_state = None
+        last_start_state = is_open(self.settings)
         while not self.stop_event.is_set() and not self.reload_requested:
             self.wake.clear()
             self._auto_enable_availability()
             now = asyncio.get_running_loop().time()
             start_state = is_open(self.settings)
             interval = self.options().get("poll_seconds", self.settings.poll_seconds)
-            due = now - self.last_attempt >= interval or self.last_attempt == 0 or start_state != last_start_state
-            if self.enabled() and due and now >= self.retry_after:
+            due = sync_due(now, self.last_attempt, self.last_finished, interval) or start_state != last_start_state
+            if self.enabled() and due and not self.busy and now >= self.retry_after:
                 try:
                     await self.sync()
                 except LoginRequired as exc:

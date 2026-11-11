@@ -40,7 +40,7 @@ iPhone 17 Pro Max 1TB Blue 🇯🇵 — 147600
 Dyson HS08 🇪🇺 — 40000"""]).items
         titles = [display_title(item) for item in items]
         self.assertEqual(titles[0], "iPhone 17 256 Black SIM")
-        self.assertEqual(titles[1], "iPhone 17 256GB Black SIM")
+        self.assertEqual(titles[1], "iPhone 17 256 Black SIM")
         self.assertEqual(titles[2], "iPhone 17 Pro 512 Blue ASIS eSIM")
         self.assertEqual(titles[3], "iPhone 17 Pro Max 1TB Blue eSIM")
         self.assertIn("🇪🇺", titles[4])
@@ -57,7 +57,7 @@ iPhone 17 Air 512 Black (eSim) — 87500"""]).items
         content = "\n".join(render_blocks(items, Settings()).values())
         self.assertIn("256 Black eSIM — 75 000</code>\n<code>iPhone 17 Air 256 Blue", content)
         self.assertIn("256 Blue eSIM — 73 500</code>\n\n<code>", content)
-        self.assertIn("512GB Blue eSIM — 79 800</code>\n<code>iPhone 17 Air 512 Black", content)
+        self.assertIn("512 Blue eSIM — 79 800</code>\n<code>iPhone 17 Air 512 Black", content)
         self.assertIn("512 Black eSIM — 87 500</code>\n\n<code>iPhone 17 Air 1TB", content)
         self.assertNotIn("· eSIM", content)
 

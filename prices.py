@@ -1029,6 +1029,8 @@ def display_title(item):
     if iphone_model(title) and not item.accessory:
         title = FLAGS.sub("", title)
         title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
+        # Display storage consistently; 256GB and 256 identify the same size.
+        title = re.sub(r"\b(64|128|256|512)\s*(?:gb|гб)\b", r"\1", title, flags=re.I)
         # The supplier may place the SIM marker anywhere in the name.
         sim_marker = (r"(?<!\w)(?:(?:1\s*)?(?:nano\s*)?sim\s*(?:\+|/|&|and|и)\s*e[\s-]*sim|"
                       r"e[\s-]*sim\s*(?:\+|/|&|and|и)\s*(?:1\s*)?(?:nano\s*)?sim|"
