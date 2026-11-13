@@ -62,7 +62,7 @@ INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activate
 ACTIVE = re.compile(r"\bактив\w*|\bactive\b(?![\s-]+(?:band|strap|noise)\b)|"
                     r"\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
 IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max\b|pro\b|"
-                    r"plus\b|mini\b|air\b)?|air\b|se(?:\s*\d)?)", re.I)
+                    r"plus\b|mini\b|air\b)?|air\b|duo\b|se(?:\s*\d)?)", re.I)
 SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini|air))?)\s+(?=\d{1,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
 BRANDS = (
     ("Ray-Ban Meta", r"ray[\s-]?ban|wayfarer|skyler"),
@@ -1210,6 +1210,13 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                 model = samsung_phone_group(item.title)
                 return (0 if model else 1, model or (),
                         samsung_memory_sort(item.title), samsung_colour_sort(item.title), item_sort(item))
+            if block == "Honor":
+                memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\s*(GB|TB|ГБ|ТБ)?\b", item.title, re.I)
+                if memory:
+                    storage = int(memory.group(2)) * (1024 if (memory.group(3) or "").upper() in {"TB", "ТБ"} else 1)
+                    model = clean(FLAGS.sub("", item.title[:memory.start()])).casefold()
+                    return (0, model, storage, int(memory.group(1)), item_sort(item))
+                return (1, "", 0, 0, item_sort(item))
             if block in {"CPO", "ASIS"}:
                 name = iphone_model(item.title).casefold()
                 natural = tuple(int(part) if part.isdigit() else part

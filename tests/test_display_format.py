@@ -5,6 +5,24 @@ from prices import build_physical_message, display_title, parse_documents, rende
 
 
 class DisplayFormatTests(unittest.TestCase):
+    def test_honor_models_sort_by_storage_before_ram(self):
+        rows = parse_documents(["\n".join([
+            "Honor 600 12/512GB Black 🇬🇧 — 44200",
+            "Honor 600 12/512GB Golden White 🇬🇧 — 44200",
+            "Honor 600 8/256GB Black 🇷🇺 — 38100",
+            "Honor 600 8/256GB Orange 🇷🇺 — 37900",
+            "Honor 600 8/512GB Black 🇰🇿 — 42000",
+        ])]).items
+        content = "\n".join(render_blocks(rows, Settings()).values())
+        self.assertLess(content.index("8/256GB Black"), content.index("8/512GB Black"))
+        self.assertLess(content.index("8/512GB Black"), content.index("12/512GB Black"))
+
+    def test_iphone_duo_and_samsung_a57_are_recognized(self):
+        rows = parse_documents(["iPhone Duo 256 Black — 75000\nSamsung A57 8/256 Black — 32000"]).items
+        self.assertEqual([item.block for item in rows], ["iPhone Duo", "Samsung A + S25"])
+        content = "\n".join(render_blocks(rows, Settings()).values())
+        self.assertIn("iPhone Duo 256 Black", content)
+        self.assertIn("Samsung A57", content)
     def test_full_row_including_price_is_copyable_and_generic_header_removed(self):
         items = parse_documents(["AirPods 4 — 9800"]).items
         content = next(iter(render_blocks(items, Settings()).values()))
