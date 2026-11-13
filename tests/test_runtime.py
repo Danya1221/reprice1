@@ -337,6 +337,26 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("512GB", content)
         self.assertEqual(content.count("iPhone 18 Pro Max 512 Black SIM"), 1)
 
+    async def test_iphone_18_pro_max_blue_and_glacier_are_same_colour(self):
+        rows = parse_documents(["\n".join([
+            "iPhone 18 Pro Max 256 Blue SIM — 127500",
+            "iPhone 18 Pro Max 256GB Glacier SIM — 127000",
+            "iPhone 18 Pro Max 256 Blue eSIM — 119000",
+            "iPhone 18 Pro Max 256 Glacier eSIM — 120000",
+            "iPhone 18 Pro Max 512 Blue SIM — 145000",
+            "iPhone 18 Pro Max 256 Blue ACTIVE SIM — 125000",
+            "iPhone 18 Pro 256 Blue SIM — 115000",
+            "iPhone 18 Pro 256 Glacier SIM — 116000",
+        ])]).items
+        merged = merge_lowest([rows])
+        self.assertEqual(sorted(i.price for i in merged),
+                         list(map(Decimal, (115000, 116000, 119000, 125000, 127000, 145000))))
+        await self.service.render(items=merged)
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertIn("iPhone 18 Pro Max 256 Glacier SIM — 127 000", content)
+        self.assertIn("iPhone 18 Pro Max 256 Glacier eSIM — 119 000", content)
+        self.assertNotIn("iPhone 18 Pro Max 256 Blue", content)
+
     async def test_user_samsung_pairs_merge_only_with_matching_specs_and_region(self):
         rows = parse_documents(["\n".join([
             "Samsung S26 12/256GB () Cobalt Violet 🇰🇿 — 58 500",

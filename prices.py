@@ -1017,6 +1017,12 @@ def macbook_configuration(title):
             memory.group(1), re.sub(r"\s+", "", memory.group(2)).casefold())
 
 
+def normalize_iphone_18_pro_max_color(title):
+    if iphone_model(title).casefold() != "iphone 18 pro max":
+        return title
+    return re.sub(r"\b(?:glacier(?:\s+blue)?|blue)\b", "Glacier", title, flags=re.I)
+
+
 def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
     # Apply at render time so previously saved prices lose the note as well.
@@ -1027,6 +1033,7 @@ def display_title(item):
                        r"\1Samsung ", title, count=1, flags=re.I)
         title = clean(re.sub(r"\(\s*\)", "", title))
     if iphone_model(title) and not item.accessory:
+        title = normalize_iphone_18_pro_max_color(title)
         title = FLAGS.sub("", title)
         title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
         # Display storage consistently; 256GB and 256 identify the same size.

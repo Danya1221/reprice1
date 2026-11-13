@@ -15,7 +15,7 @@ from config import Source
 from prices import (
     FLAGS, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
-    display_title, marked_price, price_text,
+    display_title, marked_price, price_text, normalize_iphone_18_pro_max_color,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -126,6 +126,7 @@ def merge_key(item):
     if neo_key is not None:
         return neo_key
     if iphone_model(title) and not item.accessory:
+        title = normalize_iphone_18_pro_max_color(title)
         title = re.sub(r"\bapple\s+(?=iphone\b)", "", title, flags=re.I)
         # Once the SIM variant is known, equivalent market offers are shown
         # as one row. Keep flags for unknown SIM variants rather than guessing.
