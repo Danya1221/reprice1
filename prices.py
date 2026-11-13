@@ -62,8 +62,8 @@ INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activate
 ACTIVE = re.compile(r"\bактив\w*|\bactive\b(?![\s-]+(?:band|strap|noise)\b)|"
                     r"\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
 IPHONE = re.compile(r"\b(?:iphone|айфон)\s*:?\s*(\d{1,2}\s*(?:e\b|pro\s*max\b|pro\b|"
-                    r"plus\b|mini\b|air\b)?|air\b|duo\b|se(?:\s*\d)?)", re.I)
-SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini|air))?)\s+(?=\d{1,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
+                    r"plus\b|mini\b|air\b|duo\b)?|air\b|duo\b|se(?:\s*\d)?)", re.I)
+SHORT_IPHONE = re.compile(r"^(\d{1,2}(?:e)?(?:\s+(?:pro\s+max|pro|plus|mini|air|duo))?)\s+(?=\d{1,4}\s*(?:gb|tb|гб|тб)?\b)", re.I)
 BRANDS = (
     ("Ray-Ban Meta", r"ray[\s-]?ban|wayfarer|skyler"),
     ("Oakley Meta", r"\boakley\b"),
@@ -1031,6 +1031,8 @@ def display_title(item):
         flags = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"
         title = re.sub(r"^" + flags + r"(?:samsung\s+galaxy|galaxy)\s+",
                        r"\1Samsung ", title, count=1, flags=re.I)
+        title = re.sub(r"^" + flags + r"(?=A\s*\d{2,3}[a-z]?\b)",
+                       r"\1Samsung ", title, count=1, flags=re.I)
         title = clean(re.sub(r"\(\s*\)", "", title))
     if iphone_model(title) and not item.accessory:
         title = normalize_iphone_18_pro_max_color(title)
@@ -1061,7 +1063,7 @@ def iphone_bundle_key(block):
     if block == "iPhone Air":
         return "iphone17"
     match = re.fullmatch(
-        r"iPhone\s+(\d{1,2})(?:e)?(?:\s+(?:Plus|Pro(?:\s+Max)?|Mini|Air))?",
+        r"iPhone\s+(\d{1,2})(?:e)?(?:\s+(?:Plus|Pro(?:\s+Max)?|Mini|Air|Duo))?",
         block, re.I,
     )
     if not match:

@@ -795,7 +795,7 @@ S25 12/256 Navy — 50500
 S25 Ultra 12/256 Black — 65000""").items
         page = next(value for value in render_blocks(items, Settings()).values() if value.startswith("<b>Samsung</b>"))
         self.assertIn("<b>— Samsung A + S25 —</b>", page)
-        self.assertIn("A17 8/256GB Blue — 17 800</code>\n\n<code>A27", page)
+        self.assertIn("A17 8/256GB Blue — 17 800</code>\n\n<code>Samsung A27", page)
         self.assertIn("<b>— Samsung S25 —</b>", page)
         self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>S25 Ultra", page)
 

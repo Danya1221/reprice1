@@ -23,6 +23,28 @@ class DisplayFormatTests(unittest.TestCase):
         content = "\n".join(render_blocks(rows, Settings()).values())
         self.assertIn("iPhone Duo 256 Black", content)
         self.assertIn("Samsung A57", content)
+
+    def test_supplier_duo_and_a57_price_rows_are_published(self):
+        text = """18 Duo 256 White (eSim) - 194300
+18 Duo 256 Night Sky (eSim) - 195300
+18 Duo 512 Night Sky (eSim) Актив - 219300
+18 Duo 1TB White (eSim) - 288300
+18 Duo 2TB Night Sky (eSim) - 325300
+iPhone Duo 256 White (eSim) - 194300
+Galaxy A57 8/128 Gray SM-A576B/DS🇰🇿
+🇰🇿 От 1 шт - 29 000
+Galaxy A57 8/256 Navy SM-A576B/DS🇷🇺
+🇷🇺 От 1 шт - 32 800
+• A57 5G 12/512GB A.Navy 🇲🇾 - 42000₽"""
+        result = parse_documents([text])
+        self.assertEqual(len(result.items), 9)
+        content = "\n".join(render_blocks(result.items, Settings()).values())
+        self.assertIn("iPhone 18 Duo 256 White eSIM — 194 300", content)
+        self.assertIn("iPhone 18 Duo 512 Night Sky Актив eSIM — 219 300", content)
+        self.assertIn("iPhone 18 Duo 1TB White eSIM — 288 300", content)
+        self.assertIn("iPhone Duo 256 White eSIM — 194 300", content)
+        self.assertIn("Samsung A57 8/128 Gray 🇰🇿 — 29 000", content)
+        self.assertIn("Samsung A57 5G 12/512GB A.Navy 🇲🇾 — 42 000", content)
     def test_full_row_including_price_is_copyable_and_generic_header_removed(self):
         items = parse_documents(["AirPods 4 — 9800"]).items
         content = next(iter(render_blocks(items, Settings()).values()))
