@@ -6,3 +6,4 @@ defusedxml==0.7.1
 tzdata==2025.2
 psycopg[binary]==3.2.9
 playwright==1.55.0
+qrcode[pil]==8.2

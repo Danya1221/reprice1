@@ -6,6 +6,7 @@ Telethon separately.
 """
 import asyncio
 import hashlib
+import io
 import logging
 import re
 from contextlib import suppress
@@ -124,6 +125,13 @@ class BotAPIController:
 
     async def _close_login(self, user_id):
         flow = self.login_flows.pop(user_id, None)
+        task = flow.get("qr_task") if flow else None
+        if task and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if flow and flow.get("qr_message_id"):
+            with suppress(Exception):
+                await self.api("deleteMessage", chat_id=flow["chat_id"], message_id=flow["qr_message_id"])
         client = flow.get("client") if flow else None
         if client is not None:
             with suppress(Exception):
@@ -168,6 +176,8 @@ class BotAPIController:
         await self.send(chat_id, text, {"inline_keyboard": [
             [{"text": "🔑 Войти в аккаунт 1", "callback_data": "account:login:1"}],
             [{"text": "🔑 Войти в аккаунт 2", "callback_data": "account:login:2"}],
+            [{"text": "📷 QR · аккаунт 1", "callback_data": "account:qr:1"},
+             {"text": "📷 QR · аккаунт 2", "callback_data": "account:qr:2"}],
         ]})
 
     async def show_markup(self, chat_id, notice=""):
@@ -246,6 +256,67 @@ class BotAPIController:
         self.login_flows[user_id] = {"stage": "phone", "client": None, "chat_id": chat_id, "slot": slot}
         await self.send(chat_id, f"🔐 Вход в Telegram-аккаунт {slot}\n\nОтправь номер телефона в международном формате, например:\n+79991234567\n\nДля отмены: /cancel")
 
+    async def send_login_qr(self, chat_id, url, slot):
+        import qrcode
+        image = qrcode.make(url)
+        data = io.BytesIO()
+        image.save(data, format="PNG")
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(chat_id))
+        form.add_field("caption", f"🔐 Вход в аккаунт {slot}. В Telegram открой Настройки → Устройства → Подключить устройство и отсканируй QR. Код действует недолго. /cancel — отмена.")
+        form.add_field("photo", data.getvalue(), filename="login.png", content_type="image/png")
+        if self.http is None or self.http.closed:
+            self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=40))
+        async with self.http.post(f"{self.base}/sendPhoto", data=form) as response:
+            result = await response.json(content_type=None)
+        if not result.get("ok"):
+            raise RuntimeError("Telegram не принял QR-код")
+        return result["result"]["message_id"]
+
+    async def begin_qr_login(self, chat_id, user_id, slot):
+        slot = int(slot)
+        if slot not in {1, 2}:
+            raise ValueError("Аккаунт может быть только 1 или 2")
+        await self._close_login(user_id)
+        self.markup_flows.pop(user_id, None)
+        temp = TelegramClient(StringSession(), self.service.settings.api_id, self.service.settings.api_hash,
+                              auto_reconnect=False, connection_retries=2, request_retries=2,
+                              flood_sleep_threshold=0)
+        flow = {"stage": "qr", "client": temp, "chat_id": chat_id, "slot": slot}
+        self.login_flows[user_id] = flow
+        try:
+            await temp.connect()
+            qr = await temp.qr_login()
+            flow["qr_message_id"] = await self.send_login_qr(chat_id, qr.url, slot)
+            flow["qr_task"] = asyncio.create_task(self._wait_qr_login(chat_id, user_id, flow, qr))
+        except Exception:
+            await self._close_login(user_id)
+            raise
+
+    async def _wait_qr_login(self, chat_id, user_id, flow, qr):
+        try:
+            await qr.wait()
+            if self.login_flows.get(user_id) is flow:
+                await self.finish_login(chat_id, user_id, flow)
+        except SessionPasswordNeededError:
+            if self.login_flows.get(user_id) is flow:
+                flow["stage"] = "password"
+                if flow.get("qr_message_id"):
+                    with suppress(Exception):
+                        await self.api("deleteMessage", chat_id=chat_id, message_id=flow.pop("qr_message_id"))
+                await self.send(chat_id, "🔑 QR подтверждён. На аккаунте включена двухэтапная защита: отправь облачный пароль. /cancel — отмена.")
+        except asyncio.TimeoutError:
+            if self.login_flows.get(user_id) is flow:
+                await self._close_login(user_id)
+                await self.send(chat_id, "⌛ QR-код истёк. Открой «Telegram-аккаунты» и запроси новый.")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Ошибка входа по QR")
+            if self.login_flows.get(user_id) is flow:
+                await self._close_login(user_id)
+                await self.send(chat_id, "❌ Не удалось войти по QR. Запроси новый код или используй вход по номеру.")
+
     async def finish_login(self, chat_id, user_id, flow):
         slot = int(flow.get("slot", 1))
         session_string = flow["client"].session.save()
@@ -278,6 +349,9 @@ class BotAPIController:
                 sent = await temp.send_code_request(phone)
                 flow.update(stage="code", client=temp, phone=phone, phone_code_hash=sent.phone_code_hash)
                 await self.send(chat_id, "📩 Код отправлен Telegram. Пришли код сюда цифрами.\nДля отмены: /cancel")
+                return True
+            if flow["stage"] == "qr":
+                await self.send(chat_id, "Отсканируй QR-код в настройках Telegram или отправь /cancel.")
                 return True
             if flow["stage"] == "code":
                 code = re.sub(r"\D", "", text)
@@ -405,6 +479,8 @@ class BotAPIController:
                 await self.accounts_menu(chat_id)
             elif data.startswith("account:login:"):
                 await self.begin_login(chat_id, user_id, int(data.rsplit(":", 1)[1]))
+            elif data.startswith("account:qr:"):
+                await self.begin_qr_login(chat_id, user_id, int(data.rsplit(":", 1)[1]))
             elif data == "markup":
                 await self.show_markup(chat_id)
             elif data == "markup:back":
