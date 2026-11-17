@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from decimal import Decimal
@@ -221,6 +222,27 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    async def test_channel_loading_is_background_and_pagination_reuses_list(self):
+        release = asyncio.Event()
+        async def get_channels(slot):
+            await release.wait()
+            return "@pricing", [{"id": -100000 - i, "title": f"Канал {i}"} for i in range(20)]
+        self.service.list_available_supplier_channels.side_effect = get_channels
+        self.controller.api = AsyncMock()
+        self.controller.channel_waiting.add(42)
+        self.controller.channel_slots[42] = 1
+        await asyncio.wait_for(self.controller.handle_callback({"id": "1", "from": {"id": 42},
+            "message": {"chat": self.chat}, "data": "channels:list:1:0"}), timeout=1)
+        self.assertIn("Загружаю", self.controller.send.await_args.args[1])
+        release.set()
+        await self.controller.channel_load_tasks[42]
+        for page in (1, 0):
+            await self.controller.handle_callback({"id": str(page), "from": {"id": 42},
+                "message": {"chat": self.chat, "message_id": 55}, "data": f"channels:list:1:{page}"})
+        self.service.list_available_supplier_channels.assert_awaited_once_with(slot=1)
+        edits = [call for call in self.controller.api.await_args_list if call.args[0] == "editMessageText"]
+        self.assertEqual(len(edits), 2)
+
     async def test_forward_adds_source_without_rebinding_publish_destination(self):
         await self.controller.handle_callback({"id": "1", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:add"})
@@ -247,6 +269,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
                                                "message": {"chat": self.chat}, "data": "channels:account:1"})
         await self.controller.handle_callback({"id": "3", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:list:1:0"})
+        await self.controller.channel_load_tasks[42]
         self.service.list_available_supplier_channels.assert_awaited_once_with(slot=1)
         self.assertIn("Опт", str(self.controller.send.await_args))
         await self.controller.handle_callback({"id": "4", "from": {"id": 42},
@@ -284,6 +307,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
                                                "message": {"chat": self.chat}, "data": "channels:account:2"})
         await self.controller.handle_callback({"id": "3", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:list:2:0"})
+        await self.controller.channel_load_tasks[42]
         self.service.list_available_supplier_channels.assert_awaited_once_with(slot=2)
         await self.controller.handle_callback({"id": "4", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:pick:2:-100123"})
