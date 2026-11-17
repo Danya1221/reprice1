@@ -580,7 +580,7 @@ class SyncService:
         self.last_attempt = 0
         self.wake.set()
 
-    async def list_available_supplier_channels(self, slot=1):
+    async def list_available_supplier_channels(self, slot=1, on_progress=None):
         """Show broadcast channels visible to the selected Telegram account."""
         slot = int(slot)
         if slot not in (1, 2):
@@ -605,7 +605,10 @@ class SyncService:
                     "id": utils.get_peer_id(entity),
                     "title": str(getattr(entity, "title", "") or dialog.name or "Без названия"),
                 })
-        available.sort(key=lambda item: item["title"].casefold())
+                if on_progress and len(available) % 8 == 0:
+                    await on_progress(account_name, list(available))
+        if not on_progress:
+            available.sort(key=lambda item: item["title"].casefold())
         return account_name, available
 
     async def add_supplier_channel(self, value, slot=1):

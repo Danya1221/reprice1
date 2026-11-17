@@ -246,8 +246,11 @@ class ChannelController(FirstMessageController):
             self.channel_choices[user_id] = (slot, account_name, channels)
         _, account_name, channels = self.channel_choices[user_id]
         page = max(0, min(page, max(0, (len(channels) - 1) // 8)))
+        added = {str(item.get("id")): item.get("slot", 1)
+                 for item in self.service.state.get("supplier_channels", []) if item.get("id") is not None}
         rows = [
-            [{"text": item["title"][:55], "callback_data": f"channels:pick:{slot}:{item['id']}"}]
+            [{"text": (f"✅ [{added[str(item['id'])]}] " if str(item["id"]) in added else "") + item["title"][:45],
+              "callback_data": f"channels:pick:{slot}:{item['id']}"}]
             for item in channels[page * 8:page * 8 + 8]
         ]
         nav = []
@@ -257,6 +260,9 @@ class ChannelController(FirstMessageController):
             nav.append({"text": "➡️", "callback_data": f"channels:list:{slot}:{page + 1}"})
         if nav:
             rows.append(nav)
+        loading = self.channel_load_tasks.get(user_id)
+        if loading and not loading.done():
+            rows.append([{"text": "🔄 Обновить список", "callback_data": f"channels:list:{slot}:{page}"}])
         rows.append([{"text": "⬅️ Выбрать другой аккаунт", "callback_data": "channels:add"}])
         notice = (
             f"📋 Каналы Telegram-аккаунта {slot} ({account_name})\n"
@@ -265,6 +271,10 @@ class ChannelController(FirstMessageController):
             f"📋 У Telegram-аккаунта {slot} ({account_name}) нет доступных каналов.\n"
             f"Проверь подписку этим аккаунтом или подключи его через /login {slot}."
         )
+        if channels:
+            notice += "\n✅ [1] / [2] — уже добавлен через этот аккаунт."
+        if loading and not loading.done():
+            notice += "\nЗагрузка остальных каналов продолжается."
         markup = {"inline_keyboard": rows}
         if message_id:
             try:
@@ -278,7 +288,21 @@ class ChannelController(FirstMessageController):
 
     async def _load_channel_choices(self, chat_id, user_id, slot):
         try:
-            await self.show_channel_choices(chat_id, user_id, slot)
+            shown = False
+            async def progress(account_name, channels):
+                nonlocal shown
+                if user_id not in self.channel_waiting or self.channel_slots.get(user_id) != slot:
+                    return
+                self.channel_choices[user_id] = (slot, account_name, channels)
+                if not shown:
+                    shown = True
+                    await self.show_channel_choices(chat_id, user_id, slot)
+            account_name, channels = await self.service.list_available_supplier_channels(slot=slot, on_progress=progress)
+            if user_id not in self.channel_waiting or self.channel_slots.get(user_id) != slot:
+                return
+            self.channel_choices[user_id] = (slot, account_name, channels)
+            if not shown:
+                await self.show_channel_choices(chat_id, user_id, slot)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -426,6 +450,9 @@ class ChannelController(FirstMessageController):
                                 {"inline_keyboard": [[{"text": "📋 Повторить выбор",
                                                       "callback_data": f"channels:list:{slot}:0"}]]})
                 return
+            pending = self.channel_load_tasks.pop(user_id, None)
+            if pending:
+                pending.cancel()
             self.channel_waiting.discard(user_id)
             self.channel_choices.pop(user_id, None)
             self.channel_slots.pop(user_id, None)
