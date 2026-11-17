@@ -699,21 +699,62 @@ class BotAPIController:
             await self.send(chat_id, "Настройка сохранена, но обновление не завершено. Проверь /status")
 
     async def run(self):
-        while not self.closed and not self.service.stop_event.is_set():
-            try:
-                updates = await self.api("getUpdates", offset=self.offset, timeout=25,
-                                         allowed_updates=["message", "callback_query"])
-                for update in updates:
-                    self.offset = max(self.offset, int(update["update_id"]) + 1)
+        queue = asyncio.Queue()
+        priority_tasks = set()
+
+        async def worker():
+            while True:
+                update = await queue.get()
+                try:
                     if "callback_query" in update:
                         await self.handle_callback(update["callback_query"])
                     elif "message" in update:
                         await self.handle_message(update["message"])
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception("Ошибка обработки команды управления")
+                finally:
+                    queue.task_done()
+
+        async def start_reply(message):
+            try:
+                await self.handle_message(message)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                log.error("Bot API polling error: %s: %s", type(exc).__name__, exc)
-                await asyncio.sleep(3)
+            except Exception:
+                log.exception("Ошибка ответа на /start")
+
+        worker_task = asyncio.create_task(worker(), name="control-updates")
+        try:
+            while not self.closed and not self.service.stop_event.is_set():
+                try:
+                    updates = await self.api("getUpdates", offset=self.offset, timeout=25,
+                                             allowed_updates=["message", "callback_query"])
+                    if updates:
+                        log.info("Получено обновлений управления: %d; в очереди: %d", len(updates), queue.qsize())
+                    for update in updates:
+                        self.offset = max(self.offset, int(update["update_id"]) + 1)
+                        message = update.get("message") or {}
+                        text = str(message.get("text") or "").strip()
+                        command = text.split(maxsplit=1)[0].lower().split("@", 1)[0] if text else ""
+                        if command == "/start":
+                            log.info("Получена команда /start")
+                            task = asyncio.create_task(start_reply(message))
+                            priority_tasks.add(task)
+                            task.add_done_callback(priority_tasks.discard)
+                        else:
+                            queue.put_nowait(update)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.error("Bot API polling error: %s: %s", type(exc).__name__, exc)
+                    await asyncio.sleep(3)
+        finally:
+            worker_task.cancel()
+            for task in list(priority_tasks):
+                task.cancel()
+            await asyncio.gather(worker_task, *list(priority_tasks), return_exceptions=True)
 
     async def close(self):
         self.closed = True
