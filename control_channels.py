@@ -24,6 +24,7 @@ class ChannelController(FirstMessageController):
         self.channel_choices = {}
         self.channel_slots = {}
         self.channel_load_tasks = {}
+        self.channel_action_tasks = {}
         self.supernova_notifications = set()
 
     async def _notify_supernova_result(self, chat_id, task, slot):
@@ -42,6 +43,12 @@ class ChannelController(FirstMessageController):
             log.warning("Не удалось отправить результат запроса Supernova")
 
     async def close(self):
+        actions = list(self.channel_action_tasks.values())
+        for task in actions:
+            task.cancel()
+        if actions:
+            await asyncio.gather(*actions, return_exceptions=True)
+        self.channel_action_tasks.clear()
         for task in self.channel_load_tasks.values():
             task.cancel()
         if self.channel_load_tasks:
@@ -312,7 +319,7 @@ class ChannelController(FirstMessageController):
             if self.channel_load_tasks.get(user_id) is asyncio.current_task():
                 self.channel_load_tasks.pop(user_id, None)
 
-    async def handle_callback(self, callback):
+    async def handle_callback(self, callback, _background=False):
         data = callback.get("data") or ""
         if data.startswith("supernova:"):
             user_id = callback.get("from", {}).get("id")
@@ -364,8 +371,17 @@ class ChannelController(FirstMessageController):
         if not self.allowed(user_id, chat.get("type", "private")):
             await self.answer_callback(callback["id"], "Нет доступа", True)
             return
-        await self.answer_callback(callback["id"])
         chat_id = chat.get("id")
+        slow = data.startswith(("channels:pick:", "channels:toggle:", "channels:captions:", "channels:iphone:", "channels:remove:"))
+        if slow and not _background:
+            await self.answer_callback(callback["id"])
+            key = (user_id, data)
+            if key not in self.channel_action_tasks:
+                await self.send(chat_id, "⏳ Выполняю действие с каналом. Меню доступно, пока я работаю.")
+                self.channel_action_tasks[key] = asyncio.create_task(self._channel_action(key, callback, chat_id))
+            return
+        if not _background:
+            await self.answer_callback(callback["id"])
         if data.startswith("channels:show:"):
             self.channel_waiting.discard(user_id)
             self.channel_choices.pop(user_id, None)
@@ -522,6 +538,17 @@ class ChannelController(FirstMessageController):
             self.channel_slots.pop(user_id, None)
             await self.send(chat_id, "🛠 Управление прайсом", self.menu())
 
+    async def _channel_action(self, key, callback, chat_id):
+        try:
+            await ChannelController.handle_callback(self, callback, _background=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Ошибка действия с каналом")
+            await self.send(chat_id, "Не удалось завершить действие с каналом. Проверь статус и попробуй снова.")
+        finally:
+            self.channel_action_tasks.pop(key, None)
+
     async def handle_message(self, message):
         user_id = message.get("from", {}).get("id")
         if user_id not in self.channel_waiting or user_id in self.login_flows:
@@ -552,18 +579,27 @@ class ChannelController(FirstMessageController):
                 await self.send(chat_id, "Перешли сообщение из канала или отправь @username либо ссылку на канал. Для отмены — /cancel.")
                 return
             value = "@" + match.group(1)
+        slot = self.channel_slots.get(user_id, 1)
+        key = (user_id, "add:" + str(value))
+        if key not in self.channel_action_tasks:
+            await self.send(chat_id, "⏳ Подключаю канал. Меню доступно, пока я работаю.")
+            self.channel_action_tasks[key] = asyncio.create_task(
+                self._add_channel_from_message(key, chat_id, user_id, value, slot))
+
+    async def _add_channel_from_message(self, key, chat_id, user_id, value, slot):
         try:
-            slot = self.channel_slots.get(user_id, 1)
             title = await self.service.add_supplier_channel(value, slot=slot)
         except Exception as exc:
-            slot = self.channel_slots.get(user_id, 1)
             await self.send(chat_id,
                             f"Канал не найден в Telegram-аккаунте {slot}. Проверь, что он открыт именно там, "
                             "или выбери его из списка.\n\n" + str(exc)[:350],
                             {"inline_keyboard": [[{"text": "📋 Выбрать доступный канал",
                                                   "callback_data": f"channels:list:{slot}:0"}]]})
             return
-        self.channel_waiting.discard(user_id)
-        self.channel_choices.pop(user_id, None)
-        slot = self.channel_slots.pop(user_id, 1)
+        finally:
+            self.channel_action_tasks.pop(key, None)
+        if self.channel_slots.get(user_id) == slot:
+            self.channel_waiting.discard(user_id)
+            self.channel_choices.pop(user_id, None)
+            self.channel_slots.pop(user_id, None)
         await self.show_channels(chat_id, notice=f"✅ Канал «{title}» подключён к аккаунту {slot}.")

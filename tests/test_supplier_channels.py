@@ -234,6 +234,23 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    async def test_slow_remove_does_not_block_channel_tabs(self):
+        self.state.set("supplier_channels", [{"id": -100123, "peer": "@supplier", "title": "Опт", "slot": 1}])
+        entered, finish = asyncio.Event(), asyncio.Event()
+        async def slow_remove(*args, **kwargs):
+            entered.set()
+            await finish.wait()
+        self.service.remove_supplier_channel.side_effect = slow_remove
+        token = __import__("control_channels").channel_token("@supplier", 1)
+        await self.controller.handle_callback({"id": "1", "from": {"id": 42}, "message": {"chat": self.chat},
+                                               "data": "channels:remove:" + token})
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(self.controller.handle_callback({"id": "2", "from": {"id": 42},
+            "message": {"chat": self.chat}, "data": "channels:show:0"}), 1)
+        self.assertIn("Каналы поставщиков", self.controller.send.await_args.args[1])
+        finish.set()
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
+
     async def test_channel_loading_is_background_and_pagination_reuses_list(self):
         release = asyncio.Event()
         async def get_channels(slot, on_progress=None):
@@ -295,6 +312,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
                                                "message": {"chat": self.chat}, "data": "channels:account:1"})
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat,
              "forward_origin": {"type": "channel", "chat": {"id": -100123, "type": "channel", "title": "Опт"}}})
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
         self.service.add_supplier_channel.assert_awaited_once_with(-100123, slot=1)
         self.service.publisher.bind_group.assert_not_awaited()
         self.assertNotIn(42, self.controller.channel_waiting)
@@ -302,6 +320,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_username_and_cancel(self):
         self.controller.channel_waiting.add(42)
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat, "text": "https://t.me/supplier_channel"})
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
         self.service.add_supplier_channel.assert_awaited_once_with("@supplier_channel", slot=1)
         self.controller.channel_waiting.add(42)
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat, "text": "/cancel"})
@@ -319,6 +338,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Опт", str(self.controller.send.await_args))
         await self.controller.handle_callback({"id": "4", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:pick:1:-100123"})
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
         self.service.add_supplier_channel.assert_awaited_once_with(-100123, slot=1)
         self.assertNotIn(42, self.controller.channel_waiting)
 
@@ -341,6 +361,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
                                                "message": {"chat": self.chat}, "data": "channels:account:1"})
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat,
             "forward_origin": {"type": "channel", "chat": {"id": -100123, "type": "channel"}}})
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
         markup = self.controller.send.await_args.args[2]
         self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "channels:list:1:0")
         self.assertIn(42, self.controller.channel_waiting)
@@ -356,6 +377,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.list_available_supplier_channels.assert_awaited_once_with(slot=2, on_progress=ANY)
         await self.controller.handle_callback({"id": "4", "from": {"id": 42},
                                                "message": {"chat": self.chat}, "data": "channels:pick:2:-100123"})
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
         self.service.add_supplier_channel.assert_awaited_once_with(-100123, slot=2)
 
         self.service.add_supplier_channel.reset_mock()
@@ -365,6 +387,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
                                                "message": {"chat": self.chat}, "data": "channels:account:2"})
         await self.controller.handle_message({"from": {"id": 42}, "chat": self.chat,
             "forward_origin": {"type": "channel", "chat": {"id": -100987, "type": "channel"}}})
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
         self.service.add_supplier_channel.assert_awaited_once_with(-100987, slot=2)
 
     async def test_cannot_pick_channel_from_other_account(self):
@@ -396,6 +419,7 @@ class ChannelControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.handle_callback({"id": "1", "from": {"id": 42},
                                                "message": {"chat": self.chat},
                                                "data": "channels:toggle:" + token})
+        await asyncio.gather(*list(self.controller.channel_action_tasks.values()))
         self.service.set_supplier_channel_visibility.assert_awaited_once_with(
             "@supplier_channel", slot=2, visible=False)
 
