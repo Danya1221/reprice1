@@ -717,13 +717,16 @@ class BotAPIController:
                 finally:
                     queue.task_done()
 
-        async def start_reply(message):
+        async def priority_reply(update):
             try:
-                await self.handle_message(message)
+                if "callback_query" in update:
+                    await self.handle_callback(update["callback_query"])
+                else:
+                    await self.handle_message(update["message"])
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("Ошибка ответа на /start")
+                log.exception("Ошибка обработки срочной команды управления")
 
         worker_task = asyncio.create_task(worker(), name="control-updates")
         try:
@@ -738,9 +741,10 @@ class BotAPIController:
                         message = update.get("message") or {}
                         text = str(message.get("text") or "").strip()
                         command = text.split(maxsplit=1)[0].lower().split("@", 1)[0] if text else ""
-                        if command == "/start":
-                            log.info("Получена команда /start")
-                            task = asyncio.create_task(start_reply(message))
+                        callback = update.get("callback_query") or {}
+                        if command in {"/start", "/status"} or callback.get("data") == "status":
+                            log.info("Получена команда управления: %s", command or "status")
+                            task = asyncio.create_task(priority_reply(update))
                             priority_tasks.add(task)
                             task.add_done_callback(priority_tasks.discard)
                         else:

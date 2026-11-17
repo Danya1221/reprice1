@@ -43,3 +43,38 @@ class ControlResponsivenessTest(unittest.IsolatedAsyncioTestCase):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+ async def test_status_button_is_processed_while_command_is_waiting(self):
+    service = SimpleNamespace(stop_event=asyncio.Event())
+    controller = BotAPIController('test', service, [])
+    command_entered = asyncio.Event()
+    status_received = asyncio.Event()
+    polling_calls = 0
+
+    async def api(method, **kwargs):
+        nonlocal polling_calls
+        polling_calls += 1
+        if polling_calls == 1:
+            return [{'update_id': 1, 'message': {'text': '/markup 500'}}]
+        if polling_calls == 2:
+            await command_entered.wait()
+            return [{'update_id': 2, 'callback_query': {'data': 'status'}}]
+        await asyncio.Event().wait()
+
+    async def message(update):
+        command_entered.set()
+        await asyncio.Event().wait()
+
+    async def callback(update):
+        self.assertEqual(update['data'], 'status')
+        status_received.set()
+
+    controller.api = api
+    controller.handle_callback = callback
+    controller.handle_message = message
+    task = asyncio.create_task(controller.run())
+    try:
+        await asyncio.wait_for(status_received.wait(), timeout=2)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
