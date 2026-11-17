@@ -147,6 +147,7 @@ def is_accessory(title):
 
 
 def strip_decoration(text):
+    text = re.sub(r"^\s*[▫▪◽◾]\ufe0f?\s*", "", text)
     return clean(text).strip(" \t•▫▪◽◾🔹🔸📱📦🎧⌚🔥✅*_-—–")
 
 
@@ -590,6 +591,10 @@ def _price_lines_with_priority(documents, document_priorities=None):
         for raw in document.splitlines():
             line = strip_decoration(raw)
             if not line:
+                continue
+            # An article on its own is metadata, never a product with a price.
+            # Its final hyphenated component can otherwise look like a price.
+            if re.fullmatch(r"(?:арт(?:икул)?\.?|sku)\s*[:№#]?\s*[A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9./\-]*", line, re.I):
                 continue
             tier = WHOLESALE.search(line)
             if tier and not FLAGS.sub("", line[:tier.start()]).strip():
