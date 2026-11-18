@@ -833,6 +833,56 @@ Huawei MatePad SE 11 8/128 SIM Gray 🇷🇺 — 19 100''']).items
         self.assertIn("с клавиатурой 🇷🇺 — 48 500</code>\n<code>Huawei MatePad Air 12&quot; 8/256 PaperMatte Wi-Fi White", text)
         self.assertLess(text.index("76 500"), text.index("88 000"))
 
+    async def test_xiaomi_publication_uses_numeric_storage_and_correct_brand(self):
+        rows = parse_documents(['''Xiaomi Mi 17T Pro 12/1024GB Black 🇬🇧 — 65 300
+🇪🇺Xiaomi 17T Pro 5G 12/1024 Blue — 65 300
+Xiaomi Mi 17T Pro 12/1TB Deep Blue 🇪🇺 — 65 000
+Xiaomi 17T Pro 12/512 Black (EU) — 57 500
+🇪🇺Xiaomi 17T Pro 5G 12/512 Black — 58 200
+Xiaomi 17T Pro 12/256 Black (EU) — 54 000
+🇪🇺Xiaomi 17T Pro 5G 12/256 Black — 54 700
+Xiaomi 17T Pro 12/256 Deep Blue (EU) — 53 800
+Xiaomi Mi 17T Pro 12/256GB Deep Blue 🇰🇿 — 54 700
+🇪🇺Xiaomi 17T 5G 12/512 Blue — 45 800
+🇷🇺Xiaomi 17T 5G 12/512 Blue — 45 900
+Xiaomi 17T 12/512 Blue 🇨🇳 — 42 000
+Xiaomi Mi 17 Ultra 16/1024GB Starlit Green 🇷🇺 — 107 500
+Xiaomi Mi 17 Ultra 16/1024GB Starlit Green 🇰🇿 — 105 000
+Xiaomi Mi 17 Ultra 16/512GB Green 🇪🇺 — 93 500
+Xiaomi Mi Mix Flip 12/512GB Black 🇪🇺 — 45 500
+Xiaomi Mix Flip 12/512 (Black) — 45 300
+Xiaomi C95 Pro 8/256 black🇷🇺 — 19 000
+Xiaomi F9 Pro 12/512 green🇪🇺 — 54 700
+POCO F9 Pro 12/512 Aurora Green 🇪🇺 — 54 000
+Xiaomi X8 Pro 5G 8/256 yellow🇰🇿 — 32 400
+Xiaomi Baseus PicoGo AM31 5000🇷🇺 — 2 500
+Xiaomi Silver Stone F1 Hybrid UNO Sport WiFi🇷🇺 — 14 500
+Xiaomi Zomai 70Mai Dash Cam A200 Set🇷🇺 — 6 500
+Xiaomi Большой Черный — 2 000
+Xiaomi Pad 7 11.2" 12/256GB Wi-Fi Gray 🇪🇺 — 32 500
+🇪🇺Xiaomi Pad 7 12/256 Wi-Fi 11.2 Gray — 33 000
+Xiaomi Pad 7 11.2" 8/256GB Wi-Fi BlueДефект коробки 🇪🇺 — 29 000
+Xiaomi Pad 8 11.2" 8/256GB Wi-Fi Blue с клавиатурой 🇪🇺 — 37 500
+Xiaomi Pad 8 8/256 Wi-Fi Blue 🇪🇺 — 36 000
+Xiaomi Pad 8 8/128 gray🇷🇺 — 31 400
+🇪🇺Xiaomi Pad 8 8/128 Wi-Fi 11.2 Gray — 30 600
+Xiaomi Pad 8 Pro 11.2" 8/256GB Wi-Fi Gray 🇷🇺 — 46 000
+🇪🇺Xiaomi Pad 8 Pro 8/256 Wi-Fi 11.2 Gray — 43 400''']).items
+        count, _ = await self.service.render(items=rows)
+        text = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 22)
+        model_rows = re.findall(r"<code>Xiaomi 17T Pro (\d+/\S+) .*?</code>", text)
+        self.assertEqual(model_rows, ["12/256", "12/256", "12/512", "12/1TB", "12/1TB"])
+        self.assertLess(text.index("16/512 Green"), text.index("16/1TB Starlit Green"))
+        for title in ("POCO C95 Pro", "POCO F9 Pro 12/512 Aurora Green", "POCO X8 Pro", "Baseus PicoGo",
+                      "SilverStone F1 Hybrid", "70mai Dash Cam", "Xiaomi Mix Flip 12/512 Black — 45 300",
+                      "Xiaomi 17T 12/512 Blue 🇨🇳 — 42 000", "Xiaomi 17T 12/512 Blue 🇪🇺 — 45 800",
+                      "Xiaomi 17T Pro 12/256 Deep Blue 🇪🇺 — 53 800", "Blue Дефект коробки",
+                      '<b>— Xiaomi Pad 8 Pro 11.2&quot; —</b>', '<b>Wi-Fi · с клавиатурой</b>'):
+            self.assertIn(title, text)
+        for marker in ("Xiaomi Baseus", "Xiaomi F9 Pro", "Большой", "54 700", "45 900", "107 500", "46 000"):
+            self.assertNotIn(marker, text)
+
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
         rows = parse_documents(["\n".join([
             "Samsung A57 5G 12/256GB A.Icyblue 🇦🇪 — 40 300",

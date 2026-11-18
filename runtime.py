@@ -16,10 +16,10 @@ from config import Source
 from prices import (
     FLAGS, ASIS, CPO, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
-    display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
+    display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, offer_market_parts, samsung_watch_name,
     offer_color_spelling, offer_network_spelling, offer_qualifier_suffix, strip_supplier_annotations,
     samsung_a_model, samsung_a_offer_spelling, samsung_s_model, samsung_s_offer_spelling, samsung_charger_name,
-    samsung_tab_name, huawei_offer_name,
+    samsung_tab_name, huawei_offer_name, xiaomi_offer_name, XIAOMI_PRICE_BLOCKS,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -156,7 +156,7 @@ def merge_key(item, *, ignore_samsung_market=False):
         if item.sim != "unknown":
             title = FLAGS.sub("", title)
     if item.block.startswith("Samsung") and not item.accessory:
-        bare, market_flags = samsung_market_parts(title)
+        bare, market_flags = offer_market_parts(title)
         bare = bare.replace("\ufe0f", "")
         flags = "".join(market_flags)
         bare = re.sub(r"^\s*(?:samsung\s+galaxy|galaxy)\b", "Samsung", bare, flags=re.I)
@@ -199,6 +199,8 @@ def merge_key(item, *, ignore_samsung_market=False):
         title = bare if ignore_samsung_market else bare + " " + flags
     if item.block == "Huawei" and not item.accessory:
         title = huawei_offer_name(title)
+    if item.block in XIAOMI_PRICE_BLOCKS and not item.accessory:
+        title = xiaomi_offer_name(title)
     if re.search(r"\bsony\s+wh[-\s]*1000\s*xm\d", title, re.I) and not item.accessory:
         title = re.sub(r"\b(wh)[-\s]*(1000)\s*(xm\d+)", r"\1-\2\3", title, flags=re.I)
         title = re.sub(r"\bblaсk\b", "black", title, flags=re.I)  # Cyrillic с in a Latin colour
@@ -277,7 +279,7 @@ def select_samsung_regions(items):
         if not item.block.startswith("Samsung") or item.accessory:
             keep.add(index)
             continue
-        _, market_flags = samsung_market_parts(item.title)
+        _, market_flags = offer_market_parts(item.title)
         # Galaxy A shows one price per configuration across supplier markets.
         # An explicit RST variant remains distinguishable as such.
         a_series = samsung_a_model(item.title) is not None
@@ -288,7 +290,7 @@ def select_samsung_regions(items):
         if a_series:
             # Match the copyable name so hidden supplier details do not
             # split equivalent offers by region. "Arabic" is a market note.
-            comparison_title, flags = samsung_market_parts(display_title(replace(item, title=comparison_title)))
+            comparison_title, flags = offer_market_parts(display_title(replace(item, title=comparison_title)))
             comparison_title = re.sub(r"\s+arabic\s*$", "", comparison_title, flags=re.I)
             comparison_title = " ".join([comparison_title, *flags])
         key = merge_key(replace(item, title=comparison_title), ignore_samsung_market=True)
@@ -311,6 +313,9 @@ def unique_public_offers(items, request_keys):
         title = display_title(item)
         if item.block == "Huawei" and not item.accessory:
             title = FLAGS.sub("", title)
+        if item.block in XIAOMI_PRICE_BLOCKS and not item.accessory:
+            # Chinese-market hardware/firmware stays distinct from global stock.
+            title = FLAGS.sub(lambda match: match[0] if match[0] == "🇨🇳" else "", title)
         visible = clean(re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\ufe0e\ufe0f]", "", title)).casefold()
         # The current iPhone display hides market flags even for unknown SIM.
         # Keep those market distinctions, along with real condition and SIM.
