@@ -336,6 +336,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("256GB", content)
         self.assertNotIn("512GB", content)
         self.assertEqual(content.count("iPhone 18 Pro Max 512 Black SIM"), 1)
+        self.assertNotIn("99 000", content)
 
     async def test_iphone_18_pro_max_blue_and_glacier_are_same_colour(self):
         rows = parse_documents(["\n".join([
@@ -532,10 +533,10 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         ])]).items
         count, _ = await self.service.render(items=merge_lowest([rows]))
         content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
-        self.assertEqual(count, 7)
-        for price in ("57 500", "58 500", "60 000", "67 500", "68 000", "48 500", "49 500"):
+        self.assertEqual(count, 5)
+        for price in ("57 500", "58 500", "60 000", "67 500", "68 000"):
             self.assertIn(price, content)
-        for price in ("58 200", "58 400"):
+        for price in ("58 200", "58 400", "48 500", "49 500"):
             self.assertNotIn(price, content)
         self.assertIn("🇭🇰", content)
         self.assertIn("🇨🇳", content)
@@ -588,11 +589,12 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         ])]).items
         count, _ = await self.service.render(items=merge_lowest([rows]))
         content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
-        self.assertEqual(count, 4)
+        self.assertEqual(count, 3)
         self.assertNotIn("17 800", content)
         self.assertNotIn("16 000", content)
         self.assertNotIn("18 000", content)
-        for price in ("17 600", "21 000", "15 900", "15 000"):
+        self.assertNotIn("15 000", content)
+        for price in ("17 600", "21 000", "15 900"):
             self.assertIn(price, content)
 
     async def test_s26_rows_group_by_model_and_monarch_never_published(self):
@@ -669,6 +671,63 @@ Samsung S26 12/512GB Cobalt Violet 🇰🇿 — 68000"""]).items
                                    "price": "97600", "currency": "RUB", "block": "Samsung",
                                    "sim": "unknown", "accessory": False})
         self.assertEqual(restored.block, "Samsung Fold / Flip")
+
+    async def test_samsung_watches_and_chargers_keep_distinct_configurations(self):
+        source = """Samsung Watch 8 40mm Graphite 🇮🇳 — 15 300
+Samsung Galaxy Watch 8 40 mm Graphite/EU/PA 🇦🇪 — 15 400
+Samsung Galaxy Watch 8 40 mm LTE Graphite 🇪🇺 — 17 500
+Samsung Watch 8 44mm silver 🇮🇳 — 17 000
+Samsung Galaxy Watch 8 44 mm Silver/EU/PA 🇦🇪 — 17 300
+Samsung Galaxy Watch 8 44 mm LTE Silver 🇮🇳 — 20 000
+Samsung Watch Ultra 2 47mm LTE Black 🇨🇱 — 37 000
+Samsung Watch Ultra 2 47mm LTE Silver 🇨🇱 — 37 000
+Samsung L715 Watch Ultra 2 47 LTE (2026) gray 🇿🇦 — 36 800
+Samsung Galaxy Watch Ultra 2 2026 47mm LTE Titanium Gray 🇪🇺 — 38 500
+Samsung L715 Watch Ultra 2 47 LTE (2026) silver 🇷🇺 — 36 400
+Samsung Watch Ultra 47mm LTE Blue (2025) 🇨🇱 — 27 000
+Samsung L705 Watch Ultra 47 LTE (2025) blue 🇨🇱 — 27 000
+Samsung Watch Ultra 47mm LTE White (2025) 🇨🇱 — 26 500
+Samsung Galaxy Watch Ultra 2025 47mm Titanium White — 26 500
+Samsung Galaxy Watch Ultra 2024 47mm LTE Titanium White — 24 000
+🔌Samsung EP-T2510 25W Type C, Белое с кабелем — 1 400
+Samsung EP-T2510 25W USB-C White with cable — 1 500
+🔌Samsung EP-T2510 25W Type C, Белый — 1 300
+🔌Samsung EP-T4510 45W Type C, Белое с кабелем — 1 800
+🔌Samsung EP-T4511 45W Type C, Белое — 1 700
+Samsung Z Flip 8 12/512 (Mint) 🇪🇺 — 84 500
+Samsung Z Fold 7 12/256 (Blue Shadow) — 96 500
+Samsung Z Fold 7 5G 12/512 Mint Уценка 🇪🇺 — 104 500
+Sony WH-1000XM6 (уценённый) — 19 000"""
+        cached_charger = Item.from_dict({"title": "Samsung EP-T2510 25W USB-C White with cable",
+                                        "price": "1500", "currency": "RUB",
+                                        "block": "Аксессуары", "accessory": True})
+        self.assertEqual(cached_charger.block, "Samsung")
+        self.assertFalse(cached_charger.accessory)
+        self.service.readers[1].fetch.return_value = parse_documents([source])
+        with patch("runtime.is_open", return_value=True):
+            await self.service.sync(force=True)
+        content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        rows = re.findall(r"<code>(Samsung .*?)</code>", content)
+        self.assertCountEqual(rows, [
+            "Samsung Watch 8 40mm Graphite 🇮🇳 — 15 300",
+            "Samsung Watch 8 40mm LTE Graphite 🇪🇺 — 17 500",
+            "Samsung Watch 8 44mm Silver 🇮🇳 — 17 000",
+            "Samsung Watch 8 44mm LTE Silver 🇮🇳 — 20 000",
+            "Samsung Watch Ultra 2 47mm LTE Black 🇨🇱 — 37 000",
+            "Samsung Watch Ultra 2 47mm LTE Silver 🇷🇺 — 36 400",
+            "Samsung Watch Ultra 2 47mm LTE Gray 🇿🇦 — 36 800",
+            "Samsung Watch Ultra 47mm LTE (2025) Blue 🇨🇱 — 27 000",
+            "Samsung Watch Ultra 47mm LTE (2025) White 🇨🇱 — 26 500",
+            "Samsung Watch Ultra 47mm LTE (2024) White — 24 000",
+            "Samsung EP-T2510 25W USB-C White с кабелем — 1 400",
+            "Samsung EP-T2510 25W USB-C White — 1 300",
+            "Samsung EP-T4510 45W USB-C White с кабелем — 1 800",
+            "Samsung EP-T4511 45W USB-C White — 1 700",
+            "Samsung Z Flip 8 12/512 Mint 🇪🇺 — 84 500",
+            "Samsung Z Fold 7 12/256 Blue Shadow — 96 500",
+        ])
+        self.assertNotIn("104 500", content)
+        self.assertNotIn("19 000", content)
 
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
         rows = parse_documents(["\n".join([

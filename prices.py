@@ -17,6 +17,7 @@ CLOSED = re.compile(r"(?:мы\s+)?(?:сейчас\s+|временно\s+)?зак
                     r"рабочий\s+день\s+окончен|магазин\s+закрыт|не\s+работаем|"
                     r"при[её]м\s+заказов\s+(?:заверш[её]н|закрыт)", re.I)
 UNAVAILABLE = re.compile(r"нет\s+в\s+наличии|нет\s+на\s+складе|закончились|продано|❌", re.I)
+MARKED_DOWN = re.compile(r"(?<![а-яё])уцен(?:к\w*|[её]н\w*)?\b", re.I)
 WHOLESALE = re.compile(r"\b(?:от|from)\s*\d+\s*(?:шт|штук|pcs)\b", re.I)
 PRICE = re.compile(
     r"(?P<prefix>[$€₽])?\s*"
@@ -291,24 +292,71 @@ def samsung_s_offer_spelling(title, markets):
 
 
 def samsung_watch_name(title):
-    """Canonicalise the observed watch shorthand without dropping LTE."""
+    """Normalise watch descriptions while preserving connectivity and generation."""
     title = title.replace("\ufe0f", "")
-    title = re.sub(r"\bWatch\s*(\d+)\b", r"Watch \1", title, flags=re.I)
-    watch = re.match(r"^Samsung\s+(?:L(325|330|345|355)\s+)?Watch\s+(8|9)\s+(?:(LTE)\s+)?(40|44)\s*(?:mm|мм)?\s*(LTE)?\b", title, re.I)
+    watch = re.match(
+        r"^Samsung\s+(?:Galaxy\s+)?(?:L(\d{3})\s+)?Watch\s*"
+        r"(Ultra(?:\s*2\b)?|[6-9](?:\s+Classic)?)\s+"
+        r"(?:(?:\((20\d{2})\)|(20\d{2}))\s+)?"
+        r"(?:(LTE|4G)\s+)?(40|43|44|46|47)(?:\s*(?:mm|мм))?\b"
+        r"(?:\s+(LTE|4G|Bluetooth|BT))?\b(.*)$", title, re.I,
+    )
     if not watch:
         return title
-    sku, series, before, size, after = watch.groups()
-    lte = bool(before or after)
+    sku, model, bracket_year, plain_year, before, size, after, details = watch.groups()
+    model = re.sub(r"\bUltra\s*2\b", "Ultra 2", clean(model).title())
+    ultra = model.startswith("Ultra")
+    lte = bool(before or (after or "").upper() in {"LTE", "4G"} or (ultra and not after))
     known = {"325": ("8", "40", True), "330": ("8", "44", False),
-             "345": ("9", "40", True), "355": ("9", "44", True)}
-    if sku and known[sku] != (series, size, lte):
+             "345": ("9", "40", True), "355": ("9", "44", True),
+             "705": ("Ultra", "47", True), "715": ("Ultra 2", "47", True)}
+    if sku and known.get(sku) != (model, size, lte):
         return title
-    return clean(f"Samsung Watch {series} {size}mm" + (" LTE" if lte else "") + " " + title[watch.end():].lstrip())
+    year = bracket_year or plain_year
+    if ultra:
+        in_details = re.search(r"\(\s*(20\d{2})\s*\)", details)
+        if in_details:
+            if year and year != in_details[1]:
+                return title
+            year = in_details[1]
+            details = details[:in_details.start()] + " " + details[in_details.end():]
+        if model == "Ultra 2" and year == "2026":
+            year = None  # Suppliers also list this generation simply as Ultra 2.
+        details = re.sub(r"^\s*Titanium\s+", " ", details, flags=re.I)
+    details = re.sub(r"\s*/\s*EU\s*/\s*PA\b", " ", details, flags=re.I)
+    details = offer_color_spelling(clean(details))
+    details = re.sub(r"^(black|blue|cream|graphite|gray|silver|white)\b",
+                     lambda m: m[0].title(), details, flags=re.I)
+    return clean(f"Samsung Watch {model} {size}mm" + (" LTE" if lte else "")
+                 + (f" ({year})" if year else "") + " " + details)
+
+
+SAMSUNG_CHARGER = re.compile(r"^(?:🔌\ufe0f?\s*)?Samsung\s+EP[- ]?T(2510|4510|4511|6530)\b", re.I)
+
+
+def samsung_charger_name(title):
+    charger = SAMSUNG_CHARGER.match(title)
+    if not charger:
+        return title
+    part = charger[1]
+    power, ports = {"2510": ("25", "USB-C"), "4510": ("45", "USB-C"),
+                    "4511": ("45", "USB-C"), "6530": ("65", "USB-A/C")}[part]
+    details = clean(title[charger.end():])
+    details = re.sub(r"^" + power + r"\s*(?:W|Вт)\b[\s,]*", "", details, flags=re.I)
+    port = r"(?:(?:USB\s*)?Type[-\s]*)?[AА]/[CС]|USB[-\s]*[AА]/[CС]" if part == "6530" else r"(?:USB|Type)[-\s]*[CС]"
+    details = re.sub(r"^(?:" + port + r")\b[\s,]*", "", details, flags=re.I)
+    details = offer_color_spelling(details)
+    details = re.sub(r"\b(black|white)\b", lambda m: m[0].title(), details, flags=re.I)
+    details = re.sub(r"\b(?:with\s+(?:a\s+)?cable|кабель\s+в\s+комплекте)\b", "с кабелем", details, flags=re.I)
+    return clean(f"Samsung EP-T{part} {power}W {ports} " + details)
 
 
 def is_accessory(title):
     if re.search(r"\bmonarch\b.*\bsamsung\b", title, re.I):
         return True
+    # A charger with an included cable is still the Samsung charger offer.
+    if SAMSUNG_CHARGER.match(FLAGS.sub("", title).strip()):
+        return False
     # A TX/RX kit is a microphone system. Its included Charging Case does not
     # turn it into an accessory; a case sold on its own still is an accessory.
     kit = DJI_MIC_KIT.search(title)
@@ -754,7 +802,8 @@ class Item:
         if data.get("block") not in {"ASIS", "CPO"}:
             model = iphone_model(data["title"])
             known = iphone_publish_block(model) if model else product_block(data["title"])
-            complete_device = DJI_MIC_KIT.search(data["title"]) or PIXEL_WATCH_CONFIGURATION.search(data["title"])
+            complete_device = (DJI_MIC_KIT.search(data["title"]) or PIXEL_WATCH_CONFIGURATION.search(data["title"])
+                               or SAMSUNG_CHARGER.match(FLAGS.sub("", data["title"]).strip()))
             if known == "Apple Accessories" or (known and complete_device and not is_accessory(data["title"])):
                 data.update(block=known, accessory=False)
             elif is_accessory(data["title"]):
@@ -893,6 +942,8 @@ def select_items(items, settings, overrides=None):
     result = []
     for item in items:
         item = resolve_iphone_sim(item)
+        if MARKED_DOWN.search(strip_supplier_annotations(item.title)):
+            continue
         if re.search(r"\bmonarch\b.*\bsamsung\b", item.title, re.I):
             continue
         # LEGO is excluded from the published price regardless of its source or block.
@@ -1265,7 +1316,7 @@ def display_title(item):
         title = re.sub(r"\bZ\s*(?=fold|flip)", "Z ", title, flags=re.I)
         for sku, name in (("A175", "A17 4G"), ("A376", "A37 5G"), ("A576", "A57 5G")):
             title = re.sub(r"\bSamsung\s+" + sku + r"\b", "Samsung " + name, title, flags=re.I)
-        title = samsung_watch_name(title)
+        title = samsung_charger_name(samsung_watch_name(title))
         if re.match(r"^Samsung\s+A\s*(?:27|37|57)\b", title, re.I):
             title = offer_network_spelling(offer_color_spelling(title))
             if re.match(r"^Samsung\s+A\s*57\b", title, re.I):
@@ -1273,6 +1324,8 @@ def display_title(item):
         title = samsung_a_offer_spelling(title)
         if samsung_s_model(title) and not item.accessory:
             title = samsung_s_offer_spelling(offer_color_spelling(title), markets)
+        if samsung_z_model(title) and not item.accessory:
+            title = re.sub(r"\(\s*([A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s*\)", r"\1", offer_network_spelling(title))
         title = re.sub(r"\b(\d{1,2}\s*/\s*\d{2,4})\s*(?:GB|ГБ)\b", r"\1", title, flags=re.I)
         title = clean(re.sub(r"\(\s*\)", "", title))
         if markets:

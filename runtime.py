@@ -18,7 +18,7 @@ from prices import (
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
     offer_color_spelling, offer_network_spelling, offer_qualifier_suffix, strip_supplier_annotations,
-    samsung_a_model, samsung_a_offer_spelling, samsung_s_model, samsung_s_offer_spelling,
+    samsung_a_model, samsung_a_offer_spelling, samsung_s_model, samsung_s_offer_spelling, samsung_charger_name,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -194,7 +194,7 @@ def merge_key(item, *, ignore_samsung_market=False):
         # this model so distinct shades of other Samsung devices stay separate.
         if re.search(r"\bSamsung\s+A08\b", bare, re.I):
             bare = re.sub(r"\b(?:dark[\s-]+blue|navy|blue)\b", "dark blue", bare, flags=re.I)
-        bare = samsung_watch_name(bare)
+        bare = samsung_charger_name(samsung_watch_name(bare))
         title = bare if ignore_samsung_market else bare + " " + flags
     if re.search(r"\bsony\s+wh[-\s]*1000\s*xm\d", title, re.I) and not item.accessory:
         title = re.sub(r"\b(wh)[-\s]*(1000)\s*(xm\d+)", r"\1-\2\3", title, flags=re.I)
