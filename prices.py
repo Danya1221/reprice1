@@ -1630,7 +1630,7 @@ def display_title(item):
     if item.block == "Huawei" and not item.accessory:
         title = huawei_offer_name(title)
     if item.block in XIAOMI_PRICE_BLOCKS and not item.accessory:
-        title = xiaomi_offer_name(title)
+        title = re.sub(r"\b(\d{1,2}/\d+)TB\b", r"\1ТБ", xiaomi_offer_name(title))
     if iphone_model(title) and not item.accessory:
         title = normalize_iphone_18_pro_max_color(title)
         title = FLAGS.sub("", title)

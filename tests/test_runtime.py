@@ -872,8 +872,8 @@ Xiaomi Pad 8 Pro 11.2" 8/256GB Wi-Fi Gray 🇷🇺 — 46 000
         text = "\n".join(self.service.publisher.publish.await_args.args[0].values())
         self.assertEqual(count, 22)
         model_rows = re.findall(r"<code>Xiaomi 17T Pro (\d+/\S+) .*?</code>", text)
-        self.assertEqual(model_rows, ["12/256", "12/256", "12/512", "12/1TB", "12/1TB"])
-        self.assertLess(text.index("16/512 Green"), text.index("16/1TB Starlit Green"))
+        self.assertEqual(model_rows, ["12/256", "12/256", "12/512", "12/1ТБ", "12/1ТБ"])
+        self.assertLess(text.index("16/512 Green"), text.index("16/1ТБ Starlit Green"))
         for title in ("POCO C95 Pro", "POCO F9 Pro 12/512 Aurora Green", "POCO X8 Pro", "Baseus PicoGo",
                       "SilverStone F1 Hybrid", "70mai Dash Cam", "Xiaomi Mix Flip 12/512 Black — 45 300",
                       "Xiaomi 17T 12/512 Blue 🇨🇳 — 42 000", "Xiaomi 17T 12/512 Blue 🇪🇺 — 45 800",
@@ -882,6 +882,23 @@ Xiaomi Pad 8 Pro 11.2" 8/256GB Wi-Fi Gray 🇷🇺 — 46 000
             self.assertIn(title, text)
         for marker in ("Xiaomi Baseus", "Xiaomi F9 Pro", "Большой", "54 700", "45 900", "107 500", "46 000"):
             self.assertNotIn(marker, text)
+
+    async def test_xiaomi_17_ultra_cached_gigabytes_render_after_512_as_terabytes(self):
+        rows = parse_documents(['''Xiaomi Mi 17 Ultra 16/1024GB Starlit Green 🇰🇿 — 105 000
+Xiaomi Mi 17 Ultra 16/1024GB White 🇷🇺 — 106 500
+Xiaomi Mi 17 Ultra 16/512GB Black 🇪🇺 — 93 000
+Xiaomi Mi 17 Ultra 16/512GB Starlit Green 🇪🇺 — 93 500
+Xiaomi Mi 17 Ultra 16/512GB White 🇪🇺 — 96 000''']).items
+        self.state.set("sources", {"@two": {"status": "open", "items": [item.to_dict() for item in rows]}})
+        await self.service.render()
+        text = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(re.findall(r"<code>Xiaomi 17 Ultra (.*?)</code>", text), [
+            "16/512 Black 🇪🇺 — 93 000",
+            "16/512 Starlit Green 🇪🇺 — 93 500",
+            "16/512 White 🇪🇺 — 96 000",
+            "16/1ТБ Starlit Green 🇰🇿 — 105 000",
+            "16/1ТБ White 🇷🇺 — 106 500",
+        ])
 
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
         rows = parse_documents(["\n".join([
