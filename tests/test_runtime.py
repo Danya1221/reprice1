@@ -729,6 +729,79 @@ Sony WH-1000XM6 (уценённый) — 19 000"""
         self.assertNotIn("104 500", content)
         self.assertNotIn("19 000", content)
 
+    async def test_samsung_publishes_network_sections_and_compares_by_model(self):
+        rows = parse_documents(['''Samsung Watch 8 44mm Graphite 🇦🇪 — 17 000
+Samsung Galaxy Watch 8 44mm Black 🇦🇪 — 17 300
+Samsung Galaxy Watch 8 44mm LTE Graphite 🇪🇺 — 20 200
+Samsung Tab A11 8.7'' LTE 4/64 Gray 🇦🇪 — 12 000
+Samsung Tab A11 4G (SM-X135) 4/64 gray 🇪🇺 — 12 700
+Samsung Tab A11 8.7'' LTE 4/64 Silver 🇦🇪 — 12 100
+Samsung Tab A11 8.7'' Wi-Fi 4/64 Grey 🇦🇪 — 11 000
+Samsung Tab A11+ WiFi (X230) 6/128 gray 🇷🇺 — 20 900
+Samsung Tab A11+ 11" Wi-Fi 6/128 Gray 🇷🇺 — 21 100
+Samsung Tab A11+ (SM-X236B) 6/128 Gray 🇷🇺 — 22 000''']).items
+        count, _ = await self.service.render(items=rows)
+        text = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 7)
+        for heading, price in (
+            ("Samsung Watch Bluetooth", "17 000"), ("Samsung Watch LTE", "20 200"),
+            ("Samsung Tab Wi-Fi", "11 000"), ("Samsung Tab LTE", "12 000"), ("Samsung Tab 5G", "22 000"),
+        ):
+            section = text.split(f"<b>— {heading} —</b>", 1)[1].split("<b>", 1)[0]
+            self.assertIn(price, section)
+        for value in ("17 300", "12 700", "21 100"):
+            self.assertNotIn(value, text)
+
+    async def test_huawei_dictionary_merges_equivalent_supplier_titles(self):
+        rows = parse_documents(['''HUAWEI FB Neo Ice White 🇷🇺 — 6 500
+Huawei FreeBuds Neo Ice White 🇪🇺 — 6 600
+Huawei FreeClip 2 Blue 🇪🇺 — 12 100
+Huawei FreeClip 2 blue🇷🇺 — 11 500
+Huawei FreeClip 2 S Deepsea Blue 🇷🇺 — 14 000
+Huawei FreeClip 2S Blue 🇷🇺 — 14 500
+Huawei MatePad 11.5 8/256 PaperMatte grey 🇷🇺 — 25 400
+Huawei MatePad 11.5 8/256GB PaperMatte WIFI Gray 🇷🇺 — 27 500
+🇷🇺Huawei MatePad 8/256 Wi-Fi 11.5 Gray — 22 500
+Huawei MatePad Mini 8/256 WiFi black 🇷🇺 — 32 500
+Huawei MatePad Mini 8/256GB WF Black 🇷🇺 — 36 000
+Huawei MatePad Air WKI-W09 8/256 WiFi + клавиатура blue 🇷🇺 — 54 500
+Huawei MatePad Air 8/256GB PaperMatte WF+KB Blue 🇷🇺 — 48 500
+Huawei MatePad Air 12.2" PaperMatte 8/256GB Wi-Fi Blue с клавиатурой 🇷🇺 — 49 000
+Huawei MatePad SE 11 11" 4/128GB Wi-Fi Gray 🇷🇺 — 16 000
+Huawei MatePad SE 11 4/128GB WIFI Gray 🇷🇺 — 16 400
+Huawei MatePad SE 11 4/128GB WIFI Kids Gray 🇷🇺 — 17 100
+Huawei MatePad SE 11 4/128GB LTE Gray 🇷🇺 — 17 100
+Huawei MatePad SE 11 11" 8/128GB Wi-Fi + Стилус Gray 🇷🇺 — 20 500
+Huawei MatePad SE 11 8/128GB WF+Pen Gray 🇷🇺 — 19 800
+Huawei MatePad SE 11 8/128GB LTE+Pen Gray 🇷🇺 — 21 800
+Huawei Nova 15 12/256GB Green 🇷🇺 — 24 100
+🇷🇺Huawei nova 15 12/256 mint — 24 300
+Huawei Nova 16s 12/512GB Isle Blue 🇷🇺 — 35 500
+🇷🇺Huawei Nova 16s 12/512 Blue — 36 000
+Huawei Pura 90S Pro 12/256GB Guava Soda 🇷🇺 — 50 500
+Huawei Pura 90S Pro 5G 12/256GB Guava Soda 🇷🇺 — 52 000
+🇷🇺Huawei Pura 90S Pro 12/256 Pink Green — 52 000
+🇷🇺Huawei Pura 90S Pro Max 12/512 Orange Blue — 73 500
+Huawei Pura 90S Pro Max 5G 12/512GB Orange Ocean 🇷🇺 — 73 600
+Huawei Pura 90S Pro Max 5G 12/512GB Blush Gold 🇷🇺 — 73 500
+Huawei Pura 90S Pro Max 5G 12/256GB Orange Ocean 🇷🇺 — 63 500''']).items
+        count, _ = await self.service.render(items=rows)
+        text = "\n".join(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 19)
+        self.assertIn('Huawei MatePad Air 12&quot; 8/256 PaperMatte Wi-Fi Blue с клавиатурой 🇷🇺 — 48 500', text)
+        self.assertIn('Huawei MatePad Air 12.2&quot;', text)
+        for title, price in (
+            ("Huawei FreeClip 2 Blue", "11 500"), ("Huawei FreeClip 2 S Deepsea Blue", "14 000"),
+            ("Huawei MatePad SE 11 8/128 Wi-Fi Gray со стилусом", "19 800"),
+            ("Huawei MatePad SE 11 8/128 LTE Gray со стилусом", "21 800"),
+            ("Huawei Nova 16s 12/512 Isle Blue", "35 500"),
+            ("Huawei Pura 90S Pro 12/256 Guava Soda", "50 500"),
+            ("Huawei Pura 90S Pro Max 12/512 Orange Ocean", "73 500"),
+        ):
+            self.assertEqual(text.count(f"{title} 🇷🇺 — {price}"), 1)
+        for value in ("12 100", "14 500", "27 500", "54 500", "36 000", "24 300", "52 000", "73 600"):
+            self.assertNotIn(value, text)
+
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
         rows = parse_documents(["\n".join([
             "Samsung A57 5G 12/256GB A.Icyblue 🇦🇪 — 40 300",

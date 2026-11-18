@@ -242,6 +242,60 @@ SAMSUNG_S_OFFER_CODES = {
     26: {"": "S942", "+": "S947", "fe": "S741", "ultra": "S948"},
 }
 
+TABLET_NETWORK_ALIASES = {
+    "Wi-Fi": r"\b(?:wi[\s-]*fi|wf)\b",
+    "LTE": r"\b(?:lte|4\s*[gг])\b",
+    "5G": r"\b5\s*[gг]\b",
+}
+TABLET_MEMORY = re.compile(r"\b(\d{1,2})\s*/\s*(\d{2,4}(?:\s*(?:TB|ТБ))?)(?:\s*(?:GB|ГБ))?\b", re.I)
+SAMSUNG_TAB_CODES = {
+    "A11": ("8.7", {"X130": "Wi-Fi", "X133": "Wi-Fi", "X135": "LTE"}),
+    "A11+": ("11", {"X230": "Wi-Fi", "X236": "5G"}),
+}
+SAMSUNG_NETWORK_BLOCKS = ("Samsung Tab Wi-Fi", "Samsung Tab LTE", "Samsung Tab 5G",
+                          "Samsung Watch Bluetooth", "Samsung Watch LTE")
+
+
+def tablet_networks(title):
+    return [network for network, pattern in TABLET_NETWORK_ALIASES.items() if re.search(pattern, title, re.I)]
+
+
+def tablet_memory_label(match):
+    storage = re.sub(r"\s+", "", match[2].upper()).replace("ТБ", "TB")
+    storage = {"1024": "1TB", "2048": "2TB"}.get(storage, storage)
+    return f"{match[1]}/{storage}"
+
+
+def samsung_tab_name(title):
+    model = re.match(r"^(?:Samsung\s+(?:Galaxy\s+)?|Galaxy\s+)?Tab\s+A\s*11(\+|\s+Plus\b)?(?=\s|$)", title, re.I)
+    if not model:
+        if re.match(r"^Samsung\s+Tab\s+S\s*\d", title, re.I):
+            for network, pattern in TABLET_NETWORK_ALIASES.items():
+                title = re.sub(pattern, network, title, flags=re.I)
+        return title
+    variant = "A11+" if model[1] else "A11"
+    diagonal, codes = SAMSUNG_TAB_CODES[variant]
+    details = title[model.end():].strip()
+    size = re.match(r"(\d+(?:[.,]\d+)?)\s*(?:\"|″|''|”)(?=\s|$)", details)
+    if size and size[1].replace(",", ".") != diagonal:
+        return title
+    if size:
+        details = details[size.end():]
+    networks = tablet_networks(details)
+    code = re.search(r"\b(?:SM-)?(X\d{3})[FBGN]?\b", details, re.I)
+    network = codes.get(code[1].upper()) if code else None
+    if len(networks) > 1 or (code and (not network or (networks and networks != [network]))):
+        return title
+    if code:
+        details = details[:code.start()] + " " + details[code.end():]
+    if networks:
+        network = networks[0]
+        details = re.sub(TABLET_NETWORK_ALIASES[network], " ", details, flags=re.I)
+    details = clean(re.sub(r"\(\s*\)", " ", details))
+    details = TABLET_MEMORY.sub(tablet_memory_label, details)
+    details = standard_colour_case(offer_color_spelling(details))
+    return clean(f'Samsung Tab {variant} {diagonal}" ' + (network or "") + " " + details)
+
 
 def samsung_s_offer_spelling(title, markets):
     match = re.match(
@@ -299,14 +353,16 @@ def samsung_watch_name(title):
         r"(Ultra(?:\s*2\b)?|[6-9](?:\s+Classic)?)\s+"
         r"(?:(?:\((20\d{2})\)|(20\d{2}))\s+)?"
         r"(?:(LTE|4G)\s+)?(40|43|44|46|47)(?:\s*(?:mm|мм))?\b"
-        r"(?:\s+(LTE|4G|Bluetooth|BT))?\b(.*)$", title, re.I,
+        r"(?:\s+(LTE|4G|Bluetooth|BT|Wi[ -]?Fi))?\b(.*)$", title, re.I,
     )
     if not watch:
         return title
     sku, model, bracket_year, plain_year, before, size, after, details = watch.groups()
     model = re.sub(r"\bUltra\s*2\b", "Ultra 2", clean(model).title())
     ultra = model.startswith("Ultra")
-    lte = bool(before or (after or "").upper() in {"LTE", "4G"} or (ultra and not after))
+    lte_label = re.compile(r"\b(?:LTE|4G)\b", re.I)
+    lte = bool(before or lte_label.fullmatch(after or "") or lte_label.search(details) or (ultra and not after))
+    details = lte_label.sub(" ", details)
     known = {"325": ("8", "40", True), "330": ("8", "44", False),
              "345": ("9", "40", True), "355": ("9", "44", True),
              "705": ("Ultra", "47", True), "715": ("Ultra 2", "47", True)}
@@ -325,10 +381,129 @@ def samsung_watch_name(title):
         details = re.sub(r"^\s*Titanium\s+", " ", details, flags=re.I)
     details = re.sub(r"\s*/\s*EU\s*/\s*PA\b", " ", details, flags=re.I)
     details = offer_color_spelling(clean(details))
+    if model == "8":
+        details = re.sub(r"^Black\b", "Graphite", details, flags=re.I)
     details = re.sub(r"^(black|blue|cream|graphite|gray|silver|white)\b",
                      lambda m: m[0].title(), details, flags=re.I)
     return clean(f"Samsung Watch {model} {size}mm" + (" LTE" if lte else "")
                  + (f" ({year})" if year else "") + " " + details)
+
+
+def standard_colour_case(title):
+    colours = r"black|white|gray|silver|graphite|purple|violet|mint|blue|cyan|green|gold|red|orange|pink|beige|cream"
+    return re.sub(r"\b(?:" + colours + r")\b", lambda m: m[0].title(), title, flags=re.I)
+
+
+HUAWEI_NAME_ALIASES = (
+    (r"^Huawei\s+(?:FB\s*Neo|Free\s*Buds\s*Neo)\b", "Huawei FreeBuds Neo"),
+    (r"^Huawei\s+Free\s*Buds\s+(SE|Pro)\s*(\d+)\b", lambda m: f"Huawei FreeBuds {m[1].upper() if m[1].lower() == 'se' else 'Pro'} {m[2]}"),
+    (r"^Huawei\s+Free\s*Clip\s*2\s*S\b", "Huawei FreeClip 2 S"),
+    (r"^Huawei\s+Free\s*(Buds|Clip)\s*(?=\d)", lambda m: f"Huawei Free{m[1].title()} "),
+    (r"^Huawei\s+Watch\s+Fit\s*(?=\d)", "Huawei Watch Fit "),
+    (r"\b(\d+)\s*(?:mm|мм)\b", r"\1mm"),
+    (r"^Huawei\s+M[- ]?Pencil\b", "Huawei M-Pencil"),
+)
+HUAWEI_FINISH_ALIASES = {
+    "huawei freeclip 2": {"gold": "Rose Gold", "rose gold": "Rose Gold", "purple": "Berry Purple", "berry purple": "Berry Purple"},
+    "huawei freeclip 2 s": {"blue": "Deepsea Blue", "deepsea blue": "Deepsea Blue", "space silver": "Space Silver"},
+    "huawei nova 15": {"green": "Mint Green", "mint": "Mint Green", "mint green": "Mint Green"},
+    "huawei nova 15 max": {"blue": "Lake Cyan", "cyan": "Lake Cyan", "lake cyan": "Lake Cyan"},
+    "huawei nova 16s": {"blue": "Isle Blue", "isle blue": "Isle Blue", "black": "Starry Black", "starry black": "Starry Black",
+                        "white": "Sky White", "sky white": "Sky White", "breathing crystal": "Breathing Crystal"},
+    "huawei nova 16s pro": {"blue": "Isle Blue", "isle blue": "Isle Blue", "breathing crystal": "Breathing Crystal"},
+    "huawei pura 90s pro": {
+        "black": "Mulberry Black", "mulberry black": "Mulberry Black", "white": "Coconut White", "coconut white": "Coconut White",
+        "orange": "Orange Soda", "orange soda": "Orange Soda", "green": "Guava Soda", "pink green": "Guava Soda", "guava soda": "Guava Soda",
+    },
+    "huawei pura 90s pro max": {
+        "black": "Graphite Black", "graphite": "Graphite Black", "graphite black": "Graphite Black",
+        "gold": "Blush Gold", "blush gold": "Blush Gold", "orange": "Orange Ocean", "orange blue": "Orange Ocean", "orange ocean": "Orange Ocean",
+        "purple": "Blaze Purple", "beige violet": "Blaze Purple", "blaze purple": "Blaze Purple",
+    },
+}
+HUAWEI_MATEPAD_BUNDLES = {
+    "с клавиатурой": r"(?:\+\s*)?\b(?:kb|keyboard|клавиатура|с\s+клавиатурой)\b",
+    "со стилусом": r"(?:\+\s*)?(?<![\w-])(?:pen|stylus|стилус|со\s+стилусом)\b",
+    "с чехлом": r"(?:\+\s*)?\b(?:cover|с\s+чехлом)\b",
+}
+
+
+def huawei_matepad_name(title):
+    match = re.match(r"^Huawei\s+MatePad(?:\s+(Pro\s+Max|SE\s*11|11[.,]5s?|Air|Mini|Pro))?(?=\s|$)", title, re.I)
+    if not match:
+        return title
+    variant = clean(match[1] or "").replace(",", ".").title().replace("Se", "SE").replace("11.5S", "11.5s")
+    variant = re.sub(r"^SE\s*11$", "SE 11", variant)
+    details = title[match.end():].strip()
+    memory = TABLET_MEMORY.search(details)
+    networks = tablet_networks(details)
+    if not memory or len(networks) > 1:
+        return title
+    fields = [tablet_memory_label(memory)]
+    details = details[:memory.start()] + " " + details[memory.end():]
+    size = re.search(r"\b(\d{1,2}[.,]\d|11|12)\s*(?:[\"″”]|''|(?=\s|$))", details)
+    diagonal = size[1].replace(",", ".") if size else ""
+    if size:
+        details = details[:size.start()] + " " + details[size.end():]
+    if not variant and diagonal == "11.5":
+        variant, diagonal = "11.5", ""
+    if (variant, diagonal) in {("SE 11", "11"), ("11.5", "11.5"), ("11.5s", "11.5"), ("Mini", "8.8")}:
+        diagonal = ""
+    matte = re.compile(r"\bpaper[ -]*matte(?:\s+edition)?\b", re.I)
+    air_code = re.search(r"\bWKI-W09\b", details, re.I)
+    # Only a verified model code can resolve a conflicting diagonal.
+    verified_air = variant == "Air" and air_code and networks in ([], ["Wi-Fi"])
+    if verified_air:
+        diagonal = "12"
+        details = details[:air_code.start()] + " " + details[air_code.end():]
+    if matte.search(details) or verified_air:
+        fields.append("PaperMatte")
+        details = matte.sub(" ", details)
+    network = networks[0] if networks else ""
+    if network:
+        details = re.sub(TABLET_NETWORK_ALIASES[network], " ", details, flags=re.I)
+    elif fields[-1] == "PaperMatte" and variant in {"11.5", "11.5s"}:
+        network = "Wi-Fi"
+    elif verified_air:
+        network = "Wi-Fi"
+    bundle = []
+    for label, pattern in HUAWEI_MATEPAD_BUNDLES.items():
+        if re.search(pattern, details, re.I):
+            bundle.append(label)
+            details = re.sub(pattern, " ", details, flags=re.I)
+    if (variant == "Air" and not diagonal and fields == ["8/256", "PaperMatte"]
+            and network == "Wi-Fi" and "с клавиатурой" in bundle):
+        diagonal = "12"
+    size_label = f'{diagonal}"' if diagonal else ""
+    return clean(" ".join(["Huawei MatePad", variant, size_label, *fields, network, clean(details).strip(" +"), *bundle]))
+
+
+def huawei_offer_name(title):
+    flags = FLAGS.findall(title)
+    bare = clean(FLAGS.sub(" ", title))
+    if not re.match(r"^Huawei\b", bare, re.I):
+        return title
+    bare = "Huawei" + bare[6:]
+    for pattern, name in HUAWEI_NAME_ALIASES:
+        bare = re.sub(pattern, name, bare, flags=re.I)
+    bare = standard_colour_case(offer_color_spelling(bare))
+    bare = re.sub(r"\bбежевые\b", "Beige", bare, flags=re.I)
+    bare = TABLET_MEMORY.sub(tablet_memory_label, bare)
+    bare = huawei_matepad_name(bare)
+    bare = re.sub(r"^Huawei\s+(Nova|Pura|Mate)\s+([\da-z]+)(?:\s+(Pro\s+Max|Pro|Max|Ultra)\b)?",
+                  lambda m: f"Huawei {m[1].title()} {m[2].upper() if m[1].lower() in {'pura', 'mate'} else m[2].lower()}"
+                            + (" " + clean(m[3]).title() if m[3] else ""), bare, flags=re.I)
+    if re.match(r"^Huawei Pura 90S Pro(?: Max)?(?=\s+(?:5\s*[gг]\s+)?\d{1,2}/)", bare, re.I):
+        bare = clean(re.sub(r"\b5\s*[gг]\b", " ", bare, flags=re.I))
+    for model, finishes in sorted(HUAWEI_FINISH_ALIASES.items(), key=lambda alias: -len(alias[0])):
+        if bare.casefold().startswith(model + " "):
+            rest = bare[len(model):].strip()
+            memory = TABLET_MEMORY.match(rest)
+            finish = (rest[memory.end():] if memory else rest).strip(" ()")
+            if canon := finishes.get(finish.casefold()):
+                bare = clean(bare[:len(model)] + " " + (memory[0] if memory else "") + " " + canon)
+            break
+    return clean(bare + " " + " ".join(dict.fromkeys(flags)))
 
 
 SAMSUNG_CHARGER = re.compile(r"^(?:🔌\ufe0f?\s*)?Samsung\s+EP[- ]?T(2510|4510|4511|6530)\b", re.I)
@@ -579,6 +754,8 @@ def samsung_block(title):
         return "Samsung S26"
     if re.search(r"^(?:samsung\s+|galaxy\s+)?tab\s*s\s*\d*", plain, re.I):
         return "Samsung Tab S"
+    if re.search(r"^(?:samsung\s+(?:galaxy\s+)?|galaxy\s+)?tab\s+a\s*11\b", plain, re.I):
+        return "Samsung"
     if re.search(r"^(?:samsung\s+)?(?:galaxy\s+)?(?:z\s*)?(?:fold|flip)(?=\s|\d|$)", plain, re.I):
         return "Samsung Fold / Flip"
 
@@ -691,7 +868,9 @@ def ordered_blocks(blocks, preferred=()):
         model = iphone_model(name)
         family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else ("Samsung" if name.startswith("Samsung") else name))
         rank = defaults.index(family) if family in defaults else len(defaults) - 4
-        samsung_rank = {"Samsung Buds": 0, "Samsung A + S25": 1, "Samsung S26": 2, "Samsung Tab S": 3, "Samsung Fold / Flip": 4, "Samsung": 5}.get(name, 0) if family == "Samsung" else 0
+        samsung_order = ("Samsung Buds", "Samsung A + S25", "Samsung S26", "Samsung Tab S",
+                         "Samsung Fold / Flip", "Samsung", *SAMSUNG_NETWORK_BLOCKS)
+        samsung_rank = samsung_order.index(name) if name in samsung_order else 0
         numbered = model if model else (name if family == "Apple Watch" else "")
         number = re.search(r"\d+", numbered)
         return (rank, samsung_rank, -int(number[0]) if number else 0, tuple(int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name.casefold())), name)
@@ -706,6 +885,8 @@ def normal_title(title, context=""):
         title = "Dyson " + title
     elif re.match(r"^\s*5\s*(?:💿\s*)?(?:portal\b|дисковод\b)", FLAGS.sub("", title), re.I):
         title = "PlayStation " + title
+    if re.search(r"\bTab\s+A\s*11\b", title, re.I):
+        title = re.sub(r"\bSM-(X\d{3}[A-Z0-9]*)\b", r"\1", title, flags=re.I)
     title = re.sub(r"\bSM-[A-Za-z0-9/]+\b", "", title, flags=re.I)
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
     # A supplier's Apple Air rows can inherit an unrelated Samsung heading.
@@ -1218,6 +1399,11 @@ def model_group_key(item):
     plain = FLAGS.sub("", normal_title(item.title)).strip()
 
     if item.block.startswith("Samsung"):
+        if re.search(r"\bWatch\b", plain, re.I):
+            watch = re.match(r"^Samsung Watch (Ultra(?: 2)?|[6-9](?: Classic)?)\b",
+                             display_title(item), re.I)
+            if watch:
+                return f"samsung watch {watch[1].casefold()}"
         samsung_model = samsung_phone_group(plain)
         if samsung_model:
             group = "samsung " + " ".join(map(str, samsung_model))
@@ -1316,7 +1502,7 @@ def display_title(item):
         title = re.sub(r"\bZ\s*(?=fold|flip)", "Z ", title, flags=re.I)
         for sku, name in (("A175", "A17 4G"), ("A376", "A37 5G"), ("A576", "A57 5G")):
             title = re.sub(r"\bSamsung\s+" + sku + r"\b", "Samsung " + name, title, flags=re.I)
-        title = samsung_charger_name(samsung_watch_name(title))
+        title = samsung_tab_name(samsung_charger_name(samsung_watch_name(title)))
         if re.match(r"^Samsung\s+A\s*(?:27|37|57)\b", title, re.I):
             title = offer_network_spelling(offer_color_spelling(title))
             if re.match(r"^Samsung\s+A\s*57\b", title, re.I):
@@ -1330,6 +1516,8 @@ def display_title(item):
         title = clean(re.sub(r"\(\s*\)", "", title))
         if markets:
             title += " " + " ".join(dict.fromkeys(markets))
+    if item.block == "Huawei" and not item.accessory:
+        title = huawei_offer_name(title)
     if iphone_model(title) and not item.accessory:
         title = normalize_iphone_18_pro_max_color(title)
         title = FLAGS.sub("", title)
@@ -1495,6 +1683,8 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
         sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
 
         def full_sort(item):
+            if block in SAMSUNG_NETWORK_BLOCKS or block == "Huawei":
+                return item_sort(replace(item, title=display_title(item)))
             if block == "Dyson":
                 return (dyson_model_sort(item.title), item_sort(item))
             if block == "MacBook / iMac":
@@ -1948,12 +2138,24 @@ def rendered_page_title(content):
     return html.unescape(match.group(1)).strip() if match else "Прайс"
 
 
+def samsung_network_block(item):
+    if item.block not in {"Samsung", "Samsung Tab S"} or item.accessory:
+        return item.block
+    title = display_title(item)
+    networks = tablet_networks(title)
+    if re.match(r"^Samsung Watch (?:Ultra(?: 2)?|[6-9](?: Classic)?) \d+mm\b", title):
+        return "Samsung Watch LTE" if "LTE" in networks else "Samsung Watch Bluetooth"
+    if title.startswith("Samsung Tab ") and len(networks) == 1:
+        return f"Samsung Tab {networks[0]}"
+    return item.block
+
+
 def render_blocks(items, settings, overrides=None, closed=False):
     """Render logical sections, pack them, then order the real Telegram messages."""
     overrides = overrides or {}
     groups = OrderedDict()
     for item in items:
-        groups.setdefault(item.block, []).append(item)
+        groups.setdefault(item.block if closed else samsung_network_block(item), []).append(item)
 
     # Old block_order contained parser-level names such as Mac mini, AirPods or
     # Samsung S26. Those are no longer Telegram messages, so it must not drive

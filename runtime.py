@@ -19,6 +19,7 @@ from prices import (
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
     offer_color_spelling, offer_network_spelling, offer_qualifier_suffix, strip_supplier_annotations,
     samsung_a_model, samsung_a_offer_spelling, samsung_s_model, samsung_s_offer_spelling, samsung_charger_name,
+    samsung_tab_name, huawei_offer_name,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -194,8 +195,10 @@ def merge_key(item, *, ignore_samsung_market=False):
         # this model so distinct shades of other Samsung devices stay separate.
         if re.search(r"\bSamsung\s+A08\b", bare, re.I):
             bare = re.sub(r"\b(?:dark[\s-]+blue|navy|blue)\b", "dark blue", bare, flags=re.I)
-        bare = samsung_charger_name(samsung_watch_name(bare))
+        bare = samsung_tab_name(samsung_charger_name(samsung_watch_name(bare)))
         title = bare if ignore_samsung_market else bare + " " + flags
+    if item.block == "Huawei" and not item.accessory:
+        title = huawei_offer_name(title)
     if re.search(r"\bsony\s+wh[-\s]*1000\s*xm\d", title, re.I) and not item.accessory:
         title = re.sub(r"\b(wh)[-\s]*(1000)\s*(xm\d+)", r"\1-\2\3", title, flags=re.I)
         title = re.sub(r"\bblaсk\b", "black", title, flags=re.I)  # Cyrillic с in a Latin colour
@@ -306,6 +309,8 @@ def unique_public_offers(items, request_keys):
     rows = {}
     for item in items:
         title = display_title(item)
+        if item.block == "Huawei" and not item.accessory:
+            title = FLAGS.sub("", title)
         visible = clean(re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\ufe0e\ufe0f]", "", title)).casefold()
         # The current iPhone display hides market flags even for unknown SIM.
         # Keep those market distinctions, along with real condition and SIM.
