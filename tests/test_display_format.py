@@ -14,8 +14,8 @@ class DisplayFormatTests(unittest.TestCase):
             "Honor 600 8/512GB Black 🇰🇿 — 42000",
         ])]).items
         content = "\n".join(render_blocks(rows, Settings()).values())
-        self.assertLess(content.index("8/256GB Black"), content.index("8/512GB Black"))
-        self.assertLess(content.index("8/512GB Black"), content.index("12/512GB Black"))
+        self.assertLess(content.index("8/256 Black"), content.index("8/512 Black"))
+        self.assertLess(content.index("8/512 Black"), content.index("12/512 Black"))
 
     def test_iphone_duo_and_samsung_a57_are_recognized(self):
         rows = parse_documents(["iPhone Duo 256 Black — 75000\nSamsung A57 8/256 Black — 32000"]).items

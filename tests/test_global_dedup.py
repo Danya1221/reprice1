@@ -8,11 +8,53 @@ from unittest.mock import AsyncMock, patch
 
 from config import Settings, Source
 from prices import Item, parse_documents
-from runtime import SyncService, merge_lowest
+from runtime import SyncService, merge_lowest, unique_public_offers
 from state import StateStore
 
 
 class GlobalDuplicateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_catalog_uses_the_same_format_across_sources_and_brands(self):
+        first = '''Pixel 11 Pro 16GB / 512GB (Черный) CA — 89 500
+Google Pixel 11 Pro 16/1024GB Black 🇨🇦 — 107 500
+Sony WF 1000 XM5 Черный 🇪🇺 — 14 800
+Marshall Major V (Blue) 🇪🇺 — 5 400
+JBL Flip 7 BlackДефект коробки 🇷🇺 — 8 000
+JBL Flip 7 Black 🇷🇺 — 9 000
+Dyson HS08 Ceramic Pink 🇬🇧 — 33 200
+Dyson HS08 Ceramic Pink 🇪🇺 — 34 400
+Nintendo Switch 2 🇯🇵 — 42 000
+Nintendo Switch 2 🇬🇧 — 44 300'''
+        second = '''Google Pixel 11 Pro 16 / 512 Black 🇮🇳 — 88 500
+Google Pixel 11 Pro 16/512 Fog 🇮🇳 — 90 000
+Google Pixel 11 Pro 16/1 TB Black 🇺🇸 — 106 500
+Sony WF-1000XM5 Black JP — 13 800
+Marshall Major 5 Синий 🇬🇧 — 5 200
+JBL Flip 7 Black (Дефект коробки) (EU) — 7 500
+iPhone 18 Pro 512 Black ACTIVE eSIM 🇺🇸 — 126 500
+iPhone 18 Pro 512GB Black Актив eSIM 🇯🇵 — 125 500
+iPhone 18 Pro 512 Black SIM 🇭🇰 — 135 500'''
+        with tempfile.TemporaryDirectory() as folder:
+            state = StateStore(Path(folder) / 'state.json')
+            service = SyncService(SimpleNamespace(), Settings(), state)
+            service.publisher.publish = AsyncMock(return_value=0)
+            rows = parse_documents([first]).items + parse_documents([second]).items
+            count, _ = await service.render(items=rows)
+            content = '\n'.join(service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 13)
+        for value in ('Google Pixel 11 Pro 16/512 Black 🇮🇳 — 88 500',
+                      'Google Pixel 11 Pro 16/1TB Black 🇺🇸 — 106 500',
+                      'Sony WF-1000XM5 Black 🇯🇵 — 13 800', 'Marshall Major 5 Blue 🇬🇧 — 5 200',
+                      '7 500', '9 000', '33 200', '34 400', '42 000', '44 300',
+                      'iPhone 18 Pro 512 Black Актив eSIM — 125 500', '135 500'):
+            self.assertIn(value, content)
+        for value in ('Черный', '1024GB', '89 500', '14 800', '5 400', '8 000', '126 500'):
+            self.assertNotIn(value, content)
+
+    def test_available_offer_wins_over_cheaper_request_only_alias(self):
+        rows = parse_documents(['''Marshall Major V Черный 🇪🇺 — 5 000
+Marshall Major 5 (Black) 🇬🇧 — 5 200''']).items
+        self.assertEqual(unique_public_offers(rows, {rows[0].key}), [rows[1]])
+
     def test_brand_spellings_merge_at_lowest_price(self):
         text = '''Apple iPad Pro 11 M4 1TB Silver CA — 104 000
 iPad Pro 11 M4 1 TB Silver CA — 99 000

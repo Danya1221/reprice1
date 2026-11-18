@@ -218,21 +218,28 @@ def offer_network_spelling(title):
     return title
 
 
+OFFER_MARKET_FLAGS = {"IN": "🇮🇳", "IND": "🇮🇳", "MY": "🇲🇾", "MALAYSIA": "🇲🇾",
+                      "KZ": "🇰🇿", "EU": "🇪🇺", "HK": "🇭🇰", "HONG KONG": "🇭🇰",
+                      "ARG": "🇦🇷", "ARAB": "🇦🇪", "CA": "🇨🇦", "AU": "🇦🇺", "UK": "🇬🇧",
+                      "US": "🇺🇸", "USA": "🇺🇸", "JP": "🇯🇵", "RU": "🇷🇺", "CN": "🇨🇳"}
+OFFER_MARKET_CODES = "|".join(re.escape(code).replace(r"\ ", r"\s+") for code in OFFER_MARKET_FLAGS)
+OFFER_MARKET_SUFFIX = re.compile(
+    r"(?:\(\s*(" + OFFER_MARKET_CODES + r")\s*\)|\b(" + OFFER_MARKET_CODES + r")\b)"
+    r"(?=\s*(?:2\s*sim\s*)?$)", re.I,
+)
+
+
 def offer_market_parts(title):
     """Return a title and explicit market flags without guessing conflicts."""
     flags = FLAGS.findall(title)
     bare = clean(FLAGS.sub(" ", title))
-    markers = r"IN|IND|MY|MALAYSIA|KZ|EU|HK|HONG\s+KONG|ARG|ARAB"
-    market = re.search(
-        r"(?:\(\s*(" + markers + r")\s*\)|\b(" + markers + r")\b)"
-        r"(?=\s*(?:2\s*sim\s*)?$)", bare, re.I,
-    )
+    market = OFFER_MARKET_SUFFIX.search(bare)
     if market:
         code = (market.group(1) or market.group(2)).upper()
         code = re.sub(r"\s+", " ", code)
-        flag = {"IN": "🇮🇳", "IND": "🇮🇳", "MY": "🇲🇾", "MALAYSIA": "🇲🇾",
-                "KZ": "🇰🇿", "EU": "🇪🇺", "HK": "🇭🇰", "HONG KONG": "🇭🇰",
-                "ARG": "🇦🇷", "ARAB": "🇦🇪"}[code]
+        flag = OFFER_MARKET_FLAGS[code]
+        if code == "IN" and market[2] and re.search(r"\d\s*$", bare[:market.start()]):
+            return bare, flags  # A bare number followed by "in" can be a dimension.
         if set(flags) == {flag} or (not flags and code != "ARAB"):
             bare = clean(bare[:market.start()] + " " + bare[market.end():])
             if not flags:
@@ -250,7 +257,9 @@ TABLET_NETWORK_ALIASES = {
     "LTE": r"\b(?:lte|4\s*[gг])\b",
     "5G": r"\b5\s*[gг]\b",
 }
-TABLET_MEMORY = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,4}\s*(?:TB|ТБ)|\d{2,4})(?:\s*(?:GB|ГБ))?\b", re.I)
+TABLET_MEMORY = re.compile(
+    r"\b(\d{1,2})(?:\s*(?:GB|ГБ))?\s*/\s*(\d{1,4}\s*(?:TB|ТБ)|\d{2,4})(?:\s*(?:GB|ГБ))?\b", re.I,
+)
 SAMSUNG_TAB_CODES = {
     "A11": ("8.7", {"X130": "Wi-Fi", "X133": "Wi-Fi", "X135": "LTE"}),
     "A11+": ("11", {"X230": "Wi-Fi", "X236": "5G"}),
@@ -394,7 +403,51 @@ def samsung_watch_name(title):
 
 def standard_colour_case(title):
     colours = r"black|white|gray|silver|graphite|purple|violet|mint|blue|cyan|green|gold|red|orange|pink|beige|cream"
-    return re.sub(r"\b(?:" + colours + r")\b", lambda m: m[0].title(), title, flags=re.I)
+    shade = r"(?:(?:light|dark|sky|jet|space|rose|ice|deep|titanium)\s+)?"
+    return re.sub(r"\b" + shade + r"(?:" + colours + r")\b", lambda m: m[0].title(), title, flags=re.I)
+
+
+OFFER_MODEL_ALIASES = (
+    (r"^(?:Google\s+)?(Pixel|Fitbit)\b", lambda m: f"Google {m[1].title()}"),
+    (r"^Apple\s+(?=(?:iPhone|iPad|iMac|MacBook|AirPods)\b)", ""),
+    (r"^(?=Note\s+\d)", "Redmi "),
+    (r"\bMarshall\s+Major\s+(?:V|5)\b", "Marshall Major 5"),
+    (r"\bInsta\s*360\b", "Insta360"),
+    (r"\bGo\s*Pro\b", "GoPro"),
+    (r"\b(WH|WF)[-\s]*1000[\s-]*(XM\d+)\b", lambda m: f"{m[1].upper()}-1000{m[2].upper()}"),
+)
+
+
+def common_offer_title(title, *, accessory=False):
+    """Use the same spelling for supplier comparisons and copyable price rows."""
+    title = strip_supplier_annotations(title)
+    title, markets = offer_market_parts(title)
+    title = re.sub(r"(?<=[a-z0-9])(?=дефект\s+коробки\b)", " ", title, flags=re.I)
+    title = re.sub(r"^(Apple|Samsung|Xiaomi|Google|Huawei|Dyson|Sony|Honor|Garmin)\s+\1\b", r"\1", title, flags=re.I)
+    title = re.sub(r"\bblaсk\b", "Black", title, flags=re.I)  # Cyrillic с in a Latin colour
+    title = standard_colour_case(offer_color_spelling(title))
+    for network, pattern in TABLET_NETWORK_ALIASES.items():
+        if network == "Wi-Fi":
+            pattern = r"\bwi[\s-]*fi\b"  # WF is also part of Sony headphone models.
+        title = re.sub(pattern, network, title, flags=re.I)
+    title = TABLET_MEMORY.sub(tablet_memory_label, title)
+    title = re.sub(r"\b(?:1024\s*(?:GB|ГБ)|1\s*(?:TB|ТБ))\b", "1TB", title, flags=re.I)
+    title = re.sub(r"\b(?:2048\s*(?:GB|ГБ)|2\s*(?:TB|ТБ))\b", "2TB", title, flags=re.I)
+    # Plain parentheses around a colour are supplier formatting. Other
+    # parentheses can contain a condition, a bundle, or a regional variant.
+    title = re.sub(r"\(\s*(Black|White|Gray|Silver|Blue|Green|Purple|Violet|Pink|Red|Orange|Gold|Beige)\s*\)",
+                   r"\1", title)
+    if not accessory:
+        title = re.sub(r"\b(64|128|256|512)\s*(?:GB|ГБ)\b", r"\1", title, flags=re.I)
+        for pattern, spelling in OFFER_MODEL_ALIASES:
+            title = re.sub(pattern, spelling, title, flags=re.I)
+        title = offer_network_spelling(title)
+        if iphone_model(title):
+            if activation_state(title) == "inactive":
+                title = INACTIVE.sub("Не активирован", title)
+            elif activation_state(title) == "active":
+                title = ACTIVE.sub("Актив", title)
+    return clean(title + " " + " ".join(dict.fromkeys(markets)))
 
 
 HUAWEI_NAME_ALIASES = (
@@ -1601,7 +1654,7 @@ def normalize_iphone_18_pro_max_color(title):
 def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
     # Apply at render time so previously saved prices lose the note as well.
-    title = normal_title(strip_supplier_annotations(item.title))
+    title = common_offer_title(normal_title(item.title), accessory=item.accessory)
     if item.block.startswith("Samsung"):
         title, markets = offer_market_parts(title)
         flags = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"
