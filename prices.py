@@ -66,8 +66,11 @@ ORIGINAL_PACKAGING = re.compile(
 STOCK_ANNOTATION = r"(?:остаток(?:\s+на\s+складе)?|в\s+наличии|на\s+складе)\b(?:\s*[:=]?\s*\d+\s*(?:шт(?:ук[аи]?)?\b\.?|pcs\b))?"
 SUPPLIER_STOCK_NOTE = re.compile(
     r"\s*(?:\(\s*" + STOCK_ANNOTATION + r"\s*\)|\[\s*" + STOCK_ANNOTATION + r"\s*\]"
-    r"|\b" + STOCK_ANNOTATION + r"(?=\s*(?:" + FLAGS.pattern + r"\s*)*$))",
+    r"|(?<!нет\s)(?<!не\s)\b" + STOCK_ANNOTATION + r")",
     re.I,
+)
+SUPPLIER_REFERENCE_NOTE = re.compile(
+    r"[\[(]\s*(?:код|артикул|арт\.?)\s+поставщика\s*[:#№]?\s*[\w./-]+\s*[\])]", re.I,
 )
 INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activated|не[\s-]*активирован\w*", re.I)
 ACTIVE = re.compile(r"\bактив\w*|\bactive\b(?![\s-]+(?:band|strap|noise)\b)|"
@@ -148,8 +151,9 @@ def clean(text):
 
 def strip_supplier_annotations(title):
     """Remove notes that describe the seller's stock rather than a variant."""
-    title = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", title)
+    title = clean(re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", title))
     title = ORIGINAL_PACKAGING.sub("", title)
+    title = SUPPLIER_REFERENCE_NOTE.sub(" ", title)
     return clean(SUPPLIER_STOCK_NOTE.sub(" ", title))
 
 
@@ -401,10 +405,34 @@ def samsung_watch_name(title):
                  + (f" ({year})" if year else "") + " " + details)
 
 
+OFFER_COLOUR = (r"(?:(?:light|dark|sky|jet|space|rose|ice|deep|titanium)\s+)?"
+                r"(?:black|white|gray|silver|graphite|purple|violet|mint|blue|cyan|green|gold|red|orange|pink|beige|cream|navy|lilac|brown)")
+OFFER_CONFIGURATION_FIELD = re.compile(
+    r"\b(?:(?P<memory>\d{1,2}/(?:\d{1,4}TB|\d{2,4})|64|128|256|512|[12]TB)"
+    r"|(?P<network>Wi-Fi|LTE|5G)|(?P<colour>" + OFFER_COLOUR + r"))\b", re.I,
+)
+
+
 def standard_colour_case(title):
-    colours = r"black|white|gray|silver|graphite|purple|violet|mint|blue|cyan|green|gold|red|orange|pink|beige|cream"
-    shade = r"(?:(?:light|dark|sky|jet|space|rose|ice|deep|titanium)\s+)?"
-    return re.sub(r"\b" + shade + r"(?:" + colours + r")\b", lambda m: m[0].title(), title, flags=re.I)
+    return re.sub(r"\b" + OFFER_COLOUR + r"\b", lambda m: m[0].title(), title, flags=re.I)
+
+
+def order_offer_configuration(title):
+    """Order an unambiguous trailing configuration, leaving the model intact."""
+    end = len(title)
+    fields = {}
+    for match in reversed(list(OFFER_CONFIGURATION_FIELD.finditer(title))):
+        if title[match.end():end].strip(" ,"):
+            break
+        key = match.lastgroup
+        if key in fields and (key != "colour" or fields[key].casefold() != match[0].casefold()):
+            return title
+        fields[key] = match[0]
+        end = match.start()
+    model = title[:end].rstrip(" ,")
+    if {"memory", "colour"} <= fields.keys() and re.search(r"\d|\bMix\s+Flip\b", model, re.I):
+        return clean(" ".join((model, fields.get("network", ""), fields["memory"], fields["colour"])))
+    return title
 
 
 OFFER_MODEL_ALIASES = (
@@ -426,6 +454,7 @@ def common_offer_title(title, *, accessory=False):
     title = re.sub(r"^(Apple|Samsung|Xiaomi|Google|Huawei|Dyson|Sony|Honor|Garmin)\s+\1\b", r"\1", title, flags=re.I)
     title = re.sub(r"\bblaсk\b", "Black", title, flags=re.I)  # Cyrillic с in a Latin colour
     title = standard_colour_case(offer_color_spelling(title))
+    title = re.sub(r"\b(?:цвет|colou?r)\s*[:=]\s*(?=" + OFFER_COLOUR + r"\b)", "", title, flags=re.I)
     for network, pattern in TABLET_NETWORK_ALIASES.items():
         if network == "Wi-Fi":
             pattern = r"\bwi[\s-]*fi\b"  # WF is also part of Sony headphone models.
@@ -435,13 +464,13 @@ def common_offer_title(title, *, accessory=False):
     title = re.sub(r"\b(?:2048\s*(?:GB|ГБ)|2\s*(?:TB|ТБ))\b", "2TB", title, flags=re.I)
     # Plain parentheses around a colour are supplier formatting. Other
     # parentheses can contain a condition, a bundle, or a regional variant.
-    title = re.sub(r"\(\s*(Black|White|Gray|Silver|Blue|Green|Purple|Violet|Pink|Red|Orange|Gold|Beige)\s*\)",
-                   r"\1", title)
+    title = re.sub(r"\(\s*(" + OFFER_COLOUR + r")\s*\)", r"\1", title, flags=re.I)
     if not accessory:
         title = re.sub(r"\b(64|128|256|512)\s*(?:GB|ГБ)\b", r"\1", title, flags=re.I)
         for pattern, spelling in OFFER_MODEL_ALIASES:
             title = re.sub(pattern, spelling, title, flags=re.I)
         title = offer_network_spelling(title)
+        title = order_offer_configuration(title)
         if iphone_model(title):
             if activation_state(title) == "inactive":
                 title = INACTIVE.sub("Не активирован", title)
@@ -1697,7 +1726,7 @@ def display_title(item):
                       r"e[\s-]*sim|есим|(?:1\s*)?(?:nano\s*)?sim|physical\s*sim|физическ\w*\s*sim)(?!\w)")
         title = re.sub(sim_marker, "", title, flags=re.I)
         title = re.sub(r"\(\s*\)", "", title)
-        title = clean(title).strip(" ·-")
+        title = order_offer_configuration(clean(title).strip(" ·-"))
         if SIM_LABELS.get(item.sim):
             title += " " + SIM_LABELS[item.sim]
     return title

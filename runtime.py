@@ -17,7 +17,7 @@ from prices import (
     FLAGS, ASIS, CPO, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, offer_market_parts, samsung_watch_name,
-    common_offer_title, offer_qualifier_suffix,
+    common_offer_title, offer_qualifier_suffix, order_offer_configuration,
     samsung_a_model, samsung_a_offer_spelling, samsung_s_model, samsung_s_offer_spelling, samsung_charger_name,
     samsung_tab_name, huawei_offer_name, xiaomi_offer_name, XIAOMI_PRICE_BLOCKS,
 )
@@ -197,6 +197,8 @@ def merge_key(item, *, ignore_samsung_market=False):
             "sim": r"\b(?:physical\s*sim|физическ\w*\s*sim|(?:1\s*)?(?:nano\s*)?sim)\b",
         }
         title = re.sub(patterns[item.sim], " ", title, flags=re.I)
+        title = re.sub(r"\(\s*\)", " ", title)
+        title = order_offer_configuration(clean(title))
     # The public SIM section combines supplier labels "SIM" and "SIM+eSIM";
     # keep eSIM-only and two-physical-SIM variants separate.
     if iphone_model(title) and item.sim in {"sim", "hybrid"}:

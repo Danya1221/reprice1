@@ -55,6 +55,37 @@ iPhone 18 Pro 512 Black SIM 🇭🇰 — 135 500'''
 Marshall Major 5 (Black) 🇬🇧 — 5 200''']).items
         self.assertEqual(unique_public_offers(rows, {rows[0].key}), [rows[1]])
 
+    async def test_model_annotations_and_reordered_attributes_do_not_add_public_rows(self):
+        rows = parse_documents(['''Google Pixel 11 Pro Black 16/512 🇪🇺 — 89 500
+Pixel 11 Pro (код поставщика: P-57) 16GB/512GB цвет: Чёрный Black 🇮🇳 — 88 500
+Google Pixel 11 Pro в наличии 16/512 Black 🇷🇺 — 89 000
+Google Pixel 11 Pro 16/512 Black 🇷🇺 — 89 000
+Google Pixel 11 Pro 16/512 Dark Blue 🇷🇺 — 90 000
+Google Pixel 11 Pro 16/512 Blue 🇷🇺 — 91 000
+Google Pixel 11 Pro 16/1TB Black 🇷🇺 — 99 000
+iPhone 17 Black 256GB (eSIM) 🇺🇸 — 65 000
+iPhone 17 256 Black eSIM 🇺🇸 — 66 000
+iPhone 17 256 Black SIM 🇭🇰 — 67 000
+Redmi Note 15 8/256 4G White 🇪🇺 — 20 000
+Redmi Note 15 4G White 8/256 🇷🇺 — 19 500
+Redmi Note 15 5G 8/256 White 🇪🇺 — 21 000
+Xiaomi Mi Mix Flip Чёрный 12/512GB 🇪🇺 — 45 300
+Xiaomi Mix Flip 12/512 (Black) 🇷🇺 — 45 500''']).items
+        with tempfile.TemporaryDirectory() as folder:
+            state = StateStore(Path(folder) / 'state.json')
+            service = SyncService(SimpleNamespace(), Settings(), state)
+            service.publisher.publish = AsyncMock(return_value=0)
+            count, _ = await service.render(items=rows)
+            content = '\n'.join(service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 9)
+        for value in ('Google Pixel 11 Pro 16/512 Black 🇮🇳 — 88 500',
+                      '16/512 Dark Blue', '16/512 Blue', '16/1TB Black',
+                      'iPhone 17 256 Black eSIM — 65 000', 'iPhone 17 256 Black SIM — 67 000',
+                      '19 500', '21 000', 'Xiaomi Mix Flip 12/512 Black 🇪🇺 — 45 300'):
+            self.assertIn(value, content)
+        for value in ('P-57', 'в наличии', 'Чёрный', '89 000', '89 500', '66 000', '20 000', '45 500'):
+            self.assertNotIn(value, content)
+
     def test_brand_spellings_merge_at_lowest_price(self):
         text = '''Apple iPad Pro 11 M4 1TB Silver CA — 104 000
 iPad Pro 11 M4 1 TB Silver CA — 99 000
