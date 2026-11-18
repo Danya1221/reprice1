@@ -680,8 +680,8 @@ Samsung S26 12/512GB Cobalt Violet 🇰🇿 — 68000"""]).items
         self.assertEqual(count, 2)
         self.assertEqual(content.count("40 000"), 2)
         self.assertNotIn("40 300", content)
-        self.assertIn("A.Icyblue 🇮🇩", content)
-        self.assertIn("A.Lilac 🇮🇩", content)
+        self.assertIn("Samsung A57 12/256 Icyblue 🇮🇩", content)
+        self.assertIn("Samsung A57 12/256 Lilac 🇮🇩", content)
 
     async def test_pause_persists_and_skips_periodic_sync(self):
         await self.service.pause()

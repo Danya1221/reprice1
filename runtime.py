@@ -1,6 +1,7 @@
 """Synchronization lifecycle for two supplier prices."""
 import asyncio
 import logging
+import os
 import re
 import time
 from collections import OrderedDict
@@ -16,7 +17,7 @@ from prices import (
     FLAGS, ASIS, CPO, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
-    offer_qualifier_suffix,
+    offer_color_spelling, offer_network_spelling, offer_qualifier_suffix,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -27,6 +28,11 @@ log = logging.getLogger(__name__)
 SUPERNOVA_BOT = "@vodorod00bot"
 MAX_SOURCE_SECONDS = 300
 MIN_SYNC_GAP_SECONDS = 30
+
+
+def deployed_revision():
+    value = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "").strip()
+    return value[:7] if re.fullmatch(r"[0-9a-f]{7,40}", value, re.I) else ""
 
 
 def sync_due(now, last_attempt, last_finished, interval):
@@ -122,17 +128,9 @@ def galaxy_book_descriptor(item):
 
 def common_offer_aliases(title, item):
     """Normalise spelling without discarding a variant, region or condition."""
-    for pattern, colour in (
-        (r"\bgrey\b|\bсер(?:ый|ая|ое)\b", "gray"),
-        (r"\bч[её]рн(?:ый|ая|ое)\b", "black"),
-        (r"\bбел(?:ый|ая|ое)\b", "white"),
-        (r"\bзел[её]н(?:ый|ая|ое)\b", "green"),
-        (r"\bсини(?:й|я|е)\b", "blue"),
-        (r"\bсеребрист(?:ый|ая|ое)\b|\bсеребро\b", "silver"),
-    ):
-        title = re.sub(pattern, colour, title, flags=re.I)
     title = re.sub(r"\b(\d+)\s*(?:TB|ТБ)\b", r"\1TB", title, flags=re.I)
     if not item.accessory:
+        title = offer_network_spelling(title)
         title = re.sub(r"\bapple\s+(?=(?:ipad|imac|macbook|airpods)\b)", "", title, flags=re.I)
         if item.block == "Redmi":
             title = re.sub(r"^((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)(?=note\s+\d)",
@@ -142,8 +140,8 @@ def common_offer_aliases(title, item):
 
 
 def merge_key(item):
-    """Normalize explicit iPhone SIM spelling without guessing SIM or region."""
-    title = item.title
+    """Match supplier spellings for the same product variant."""
+    title = offer_color_spelling(item.title)
     neo_key = macbook_neo_merge_key(item)
     if neo_key is not None:
         return neo_key
@@ -168,12 +166,11 @@ def merge_key(item):
         bare = re.sub(r"\bSamsung\s+A175\b", "Samsung A17 4G", bare, flags=re.I)
         bare = re.sub(r"\bSamsung\s+A376\b", "Samsung A37 5G", bare, flags=re.I)
         bare = re.sub(r"\bSamsung\s+A576\b", "Samsung A57 5G", bare, flags=re.I)
-        if re.search(r"\bSamsung\s+A(?:27|37|57)\b", bare, re.I):
-            bare = re.sub(r"\b5\s*G\b", " ", bare, flags=re.I)
         if re.search(r"\bSamsung\s+A(?:37|57)\b", bare, re.I):
-            bare = re.sub(r"\bawesome\s+|\bA\.\s*", "", bare, flags=re.I)
             bare = re.sub(r"\bgr[ae]y\s*green\b", "graygreen", bare, flags=re.I)
             bare = re.sub(r"\bic(?:e|y)\s*blue\b", "icyblue", bare, flags=re.I)
+        if re.search(r"\bSamsung\s+A57\b", bare, re.I):
+            bare = re.sub(r"\bdark[\s-]+blue\b", "navy", bare, flags=re.I)
         if re.search(r"\bSamsung\s+A27\b", bare, re.I):
             bare = re.sub(r"\b(?:light\s+)?pink\b", "light pink", bare, flags=re.I)
         s26 = re.match(r"^Samsung\s+S26(?:(\+)(?=\s|$)|\s+(FE|Ultra)\b|(?=\s|$))", bare, re.I)
@@ -185,7 +182,7 @@ def merge_key(item):
                 bare = re.sub(r"\b" + code + r"B\b", " ", bare, flags=re.I)
             elif markets and markets <= {"🇭🇰", "🇨🇳"}:
                 bare = re.sub(r"\b" + code + r"0\b", " ", bare, flags=re.I)
-            bare = re.sub(r"\b5\s*G\b", " ", bare, flags=re.I)
+            bare = re.sub(r"\b5\s*[gг]\b", " ", bare, flags=re.I)
             if version != "fe":
                 bare = re.sub(r"\b(?:sky\s+)?blue\b|\bголуб(?:ой|ая|ое)\b", "sky blue", bare, flags=re.I)
                 bare = re.sub(r"\b(?:cobalt\s+)?violet\b|\bфиолетов(?:ый|ая|ое)\b", "cobalt violet", bare, flags=re.I)
@@ -202,7 +199,7 @@ def merge_key(item):
                 bare = re.sub(r"\b" + model_code + r"B\b", " ", bare, flags=re.I)
             elif markets and markets <= {"🇭🇰", "🇨🇳"}:
                 bare = re.sub(r"\b" + model_code + r"0\b", " ", bare, flags=re.I)
-            bare = re.sub(r"\b5\s*G\b", " ", bare, flags=re.I)
+            bare = re.sub(r"\b5\s*[gг]\b", " ", bare, flags=re.I)
             bare = re.sub(r"\b(\d{1,2}\s*/\s*)1024(?:\s*(?:GB|ГБ))?\b", r"\g<1>1TB", bare, flags=re.I)
             if version in {"", "fe"}:
                 bare = re.sub(r"\bic(?:e|y)\s*blue\b", "icyblue", bare, flags=re.I)
@@ -217,16 +214,6 @@ def merge_key(item):
                 bare = re.sub(r"\b(?:light\s+)?blue\b|\bсини(?:й|я|е)\b", "light blue", bare, flags=re.I)
         if re.search(r"\bSamsung\s+A07s\b", bare, re.I):
             bare = re.sub(r"\b(?:light\s+)?violet\b", "light violet", bare, flags=re.I)
-        for pattern, colour in ((r"\bсини(?:й|я|е)\b", "blue"),
-                                (r"\bч[её]рн(?:ый|ая|ое)\b", "black"),
-                                (r"\bзел[её]н(?:ый|ая|ое)\b", "green"),
-                                (r"\bбел(?:ый|ая|ое)\b", "white"),
-                                (r"\bсер(?:ый|ая|ое)\b|\bgrey\b", "gray"),
-                                (r"\bфиолетов(?:ый|ая|ое)\b", "violet"),
-                                (r"\bрозов(?:ый|ая|ое)\b", "pink"),
-                                (r"\bсеребро\b|\bсеребрист(?:ый|ая|ое)\b", "silver"),
-                                (r"\bграфит(?:овый|овая|овое)?\b", "graphite")):
-            bare = re.sub(pattern, colour, bare, flags=re.I)
         # Samsung lists the Russian A08 in blue, silver and green; suppliers
         # also call its blue version Dark Blue or Navy. Limit this mapping to
         # this model so distinct shades of other Samsung devices stay separate.
@@ -234,11 +221,6 @@ def merge_key(item):
             bare = re.sub(r"\b(?:dark[\s-]+blue|navy|blue)\b", "dark blue", bare, flags=re.I)
         bare = samsung_watch_name(bare)
         title = bare + " " + flags
-    if item.block == "Realme" and not item.accessory:
-        for pattern, color in ((r"\bбежев(?:ый|ая|ое)\b", "beige"),
-                               (r"\bсер(?:ый|ая|ое)\b|\bgrey\b", "gray"),
-                               (r"\bграфит(?:овый|овая|овое)?\b", "graphite")):
-            title = re.sub(pattern, color, title, flags=re.I)
     if re.search(r"\bsony\s+wh[-\s]*1000\s*xm\d", title, re.I) and not item.accessory:
         title = re.sub(r"\b(wh)[-\s]*(1000)\s*(xm\d+)", r"\1-\2\3", title, flags=re.I)
         title = re.sub(r"\bblaсk\b", "black", title, flags=re.I)  # Cyrillic с in a Latin colour
@@ -1088,7 +1070,8 @@ class SyncService:
             if latest_options.get("physical_order") == original_order and order != latest_options.get("physical_order"):
                 latest_options["physical_order"] = order
                 self.state.set("options", latest_options)
-        update = {"last_publish": timestamp(), "published_items": 0 if closed else len(selected)}
+        update = {"last_publish": timestamp(), "published_revision": deployed_revision(),
+                  "published_items": 0 if closed else len(selected)}
         update["published_price_sources"] = {"time": timestamp(), "rows": [] if closed else price_sources}
         self.state.update(update)
         return len(selected), changes
@@ -1398,6 +1381,10 @@ class SyncService:
                     f"не распознано строк: {value.get('rejected_count', 0)}"
                 )
         lines.append(f"Опубликовано позиций: {self.state.get('published_items', 0)}")
+        if revision := deployed_revision():
+            lines.append(f"Версия бота: {revision}")
+        if published_revision := self.state.get("published_revision"):
+            lines.append(f"Версия последней публикации: {published_revision}")
         return "\n".join(lines)
 
     async def disconnect_clients(self):

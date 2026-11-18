@@ -44,7 +44,7 @@ Galaxy A57 8/256 Navy SM-A576B/DS🇷🇺
         self.assertIn("iPhone 18 Duo 1TB White eSIM — 288 300", content)
         self.assertIn("iPhone Duo 256 White eSIM — 194 300", content)
         self.assertIn("Samsung A57 8/128 Gray 🇰🇿 — 29 000", content)
-        self.assertIn("Samsung A57 5G 12/512 A.Navy 🇲🇾 — 42 000", content)
+        self.assertIn("Samsung A57 12/512 Navy 🇲🇾 — 42 000", content)
     def test_full_row_including_price_is_copyable_and_generic_header_removed(self):
         items = parse_documents(["AirPods 4 — 9800"]).items
         content = next(iter(render_blocks(items, Settings()).values()))

@@ -136,6 +136,63 @@ def clean(text):
     return SPACE.sub(" ", unicodedata.normalize("NFKC", text).replace("\u200b", "")).strip()
 
 
+COLOR_TRANSLATIONS = (
+    (r"т[её]мно[- ]+син(?:ий|яя|ее)", "Dark Blue"),
+    (r"светло[- ]+розов(?:ый|ая|ое)", "Light Pink"),
+    (r"светло[- ]+син(?:ий|яя|ее)", "Light Blue"),
+    (r"ч[её]рн(?:ый|ая|ое)", "Black"),
+    (r"бел(?:ый|ая|ое)", "White"),
+    (r"зел[её]н(?:ый|ая|ое)", "Green"),
+    (r"син(?:ий|яя|ее)", "Blue"),
+    (r"сер(?:ый|ая|ое)|grey", "Gray"),
+    (r"серебрист(?:ый|ая|ое)|серебро", "Silver"),
+    (r"золотист(?:ый|ая|ое)|золот(?:ой|ая|ое)", "Gold"),
+    (r"фиолетов(?:ый|ая|ое)", "Violet"),
+    (r"сиренев(?:ый|ая|ое)", "Lilac"),
+    (r"розов(?:ый|ая|ое)", "Pink"),
+    (r"графит(?:овый|овая|овое)?", "Graphite"),
+    (r"бежев(?:ый|ая|ое)", "Beige"),
+    (r"оранжев(?:ый|ая|ое)", "Orange"),
+    (r"красн(?:ый|ая|ое)", "Red"),
+    (r"ж[её]лт(?:ый|ая|ое)", "Yellow"),
+    (r"коричнев(?:ый|ая|ое)", "Brown"),
+)
+
+
+def offer_color_spelling(title):
+    """Translate colour spellings while retaining the shade and other attributes."""
+    for pattern, color in COLOR_TRANSLATIONS:
+        title = re.sub(r"\b(?:" + pattern + r")\b", color, title, flags=re.I)
+    title = re.sub(r"\b(?:navy(?:\s+blue)?|нейви|нави)\b", "Navy", title, flags=re.I)
+    # A./А. is shorthand for Samsung's Awesome colours. Only consume the
+    # prefix in front of a known colour, so model identifiers are untouched.
+    title = re.sub(
+        r"\b(?:awesome\s+|[aа]\s*\.\s*)(?=(?:navy|gr[ae]y(?:\s*green)?|"
+        r"(?:dark|light)\s+blue|ic(?:e|y)\s*blue|lilac|lavender|charcoal|white|black|silver|blue|green|pink|violet)\b)",
+        "", title, flags=re.I,
+    )
+    return title
+
+
+# For these phone ranges, 5G is a redundant part of the model description.
+# Other models can have distinct LTE and 5G editions with the same base name.
+MODELS_WITH_REDUNDANT_5G = re.compile(
+    r"^(?:(?:samsung\s+)?(?:galaxy\s+)?(?:a\s*(?:26|27|36|37|56|57)\b|(?:z\s*)?fold\s*7\b)"
+    r"|(?:google\s+)?pixel\s+(?:10a|11(?:\s+pro(?:\s+(?:xl|fold))?)?)\b"
+    r"|honor\s+600(?:\s+pro)?(?=\s+5\s*[gг]\b|\s+\d|\s*$)"
+    r"|one\s*plus\s+(?:15r?|nord\s+5)\b)",
+    re.I,
+)
+
+
+def offer_network_spelling(title):
+    # Requiring a known model avoids interpreting quantities or dropping
+    # the network label from phones where it identifies a separate version.
+    if MODELS_WITH_REDUNDANT_5G.match(FLAGS.sub("", title).strip()):
+        return clean(re.sub(r"\b5\s*[gг]\b", " ", title, flags=re.I))
+    return title
+
+
 def samsung_market_parts(title):
     """Return a title and explicit market flags without guessing conflicts."""
     flags = FLAGS.findall(title)
@@ -1101,6 +1158,10 @@ def display_title(item):
         for sku, name in (("A175", "A17 4G"), ("A376", "A37 5G"), ("A576", "A57 5G")):
             title = re.sub(r"\bSamsung\s+" + sku + r"\b", "Samsung " + name, title, flags=re.I)
         title = samsung_watch_name(title)
+        if re.match(r"^Samsung\s+A\s*(?:27|37|57)\b", title, re.I):
+            title = offer_network_spelling(offer_color_spelling(title))
+            if re.match(r"^Samsung\s+A\s*57\b", title, re.I):
+                title = re.sub(r"\bDark Blue\b", "Navy", title, flags=re.I)
         title = re.sub(r"\b(\d{1,2}\s*/\s*\d{2,4})\s*(?:GB|ГБ)\b", r"\1", title, flags=re.I)
         title = clean(re.sub(r"\(\s*\)", "", title))
         if markets:

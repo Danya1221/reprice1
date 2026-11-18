@@ -4,7 +4,7 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from config import Settings, Source
 from prices import Item, parse_documents
@@ -65,6 +65,36 @@ Marshall Major 5 Black 🇪🇺 — 5 000
 Marshall Major 5 Black 🇬🇧 — 5 100'''
         rows = parse_documents([text]).items
         self.assertEqual(len(merge_lowest([rows])), 11)
+
+    async def test_publication_merges_a37_and_cross_brand_colour_and_network_aliases(self):
+        text = '''Samsung A37 6/128 White 🇿🇦 — 24 700
+Samsung A37 5G 6/128 White 🇿🇦 — 24 700
+Samsung A37 5Г 6/128 Белый 🇿🇦 — 24 700
+Samsung A57 12/512 Navy 🇷🇺 — 42 900
+Samsung A57 5G 12/512 A.Navy 🇷🇺 — 43 000
+Samsung A57 5Г 12/512 А.Тёмно-синий 🇷🇺 — 42 500
+Honor 600 12/256 Orange 🇷🇺 — 40 000
+Honor 600 5Г 12/256 Оранжевый 🇷🇺 — 39 000
+Google Pixel 10a 8/128 Black 🇪🇺 — 38 000
+Google Pixel 10a 5G 8/128 Чёрный 🇪🇺 — 37 500
+Redmi Note 15 4G 8/256 White 🇪🇺 — 20 000
+Redmi Note 15 5G 8/256 Белый 🇪🇺 — 21 000'''
+        with tempfile.TemporaryDirectory() as folder:
+            state = StateStore(Path(folder) / 'state.json')
+            service = SyncService(SimpleNamespace(), Settings(), state)
+            service.publisher.publish = AsyncMock(return_value=0)
+            with patch.dict('os.environ', {'RAILWAY_GIT_COMMIT_SHA': 'a' * 40}):
+                count, _ = await service.render(items=parse_documents([text]).items)
+                status = service.status()
+            content = '\n'.join(service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 6)
+        self.assertEqual(content.count('Samsung A37 6/128 White 🇿🇦 — 24 700'), 1)
+        self.assertIn('Samsung A57 12/512 Navy 🇷🇺 — 42 500', content)
+        self.assertIn('39 000', content)
+        self.assertIn('37 500', content)
+        self.assertIn('20 000', content)
+        self.assertIn('21 000', content)
+        self.assertIn('Версия последней публикации: aaaaaaa', status)
 
     async def test_direct_publication_also_merges_duplicates(self):
         text = '''Apple iPad Pro 11 M4 1TB Silver CA — 104 000
