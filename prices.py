@@ -1036,8 +1036,12 @@ def display_title(item):
         flags = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"
         title = re.sub(r"^" + flags + r"(?:samsung\s+galaxy|galaxy)\s+",
                        r"\1Samsung ", title, count=1, flags=re.I)
-        title = re.sub(r"^" + flags + r"(?=A\s*\d{2,3}[a-z]?\b)",
+        title = re.sub(r"^" + flags + r"(?=[AS]\s*\d{2,3}[a-z]?\b)",
                        r"\1Samsung ", title, count=1, flags=re.I)
+        india = re.search(r"(?:\(\s*IN\s*\)|\bIN)\s*$", title, re.I)
+        markets = set(FLAGS.findall(title))
+        if india and (not markets or markets == {"🇮🇳"}):
+            title = title[:india.start()].rstrip() + ("" if markets else " 🇮🇳")
         title = clean(re.sub(r"\(\s*\)", "", title))
     if iphone_model(title) and not item.accessory:
         title = normalize_iphone_18_pro_max_color(title)

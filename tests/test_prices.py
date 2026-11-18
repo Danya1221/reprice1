@@ -797,7 +797,7 @@ S25 Ultra 12/256 Black — 65000""").items
         self.assertIn("<b>— Samsung A + S25 —</b>", page)
         self.assertIn("A17 8/256GB Blue — 17 800</code>\n\n<code>Samsung A27", page)
         self.assertIn("<b>— Samsung S25 —</b>", page)
-        self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>S25 Ultra", page)
+        self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>Samsung S25 Ultra", page)
 
     def test_iphone_models_are_separate_and_keep_activation_sections(self):
         items = self.parse("""iPhone 16
@@ -845,8 +845,8 @@ S26 12/256 Black — 64300
 S26 12/256 Sky Blue — 63000
 S26 12/512 Black — 70800""").items
         content = next(iter(render_blocks(items, Settings()).values()))
-        self.assertIn("12/128 Cobalt Violet — 57 300</code>\n\n<code>S26 12/256", content)
-        self.assertIn("12/256 Sky Blue — 63 000</code>\n\n<code>S26 12/512", content)
+        self.assertIn("12/128 Cobalt Violet — 57 300</code>\n\n<code>Samsung S26 12/256", content)
+        self.assertIn("12/256 Sky Blue — 63 000</code>\n\n<code>Samsung S26 12/512", content)
 
     def test_mac_mini_and_apple_tv_never_inherit_previous_brand(self):
         items = self.parse("""Kodak

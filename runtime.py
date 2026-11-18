@@ -135,9 +135,33 @@ def merge_key(item):
     if item.block.startswith("Samsung") and not item.accessory:
         flags = "".join(FLAGS.findall(title))
         bare = FLAGS.sub("", title).strip()
+        # Supplier shorthand IN is an explicit market, not a colour or SKU.
+        indian_suffix = re.search(r"(?:\(\s*IN\s*\)|\bIN)\s*$", bare, re.I)
+        if indian_suffix and (not flags or set(FLAGS.findall(flags)) == {"🇮🇳"}):
+            bare = bare[:indian_suffix.start()].strip()
+            flags = flags or "🇮🇳"
         bare = re.sub(r"^\s*(?:samsung\s+galaxy|galaxy)\b", "Samsung", bare, flags=re.I)
+        bare = re.sub(r"^\s*(?=s\s*25\b)", "Samsung ", bare, flags=re.I)
         bare = re.sub(r"\b(S\d+)\s*plus\b", r"\1+", bare, flags=re.I)
         bare = re.sub(r"\b(fold|flip)\s*(\d+)\b", r"\1 \2", bare, flags=re.I)
+        s25 = re.match(r"^Samsung\s+S25(?:\s+(FE|Ultra))?\b", bare, re.I)
+        if s25:
+            version = (s25.group(1) or "").casefold()
+            markets = set(FLAGS.findall(flags))
+            # Only remove known model codes for matching model/market pairs.
+            # Other codes can describe different hardware and remain distinct.
+            model_code = {"": "S931", "fe": "S731", "ultra": "S938"}[version]
+            if markets and not markets.intersection({"🇭🇰", "🇨🇳"}):
+                bare = re.sub(r"\b" + model_code + r"B\b", " ", bare, flags=re.I)
+            elif markets and markets <= {"🇭🇰", "🇨🇳"}:
+                bare = re.sub(r"\b" + model_code + r"0\b", " ", bare, flags=re.I)
+            bare = re.sub(r"\b5\s*G\b", " ", bare, flags=re.I)
+            bare = re.sub(r"\b(\d{1,2}\s*/\s*)1024(?:\s*(?:GB|ГБ))?\b", r"\g<1>1TB", bare, flags=re.I)
+            if version in {"", "fe"}:
+                bare = re.sub(r"\bic(?:e|y)\s*blue\b", "icyblue", bare, flags=re.I)
+            if not version:
+                bare = re.sub(r"\bsilver(?:\s+shadow)?\b", "silver shadow", bare, flags=re.I)
+        bare = re.sub(r"\bjet\s*black\b", "jetblack", bare, flags=re.I)
         # The currently listed Galaxy A18 is the LTE model; keep an explicit
         # 5G variant distinct if a supplier provides one.
         if re.search(r"\bSamsung\s+A18\b", bare, re.I):
@@ -236,8 +260,13 @@ def select_samsung_regions(items):
         regions = set(FLAGS.findall(item.title))
         if rst_marker.search(item.title):
             regions.add("explicit-rst")
-        comparison_title = rst_marker.sub("", FLAGS.sub("", item.title))
-        key = merge_key(replace(item, title=comparison_title))
+        comparison_title = rst_marker.sub("", item.title)
+        key_parts = merge_key(replace(item, title=comparison_title)).split("|")
+        # Compare the same configuration across markets after model and
+        # country aliases have been interpreted with their original flags.
+        if len(key_parts) == 4:
+            key_parts[1] = ""
+        key = "|".join(key_parts)
         groups.setdefault(key, []).append((index, item, regions))
     for group in groups.values():
         # At equal price prefer a protected region, avoiding an extra row.
