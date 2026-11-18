@@ -145,9 +145,18 @@ def merge_key(item):
         for pattern, colour in ((r"\bсини(?:й|я|е)\b", "blue"),
                                 (r"\bч[её]рн(?:ый|ая|ое)\b", "black"),
                                 (r"\bзел[её]н(?:ый|ая|ое)\b", "green"),
+                                (r"\bбел(?:ый|ая|ое)\b", "white"),
+                                (r"\bсер(?:ый|ая|ое)\b|\bgrey\b", "gray"),
+                                (r"\bфиолетов(?:ый|ая|ое)\b", "violet"),
+                                (r"\bрозов(?:ый|ая|ое)\b", "pink"),
                                 (r"\bсеребро\b|\bсеребрист(?:ый|ая|ое)\b", "silver"),
                                 (r"\bграфит(?:овый|овая|овое)?\b", "graphite")):
             bare = re.sub(pattern, colour, bare, flags=re.I)
+        # Samsung lists the Russian A08 in blue, silver and green; suppliers
+        # also call its blue version Dark Blue or Navy. Limit this mapping to
+        # this model so distinct shades of other Samsung devices stay separate.
+        if re.search(r"\bSamsung\s+A08\b", bare, re.I):
+            bare = re.sub(r"\b(?:dark[\s-]+blue|navy|blue)\b", "dark blue", bare, flags=re.I)
         title = bare + " " + flags
     if item.block == "Realme" and not item.accessory:
         for pattern, color in ((r"\bбежев(?:ый|ая|ое)\b", "beige"),
