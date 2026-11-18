@@ -9,6 +9,10 @@ from decimal import Decimal, ROUND_HALF_UP
 
 SPACE = re.compile(r"\s+")
 FLAGS = re.compile(r"[\U0001F1E6-\U0001F1FF]{2}")
+APPLE_WARRANTY_NOTICE = re.compile(
+    r"^\s*(?:⚠\ufe0f?\s*)*важная\s+информация\s+об\s+обновл[её]нной\s+"
+    r"гарантийной\s+политик[ие]\s+apple(?:\s*[.:;—–-]+\s*|\s*$)", re.I,
+)
 CLOSED = re.compile(r"(?:мы\s+)?(?:сейчас\s+|временно\s+)?закрыты|продажи\s+закрыты|"
                     r"рабочий\s+день\s+окончен|магазин\s+закрыт|не\s+работаем|"
                     r"при[её]м\s+заказов\s+(?:заверш[её]н|закрыт)", re.I)
@@ -332,6 +336,8 @@ def apple_watch_block(title):
         return "Apple Watch"
     if re.search(r"^SE\s*\d*\s+" + watch_size + r"\b", plain, re.I):
         return "Apple Watch"
+    if re.search(r"^SE\s*\(\s*20\d{2}\s*\)\s+" + watch_size + r"\b", plain, re.I):
+        return "Apple Watch"
     if re.search(r"^(?:UL|ULTRA)\s*\d{1,2}\b", plain, re.I):
         return "Apple Watch"
 
@@ -475,7 +481,8 @@ def ordered_blocks(blocks, preferred=()):
 
 
 def normal_title(title, context=""):
-    title = strip_decoration(title)
+    title = strip_decoration(APPLE_WARRANTY_NOTICE.sub("", strip_decoration(title)))
+    context = APPLE_WARRANTY_NOTICE.sub("", strip_decoration(context))
     # Explicit supplier shorthand must win over a preceding brand header.
     if re.match(r"^\s*(?:hd|hs|ht)\s*\d{2}(?:[- ]?[a-z])?\b", FLAGS.sub("", title), re.I):
         title = "Dyson " + title
@@ -635,7 +642,7 @@ def parse_documents(documents, default_currency="RUB", fallback_block="", docume
     section_sim = "unknown"
     closed = False
     for raw_line, priority in _price_lines_with_priority(documents, document_priorities):
-        line = strip_decoration(raw_line)
+        line = strip_decoration(APPLE_WARRANTY_NOTICE.sub("", strip_decoration(raw_line)))
         if not line:
             continue
         if CLOSED.search(line):
