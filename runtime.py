@@ -243,10 +243,16 @@ def merge_lowest(sources, conflicted_books=None):
             continue
         if use_book and book[1] is not None and not detailed[key]:
             # Preserve the richer verified description while using the best price.
-            merged[key] = replace(item, price=min(item.price, current.price))
+            merged[key] = replace(
+                item, price=min(item.price, current.price),
+                from_hi=(item.price <= current.price and item.from_hi
+                         or current.price <= item.price and current.from_hi),
+            )
             detailed[key] = True
         elif item.price < current.price:
-            merged[key] = replace(current, price=item.price) if use_book and detailed[key] else item
+            merged[key] = replace(current, price=item.price, from_hi=item.from_hi) if use_book and detailed[key] else item
+        elif item.price == current.price and item.from_hi and not current.from_hi:
+            merged[key] = replace(current, from_hi=True)
     return list(merged.values())
 
 
@@ -318,7 +324,7 @@ def public_offer_key(item):
     return identity(title + " " + "".join(sorted(markets)), sim, item.currency) + offer_qualifier_suffix(item)
 
 
-def unique_public_offers(items, request_keys):
+def unique_public_offers(items, request_keys, prefer_hi=False):
     """Publish one lowest available price per normalized product variant."""
     rows = {}
     for item in items:
@@ -326,6 +332,8 @@ def unique_public_offers(items, request_keys):
         rank = (item.key in request_keys, item.price)
         previous = rows.get(key)
         if previous is None or rank < previous[0]:
+            rows[key] = (rank, item)
+        elif prefer_hi and rank == previous[0] and item.from_hi and not previous[1].from_hi:
             rows[key] = (rank, item)
     return [item for _, item in rows.values()]
 
@@ -962,7 +970,8 @@ class SyncService:
             if block in {"CPO", "ASIS"}:
                 block = iphone_model(item.title) or product_block(item.title)
             if not item.accessory and physical_brand_label(block) in {"Apple", "iPhone"}:
-                result.append(item)
+                # Source provenance is derived from the cache entry or reader.
+                result.append(replace(item, from_hi=True))
         return result
 
     def cached_items(self, include_closed=False):
@@ -1058,7 +1067,7 @@ class SyncService:
             active_keys = {id(item) for item in select_samsung_regions(active)}
             expired_keys = {id(item) for item in select_samsung_regions(expired)}
             selected = [item for item in selected if id(item) in active_keys | expired_keys]
-            selected = unique_public_offers(selected, request_keys)
+            selected = unique_public_offers(selected, request_keys, prefer_hi=options.get("hi_markup_rub") is not None)
         render_options = {**options, "_request_only_keys": {item.key for item in request_only}}
         pages = render_blocks(selected, self.settings, render_options, closed=closed)
         if not closed:

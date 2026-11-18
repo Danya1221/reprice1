@@ -30,6 +30,8 @@ from prices import marked_price
 
 log = logging.getLogger(__name__)
 
+HI_MARKUP_CHOICES = {"0": "0 ₽", "-200": "−200 ₽", "-300": "−300 ₽", "default": "Общие правила"}
+
 
 def moscow_time(value):
     if value is None or value == "":
@@ -89,6 +91,7 @@ class BotAPIController:
             [{"text": "📦 Включить наличие" if hidden else "🚫 Скрыть наличие", "callback_data": "availability:toggle"}],
             [{"text": "👥 Telegram-аккаунты", "callback_data": "accounts"}],
             [{"text": "⏱ Интервал", "callback_data": "interval"}, {"text": "💰 Наценка", "callback_data": "markup"}],
+            [{"text": "💰 Наценка HI", "callback_data": "markup:hi"}],
             [{"text": "📦 Блоки", "callback_data": "blocks:0"}, {"text": "📱 SIM / eSIM", "callback_data": "sim"}],
         ]}
 
@@ -201,6 +204,31 @@ class BotAPIController:
             rows.append([{"text": "🗑 " + rule["pattern"][:40], "callback_data": "markup:delete:" + key}])
         rows.append([{"text": "⬅️ Главное меню", "callback_data": "markup:back"}])
         await self.send(chat_id, (notice + "\n\n" if notice else "") + "\n".join(lines), {"inline_keyboard": rows})
+
+    async def show_hi_markup(self, chat_id, notice=""):
+        selected = self.service.options().get("hi_markup_rub")
+        selected = str(selected) if selected is not None else "default"
+        rows = [
+            [{"text": ("✅ " if choice == selected else "") + label, "callback_data": f"markup:hi:{choice}"}]
+            for choice, label in HI_MARKUP_CHOICES.items()
+        ]
+        rows.append([{"text": "⬅️ Главное меню", "callback_data": "markup:back"}])
+        text = "💰 Наценка HI\n\nПоправка применяется, когда для позиции выбрана цена из прайса HI."
+        await self.send(chat_id, text + ("\n\n" + notice if notice else ""), {"inline_keyboard": rows})
+
+    async def refresh_hi_markup(self, chat_id, value, previous):
+        if previous and not previous.done():
+            await asyncio.gather(previous, return_exceptions=True)
+        if self.service.options().get("hi_markup_rub") != value:
+            return
+        try:
+            await self.service.refresh_format()
+        except Exception:
+            log.exception("Не удалось обновить прайс после изменения наценки HI")
+            await self.send(chat_id, "⚠️ Наценка HI сохранена. Обновление прайса не завершилось.")
+        else:
+            if self.service.options().get("hi_markup_rub") == value:
+                await self.send(chat_id, "✅ Наценка HI применена.")
 
     async def handle_markup_input(self, chat_id, user_id, text):
         flow = self.markup_flows.get(user_id)
@@ -483,6 +511,26 @@ class BotAPIController:
                 await self.begin_qr_login(chat_id, user_id, int(data.rsplit(":", 1)[1]))
             elif data == "markup":
                 await self.show_markup(chat_id)
+            elif data == "markup:hi":
+                self.markup_flows.pop(user_id, None)
+                await self.show_hi_markup(chat_id)
+            elif data.startswith("markup:hi:"):
+                choice = data.rsplit(":", 1)[1]
+                if choice not in HI_MARKUP_CHOICES:
+                    raise ValueError("Неизвестная наценка HI")
+                value = None if choice == "default" else choice
+                options = self.service.options()
+                if options.get("hi_markup_rub") == value:
+                    await self.show_hi_markup(chat_id)
+                    return
+                if choice in {"-200", "-300"}:
+                    proposed = {**options, "hi_markup_rub": value}
+                    for item in self.service.cached_items():
+                        if item.from_hi and item.currency == "RUB":
+                            marked_price(item, self.service.settings, proposed)
+                self.service.set_option("hi_markup_rub", value)
+                await self.show_hi_markup(chat_id, "Сохранил. Обновляю прайс…")
+                self.task = asyncio.create_task(self.refresh_hi_markup(chat_id, value, self.task))
             elif data == "markup:back":
                 self.markup_flows.pop(user_id, None)
                 await self.send(chat_id, "🛠 Управление прайсом", self.menu())

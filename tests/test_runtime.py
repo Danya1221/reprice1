@@ -510,6 +510,46 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("40 500", content)
         self.assertNotIn("61 000", content)
 
+    async def test_hi_markup_button_reprices_hi_winners_without_fetching_suppliers(self):
+        hi = self.service.readers[0].fetch
+        other = self.service.readers[1].fetch
+        white = "iPhone 17 256 White"
+        hi.return_value = ParseResult([self.item, Item(white, Decimal(62000), "RUB", "iPhone 17")], [])
+        other.return_value = ParseResult([
+            Item(self.item.title, Decimal(60500), "RUB", "iPhone 17"),
+            Item(white, Decimal(61000), "RUB", "iPhone 17"),
+        ], [])
+        self.service.set_option("markup_percent", "5")
+        self.service.set_option("markup_rules", [{"pattern": "iPhone", "amount": "1000"}])
+        with patch("runtime.is_open", return_value=True):
+            await self.service.sync(force=True)
+
+        controller = CatalogController("TOKEN", self.service, [42])
+        controller.send = AsyncMock()
+        controller.answer_callback = AsyncMock()
+        callback = {"id": "1", "from": {"id": 42}, "message": {"chat": {"id": 42, "type": "private"}}}
+        buttons = [button for row in controller.menu()["inline_keyboard"] for button in row]
+        self.assertIn("markup:hi", [button["callback_data"] for button in buttons])
+        await controller.handle_callback({**callback, "data": "markup:hi"})
+        choices = [row[0]["text"] for row in controller.send.await_args.args[2]["inline_keyboard"]]
+        self.assertEqual(choices[:4], ["0 ₽", "−200 ₽", "−300 ₽", "✅ Общие правила"])
+
+        for choice, expected in [("-200", "59 800"), ("-300", "59 700"), ("0", "60 000"), ("default", "64 000")]:
+            with self.subTest(choice=choice):
+                await controller.handle_callback({**callback, "data": f"markup:hi:{choice}"})
+                await controller.task
+                saved = StateStore(self.state.path).get("options")["hi_markup_rub"]
+                self.assertEqual(saved, None if choice == "default" else choice)
+                pages = self.service.publisher.publish.await_args.args[0]
+                content = "\n".join(pages.values())
+                self.assertIn(expected, content)
+                self.assertIn("65 050", content)
+                rows = self.state.get("published_price_sources")["rows"]
+                black = next(row for row in rows if "Black" in row["title"])
+                self.assertEqual((black["purchase"], black["public"]), ("60 000", expected))
+        hi.assert_awaited_once()
+        other.assert_awaited_once()
+
     async def test_lower_purchase_price_wins_before_markup(self):
         expensive = Item("iPhone 17 256 Black 🇺🇸", Decimal(61000), "RUB", "iPhone 17")
         cheap = Item("iPhone 17 256 Black 🇺🇸", Decimal(59000), "RUB", "iPhone 17")

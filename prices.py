@@ -4,7 +4,7 @@ import html
 import re
 import unicodedata
 from collections import OrderedDict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, ROUND_HALF_UP
 
 SPACE = re.compile(r"\s+")
@@ -1156,6 +1156,7 @@ class Item:
     block: str
     sim: str = "unknown"
     accessory: bool = False
+    from_hi: bool = field(default=False, compare=False, repr=False)
 
     @property
     def key(self):
@@ -1384,9 +1385,13 @@ def fixed_markup_for_item(item, settings, overrides=None):
 
 def marked_price(item, settings, overrides=None):
     overrides = overrides or {}
-    fixed = fixed_markup_for_item(item, settings, overrides)
-    percent = Decimal(str(overrides.get("markup_percent", settings.markup_percent)))
-    value = item.price * (1 + percent / 100) + fixed
+    hi_markup = overrides.get("hi_markup_rub") if item.from_hi and item.currency == "RUB" else None
+    if hi_markup is not None:
+        value = item.price + Decimal(str(hi_markup))
+    else:
+        fixed = fixed_markup_for_item(item, settings, overrides)
+        percent = Decimal(str(overrides.get("markup_percent", settings.markup_percent)))
+        value = item.price * (1 + percent / 100) + fixed
     if value <= 0:
         raise ValueError("После наценки получилась нулевая или отрицательная цена")
     return value.quantize(Decimal("1") if item.currency == "RUB" else Decimal("0.01"), rounding=ROUND_HALF_UP)
