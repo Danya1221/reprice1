@@ -83,7 +83,7 @@ Samsung S25 12/256 Navy 🇮🇳 — 49000""").items
                                  "accessory": False})
         self.assertEqual(cached.block, "Samsung A + S25")
         content = "\n".join(render_blocks(items, Settings()).values())
-        indices = [content.index("Samsung " + value) for value in ("A07", "A08", "A18", "A57")]
+        indices = [content.index("Samsung " + value) for value in ("A07", "A57", "A08", "A18")]
         self.assertEqual(indices, sorted(indices))
         self.assertLess(indices[-1], content.index("Samsung S25 12/256"))
 

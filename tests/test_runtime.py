@@ -587,10 +587,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         ])]).items
         count, _ = await self.service.render(items=merge_lowest([rows]))
         content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
-        self.assertEqual(count, 5)
+        self.assertEqual(count, 4)
         self.assertNotIn("17 800", content)
         self.assertNotIn("16 000", content)
-        for price in ("17 600", "21 000", "15 900", "15 000", "18 000"):
+        self.assertNotIn("18 000", content)
+        for price in ("17 600", "21 000", "15 900", "15 000"):
             self.assertIn(price, content)
 
     async def test_s26_rows_group_by_model_and_monarch_never_published(self):

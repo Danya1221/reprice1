@@ -34,7 +34,7 @@ Samsung S26 12/256 Blue 🇷🇺 — 62 000'''
         items = merge_lowest([parse_documents([text]).items])
         self.assertEqual(sorted(i.price for i in items), list(map(Decimal, ['12000', '13000', '14100', '16000', '59000', '61000', '62000', '89000'])))
 
-    def test_cheapest_plus_requested_regions_survive(self):
+    def test_a_series_has_one_cheapest_offer_across_markets(self):
         text = '''Samsung A08 4/128 Blue 🇷🇺 — 14 100
 Samsung A08 4/128 Navy 🇰🇿 — 14 000
 Samsung A08 4/128 Dark Blue 🇨🇳 — 14 200
@@ -42,4 +42,4 @@ Samsung A08 4/128 Dark Blue 🇭🇰 — 14 300
 Samsung A08 4/128 Blue 🇦🇪 — 13 500
 Samsung A08 4/128 Navy 🇮🇳 — 13 700'''
         items = select_samsung_regions(merge_lowest([parse_documents([text]).items]))
-        self.assertEqual(sorted(i.price for i in items), list(map(Decimal, ['13500', '14000', '14100', '14200', '14300'])))
+        self.assertEqual([i.price for i in items], [Decimal('13500')])

@@ -17,7 +17,8 @@ from prices import (
     FLAGS, ASIS, CPO, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
-    ORIGINAL_PACKAGING, offer_color_spelling, offer_network_spelling, offer_qualifier_suffix,
+    offer_color_spelling, offer_network_spelling, offer_qualifier_suffix, strip_supplier_annotations,
+    samsung_a_model, samsung_a_offer_spelling,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -141,7 +142,7 @@ def common_offer_aliases(title, item):
 
 def merge_key(item):
     """Match supplier spellings for the same product variant."""
-    title = offer_color_spelling(ORIGINAL_PACKAGING.sub("", item.title))
+    title = offer_color_spelling(strip_supplier_annotations(item.title))
     neo_key = macbook_neo_merge_key(item)
     if neo_key is not None:
         return neo_key
@@ -171,8 +172,7 @@ def merge_key(item):
             bare = re.sub(r"\bic(?:e|y)\s*blue\b", "icyblue", bare, flags=re.I)
         if re.search(r"\bSamsung\s+A57\b", bare, re.I):
             bare = re.sub(r"\bdark[\s-]+blue\b", "navy", bare, flags=re.I)
-        if re.search(r"\bSamsung\s+A27\b", bare, re.I):
-            bare = re.sub(r"\b(?:light\s+)?pink\b", "light pink", bare, flags=re.I)
+        bare = samsung_a_offer_spelling(bare)
         s26 = re.match(r"^Samsung\s+S26(?:(\+)(?=\s|$)|\s+(FE|Ultra)\b|(?=\s|$))", bare, re.I)
         if s26:
             version = "+" if s26.group(1) else (s26.group(2) or "").casefold()
@@ -285,7 +285,7 @@ def merge_lowest(sources, conflicted_books=None):
 
 
 def select_samsung_regions(items):
-    """Keep the cheapest offer plus requested regions and explicitly marked RST.
+    """Keep the cheapest offer, with regional exceptions outside Galaxy A.
 
     Compare only otherwise-identical descriptions; never strip condition,
     configuration, colour, SIM, or currency from the comparison key.
@@ -299,10 +299,19 @@ def select_samsung_regions(items):
             keep.add(index)
             continue
         _, market_flags = samsung_market_parts(item.title)
-        regions = set(market_flags)
+        # Galaxy A shows one price per configuration across supplier markets.
+        # An explicit RST variant remains distinguishable as such.
+        a_series = samsung_a_model(item.title) is not None
+        regions = set() if a_series else set(market_flags)
         if rst_marker.search(item.title):
             regions.add("explicit-rst")
         comparison_title = rst_marker.sub("", item.title)
+        if a_series:
+            # Match the copyable name so hidden supplier details do not
+            # split equivalent offers by region. "Arabic" is a market note.
+            comparison_title, flags = samsung_market_parts(display_title(replace(item, title=comparison_title)))
+            comparison_title = re.sub(r"\s+arabic\s*$", "", comparison_title, flags=re.I)
+            comparison_title = " ".join([comparison_title, *flags])
         key_parts = merge_key(replace(item, title=comparison_title)).split("|")
         # Compare the same configuration across markets after model and
         # country aliases have been interpreted with their original flags.

@@ -66,6 +66,18 @@ Marshall Major 5 Black 🇬🇧 — 5 100'''
         rows = parse_documents([text]).items
         self.assertEqual(len(merge_lowest([rows])), 11)
 
+    def test_stock_notes_do_not_create_new_versions_in_other_categories(self):
+        text = '''Marshall Major 5 Black 🇪🇺 — 5 400
+Marshall Major 5 Black (остаток: 12 шт) 🇪🇺 — 5 200
+Marshall Major 5 Black комплект 2 шт 🇪🇺 — 9 900
+Redmi Note 15 4G 8/256 White на складе 40 шт 🇪🇺 — 20 000
+Redmi Note 15 4G 8/256 White 🇪🇺 — 20 500
+Redmi Note 15 5G 8/256 White в наличии 🇪🇺 — 22 000
+Redmi Note 15 4G 8/256 White уценка 🇪🇺 — 19 000'''
+        merged = merge_lowest([parse_documents([text]).items])
+        self.assertEqual(sorted(row.price for row in merged),
+                         [Decimal(n) for n in (5200, 9900, 19000, 20000, 22000)])
+
     async def test_publication_merges_a37_and_cross_brand_colour_and_network_aliases(self):
         text = '''Samsung A37 6/128 White 🇿🇦 — 24 700
 Samsung A37 5G 6/128 White 🇿🇦 — 24 700
@@ -141,3 +153,64 @@ Samsung A57 8/256 Gray Уценка 🇷🇺 — 31 000'''
         self.assertIn('Gray Уценка 🇷🇺 — 31 000', content)
         self.assertNotIn('29 300', content)
         self.assertNotIn('29 500', content)
+
+    async def test_a_series_shows_each_configuration_once_across_markets(self):
+        text = '''Samsung A57 8/256 Gray 🇷🇺 — 33 700
+Samsung A57 8/256 Lilac 🇷🇺 — 33 700
+Samsung A57 8/256 Icyblue 🇦🇪 — 33 600
+Samsung A57 8/256 Icyblue 🇷🇺 — 33 700
+Samsung A57 8/256 Navy 🇷🇺 — 33 700
+Samsung A57 12/256 Gray 🇸🇬 — 40 000
+Samsung A57 12/256 Gray 🇦🇪 — 40 000
+Samsung A57 12/256 Lilac 🇸🇬 — 40 300
+Samsung A57 12/256 Lilac 🇮🇩 — 40 300
+Samsung A57 12/256 Icyblue 🇸🇬 — 40 000
+Samsung A57 12/256 Navy 🇲🇾 — 39 500
+Samsung A57 12/256 Icyblue 🇮🇩 — 39 900'''
+        with tempfile.TemporaryDirectory() as folder:
+            state = StateStore(Path(folder) / 'state.json')
+            service = SyncService(SimpleNamespace(), Settings(), state)
+            service.publisher.publish = AsyncMock(return_value=0)
+            count, _ = await service.render(items=parse_documents([text]).items)
+            content = '\n'.join(service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 8)
+        self.assertIn('8/256 Icyblue 🇦🇪 — 33 600', content)
+        self.assertIn('12/256 Icyblue 🇮🇩 — 39 900', content)
+        self.assertNotIn('8/256 Icyblue 🇷🇺', content)
+        self.assertEqual(content.count('12/256 Gray'), 1)
+        self.assertEqual(content.count('12/256 Lilac'), 1)
+
+    async def test_a_series_orders_by_generation_with_4g_beside_its_model(self):
+        text = '''Samsung A18 8/256 Silver 🇷🇺 — 23 400
+Samsung A08 4/64 Dark Blue 🇷🇺 — 12 300
+Samsung A57 8/128 Icyblue 🇰🇿 — 29 600
+Samsung A57 8/128 IcyBlue 🇷🇺 — 29 800
+Samsung A57 8/128 Icyblue Arabic — 29 000
+Samsung A37 8/256 Black 🇷🇺 — 28 800
+Samsung A37 8/256 Charcoal 🇷🇺 — 29 300
+Samsung A37 8/256 White 70шт — 33 400
+Samsung A37 8/256 White 🇷🇺 — 29 300
+Samsung A27 8/256 Pink 🇷🇺 — 26 200
+Samsung A27 8/256 Light Pink 🇷🇺 — 26 100
+Samsung A17 4G 8/256 Black 🇲🇾 — 20 000
+Samsung A17 8/256 Black 🇲🇾 — 20 400
+Samsung A17 8/256 Black 🇰🇿 — 20 400
+Samsung A17 4/128 Black 🇦🇪 — 15 300
+Samsung A07 4/128 purple 🇦🇪 — 12 400
+Samsung A28 8/256 Blue 🇦🇪 — 27 000'''
+        with tempfile.TemporaryDirectory() as folder:
+            state = StateStore(Path(folder) / 'state.json')
+            service = SyncService(SimpleNamespace(), Settings(), state)
+            service.publisher.publish = AsyncMock(return_value=0)
+            count, _ = await service.render(items=parse_documents([text]).items)
+            content = '\n'.join(service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 11)
+        models = re.findall(r'<code>Samsung (A\d\d)', content)
+        self.assertEqual(models, [
+            'A07', 'A17', 'A17', 'A17', 'A27', 'A37', 'A37', 'A57',
+            'A08', 'A18', 'A28',
+        ])
+        self.assertIn('8/128 Icyblue Arabic — 29 000', content)
+        self.assertIn('A17 8/256 Black 🇲🇾 — 20 400</code>\n\n<code>Samsung A17 4G', content)
+        self.assertIn('8/256 Charcoal 🇷🇺 — 28 800', content)
+        self.assertNotIn('70шт', content)

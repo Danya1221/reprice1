@@ -62,6 +62,12 @@ PACKAGING_NOTE = r"ориг(?:инальная)?\.?\s*упак(?:овка)?\.?"
 ORIGINAL_PACKAGING = re.compile(
     r"\(\s*" + PACKAGING_NOTE + r"(?:\s*iphone)?\s*\)|\b" + PACKAGING_NOTE + r"(?!\w)", re.I,
 )
+STOCK_ANNOTATION = r"(?:остаток(?:\s+на\s+складе)?|в\s+наличии|на\s+складе)\b(?:\s*[:=]?\s*\d+\s*(?:шт(?:ук[аи]?)?\b\.?|pcs\b))?"
+SUPPLIER_STOCK_NOTE = re.compile(
+    r"\s*(?:\(\s*" + STOCK_ANNOTATION + r"\s*\)|\[\s*" + STOCK_ANNOTATION + r"\s*\]"
+    r"|\b" + STOCK_ANNOTATION + r"(?=\s*(?:" + FLAGS.pattern + r"\s*)*$))",
+    re.I,
+)
 INACTIVE = re.compile(r"\bне[\s-]*актив\w*|\binactive\b|not[\s-]*activated|не[\s-]*активирован\w*", re.I)
 ACTIVE = re.compile(r"\bактив\w*|\bactive\b(?![\s-]+(?:band|strap|noise)\b)|"
                     r"\bactivated\b|pre[\s-]*activated|предактив\w*", re.I)
@@ -134,6 +140,13 @@ CONDITION_ORDER = {"inactive": 0, "active": 1, "unknown": 2}
 
 def clean(text):
     return SPACE.sub(" ", unicodedata.normalize("NFKC", text).replace("\u200b", "")).strip()
+
+
+def strip_supplier_annotations(title):
+    """Remove notes that describe the seller's stock rather than a variant."""
+    title = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", title)
+    title = ORIGINAL_PACKAGING.sub("", title)
+    return clean(SUPPLIER_STOCK_NOTE.sub(" ", title))
 
 
 COLOR_TRANSLATIONS = (
@@ -989,7 +1002,7 @@ def samsung_a_s25_sort(item):
     plain = FLAGS.sub("", clean(item.title)).strip()
     a = samsung_a_model(plain)
     if a:
-        return 0, a[0], (a[1], samsung_memory_sort(plain)), plain.casefold()
+        return 0, a[0] % 10, (a[0], a[1], samsung_memory_sort(plain)), plain.casefold()
     if re.search(r"\bS\s*25\s*FE\b", plain, re.I):
         return 1, 0, 0, plain.casefold()
     if re.search(r"\bS\s*25\s*Edge\b", plain, re.I):
@@ -1002,9 +1015,34 @@ def samsung_a_s25_sort(item):
 
 
 def samsung_a_model(title):
-    plain = FLAGS.sub("", clean(title))
+    plain = FLAGS.sub("", clean(title)).strip()
     match = re.match(r"^(?:samsung\s+)?(?:galaxy\s+)?a\s*(\d{2,3})([a-z]?)\b", plain, re.I)
-    return (int(match.group(1)), match.group(2).casefold()) if match else None
+    if not match:
+        return None
+    number = int(match.group(1))
+    return {175: 17, 376: 37, 576: 57}.get(number, number), match.group(2).casefold()
+
+
+def samsung_a_lte(title):
+    return bool(re.search(r"\b(?:4\s*[gг]|lte|a175)\b", title, re.I))
+
+
+def samsung_a_offer_spelling(title):
+    model = samsung_a_model(title)
+    if model is None:
+        return title
+    # A trailing quantity in a supplier's row is their available stock.
+    title = re.sub(r"\s+\d{2,}\s*шт\.?\s*$", "", title, flags=re.I)
+    if model == (17, "") and samsung_a_lte(title):
+        title = re.sub(r"\b(?:l\.\s*|light\s+)?blue\b", "Light Blue", title, flags=re.I)
+        title = re.sub(r"\b(?:4\s*[gг]|lte)\b", "4G", title, flags=re.I)
+    if model == (18, "") and not re.search(r"\b5\s*[gг]\b", title, re.I):
+        title = re.sub(r"\b(?:gray|grey|silver)\b", "Silver", title, flags=re.I)
+    if model == (27, ""):
+        title = re.sub(r"\b(?:light\s+)?pink\b", "Light Pink", title, flags=re.I)
+    if model == (37, ""):
+        title = re.sub(r"\b(?:black|charcoal)\b", "Charcoal", title, flags=re.I)
+    return title
 
 
 def samsung_memory_sort(title):
@@ -1035,7 +1073,7 @@ def samsung_z_model(title):
 def samsung_phone_group(title):
     model = samsung_a_model(title)
     if model:
-        return ("a", *model)
+        return ("a", model[0] % 10, *model)
     model = samsung_s_model(title)
     if model:
         return ("s", *model)
@@ -1072,7 +1110,10 @@ def model_group_key(item):
     if item.block.startswith("Samsung"):
         samsung_model = samsung_phone_group(plain)
         if samsung_model:
-            return "samsung " + " ".join(map(str, samsung_model))
+            group = "samsung " + " ".join(map(str, samsung_model))
+            if samsung_model[0] == "a" and samsung_a_lte(plain):
+                return group + " 4g"
+            return group
 
     if item.block == "MacBook / iMac":
         group = macbook_configuration(plain)
@@ -1153,8 +1194,7 @@ def normalize_iphone_18_pro_max_color(title):
 def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
     # Apply at render time so previously saved prices lose the note as well.
-    title = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", item.title)
-    title = normal_title(ORIGINAL_PACKAGING.sub("", title))
+    title = normal_title(strip_supplier_annotations(item.title))
     if item.block.startswith("Samsung"):
         title, markets = samsung_market_parts(title)
         flags = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"
@@ -1171,6 +1211,7 @@ def display_title(item):
             title = offer_network_spelling(offer_color_spelling(title))
             if re.match(r"^Samsung\s+A\s*57\b", title, re.I):
                 title = re.sub(r"\bDark Blue\b", "Navy", title, flags=re.I)
+        title = samsung_a_offer_spelling(title)
         title = re.sub(r"\b(\d{1,2}\s*/\s*\d{2,4})\s*(?:GB|ГБ)\b", r"\1", title, flags=re.I)
         title = clean(re.sub(r"\(\s*\)", "", title))
         if markets:
@@ -1347,11 +1388,13 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
             if block == "Samsung":
                 model = samsung_a_model(item.title)
                 if model:
-                    return (0, model, samsung_memory_sort(item.title), samsung_colour_sort(item.title), item_sort(item))
-                return (1, (0, ""), (0, 0), "", item_sort(item))
+                    return (0, (model[0] % 10, *model), samsung_a_lte(item.title), samsung_memory_sort(item.title),
+                            samsung_colour_sort(item.title), item_sort(item))
+                return (1, (), False, (0, 0), "", item_sort(item))
             if block in {"Samsung A + S25", "Samsung S26", "Samsung Fold / Flip"}:
                 model = samsung_phone_group(item.title)
-                return (0 if model else 1, model or (),
+                lte = bool(model and model[0] == "a" and samsung_a_lte(item.title))
+                return (0 if model else 1, model or (), lte,
                         samsung_memory_sort(item.title), samsung_colour_sort(item.title), item_sort(item))
             if block == "Honor":
                 memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\s*(GB|TB|ГБ|ТБ)?\b", item.title, re.I)
