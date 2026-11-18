@@ -13,9 +13,10 @@ from telethon import errors, utils
 from config import Source
 
 from prices import (
-    FLAGS, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
+    FLAGS, ASIS, CPO, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
+    offer_qualifier_suffix,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -117,6 +118,27 @@ def galaxy_book_descriptor(item):
     flags = "".join(sorted(FLAGS.findall(item.title)))
     key = identity("galaxy book " + series + " " + part + flags, item.sim, item.currency)
     return key, tuple(details) if all(details) else None
+
+
+def common_offer_aliases(title, item):
+    """Normalise spelling without discarding a variant, region or condition."""
+    for pattern, colour in (
+        (r"\bgrey\b|\bсер(?:ый|ая|ое)\b", "gray"),
+        (r"\bч[её]рн(?:ый|ая|ое)\b", "black"),
+        (r"\bбел(?:ый|ая|ое)\b", "white"),
+        (r"\bзел[её]н(?:ый|ая|ое)\b", "green"),
+        (r"\bсини(?:й|я|е)\b", "blue"),
+        (r"\bсеребрист(?:ый|ая|ое)\b|\bсеребро\b", "silver"),
+    ):
+        title = re.sub(pattern, colour, title, flags=re.I)
+    title = re.sub(r"\b(\d+)\s*(?:TB|ТБ)\b", r"\1TB", title, flags=re.I)
+    if not item.accessory:
+        title = re.sub(r"\bapple\s+(?=(?:ipad|imac|macbook|airpods)\b)", "", title, flags=re.I)
+        if item.block == "Redmi":
+            title = re.sub(r"^((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)(?=note\s+\d)",
+                           r"\1Redmi ", title, flags=re.I)
+        title = re.sub(r"\b(marshall\s+major)\s+(?:v|5)\b", r"\1 5", title, flags=re.I)
+    return title
 
 
 def merge_key(item):
@@ -232,7 +254,14 @@ def merge_key(item):
     # The public SIM section combines supplier labels "SIM" and "SIM+eSIM";
     # keep eSIM-only and two-physical-SIM variants separate.
     merge_sim = "hybrid" if iphone_model(title) and item.sim in {"sim", "hybrid"} else item.sim
-    return identity(title, merge_sim, item.currency)
+    title = common_offer_aliases(title, item)
+    # The condition can be on the row or inherited from its section.  Its
+    # qualifier below preserves it, so the spelling need not duplicate it.
+    if item.block == "ASIS":
+        title = ASIS.sub(" ", title)
+    elif item.block == "CPO":
+        title = CPO.sub(" ", title)
+    return identity(title, merge_sim, item.currency) + offer_qualifier_suffix(item)
 
 
 def conflicting_galaxy_book_keys(items):
@@ -1015,6 +1044,9 @@ class SyncService:
                     entry["content"] for entry in entries if entry.get("content")
                 ])
         catalog = self.cached_items(include_closed=closed) if items is None else items
+        # Some publication paths receive caller-provided items directly.
+        # Apply the same variant-aware merge to every path before rendering.
+        catalog = merge_lowest([catalog])
         request_only = []
         if not closed:
             expired = self.supernova_expired_items()

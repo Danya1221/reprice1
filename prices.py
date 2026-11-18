@@ -587,6 +587,12 @@ def identity(title, sim, currency):
     return clean(body) + "|" + flags + "|" + sim + "|" + currency
 
 
+def offer_qualifier_suffix(item):
+    # Condition can be supplied by a section heading instead of the title.
+    condition = item.block.upper() if item.block.upper() in {"CPO", "ASIS"} else ""
+    return ("|condition:" + condition if condition else "") + ("|accessory" if item.accessory else "")
+
+
 @dataclass(frozen=True)
 class Item:
     title: str
@@ -598,7 +604,7 @@ class Item:
 
     @property
     def key(self):
-        return identity(self.title, self.sim, self.currency)
+        return identity(self.title, self.sim, self.currency) + offer_qualifier_suffix(self)
 
     def to_dict(self):
         return dict(title=self.title, price=str(self.price), currency=self.currency,
@@ -724,13 +730,11 @@ def parse_documents(documents, default_currency="RUB", fallback_block="", docume
         item = Item(title, amount, currency, block, sim, accessory)
         item = resolve_iphone_sim(item)
         previous_priority = item_priorities.get(item.key)
-        # Repeated identical Samsung rows in the same supplier document are
+        # Repeated identical rows in the same supplier document are
         # offers for the same variant; keep the lower price. A newer document
         # still replaces an older one even if its price has gone up.
-        same_document_cheaper = (previous_priority == priority and item.block.startswith("Samsung")
-                                 and item.price < items[item.key].price)
-        if (previous_priority is None or priority > previous_priority or same_document_cheaper
-                or (priority == previous_priority and not item.block.startswith("Samsung"))):
+        same_document_cheaper = (previous_priority == priority and item.price < items[item.key].price)
+        if previous_priority is None or priority > previous_priority or same_document_cheaper:
             items[item.key] = item
             item_priorities[item.key] = priority
     return ParseResult(list(items.values()), rejected, closed and not items)
