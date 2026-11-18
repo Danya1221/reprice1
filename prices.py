@@ -137,6 +137,7 @@ def clean(text):
 
 
 COLOR_TRANSLATIONS = (
+    (r"серо[- ]+зел[её]н(?:ый|ая|ое)", "Gray Green"),
     (r"т[её]мно[- ]+син(?:ий|яя|ее)", "Dark Blue"),
     (r"светло[- ]+розов(?:ый|ая|ое)", "Light Pink"),
     (r"светло[- ]+син(?:ий|яя|ее)", "Light Blue"),
@@ -171,6 +172,13 @@ def offer_color_spelling(title):
         r"(?:dark|light)\s+blue|ic(?:e|y)\s*blue|lilac|lavender|charcoal|white|black|silver|blue|green|pink|violet)\b)",
         "", title, flags=re.I,
     )
+    # A37 has a single green factory colour, Awesome Graygreen. Only
+    # match the plain colour after memory, preserving qualifiers like Mint.
+    if re.match(r"^\s*(?:samsung\s+)?(?:galaxy\s+)?a\s*(?:37|376)\b", FLAGS.sub("", title), re.I):
+        title = re.sub(
+            r"(\b\d{1,2}\s*/\s*\d{2,4}(?:\s*(?:gb|гб))?\s+\(?\s*)(?:gr[ae]y[\s-]*)?green\b",
+            r"\g<1>Gray Green", title, flags=re.I,
+        )
     return title
 
 
@@ -1145,7 +1153,8 @@ def normalize_iphone_18_pro_max_color(title):
 def display_title(item):
     """Copyable model attributes, with the SIM kind only when it is known."""
     # Apply at render time so previously saved prices lose the note as well.
-    title = normal_title(ORIGINAL_PACKAGING.sub("", item.title))
+    title = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", item.title)
+    title = normal_title(ORIGINAL_PACKAGING.sub("", title))
     if item.block.startswith("Samsung"):
         title, markets = samsung_market_parts(title)
         flags = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"

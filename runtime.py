@@ -17,7 +17,7 @@ from prices import (
     FLAGS, ASIS, CPO, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
-    offer_color_spelling, offer_network_spelling, offer_qualifier_suffix,
+    ORIGINAL_PACKAGING, offer_color_spelling, offer_network_spelling, offer_qualifier_suffix,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -141,7 +141,7 @@ def common_offer_aliases(title, item):
 
 def merge_key(item):
     """Match supplier spellings for the same product variant."""
-    title = offer_color_spelling(item.title)
+    title = offer_color_spelling(ORIGINAL_PACKAGING.sub("", item.title))
     neo_key = macbook_neo_merge_key(item)
     if neo_key is not None:
         return neo_key
@@ -319,6 +319,25 @@ def select_samsung_regions(items):
             if matches:
                 keep.add(min(matches, key=lambda row: (row[1].price, row[0]))[0])
     return [item for index, item in enumerate(items) if index in keep]
+
+
+def unique_public_offers(items, request_keys):
+    """Keep one offer when supplier notes disappear from the displayed title."""
+    rows = {}
+    for item in items:
+        title = display_title(item)
+        visible = clean(re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\ufe0e\ufe0f]", "", title)).casefold()
+        # The current iPhone display hides market flags even for unknown SIM.
+        # Keep those market distinctions, along with real condition and SIM.
+        hidden_market = ()
+        if iphone_model(item.title) and item.sim == "unknown":
+            hidden_market = tuple(sorted(set(FLAGS.findall(item.title))))
+        key = (visible, item.currency, item.sim, offer_qualifier_suffix(item), hidden_market)
+        rank = (item.key in request_keys, item.price)
+        previous = rows.get(key)
+        if previous is None or rank < previous[0]:
+            rows[key] = (rank, item)
+    return [item for _, item in rows.values()]
 
 
 class SyncService:
@@ -1049,6 +1068,7 @@ class SyncService:
             active_keys = {id(item) for item in select_samsung_regions(active)}
             expired_keys = {id(item) for item in select_samsung_regions(expired)}
             selected = [item for item in selected if id(item) in active_keys | expired_keys]
+            selected = unique_public_offers(selected, request_keys)
         render_options = {**options, "_request_only_keys": {item.key for item in request_only}}
         pages = render_blocks(selected, self.settings, render_options, closed=closed)
         if not closed:

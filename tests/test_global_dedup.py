@@ -115,3 +115,29 @@ Samsung A57 5G 12/512 A.Gray 🇷🇺 — 42 000'''
             self.assertIn('42 000', content)
             self.assertNotIn('104 000', content)
             self.assertNotIn('42 800', content)
+
+    async def test_samsung_copies_disappear_from_the_published_page(self):
+        first = '''Samsung A37 8/256 Gray Green 🇷🇺 — 29 300
+Samsung A57 8/128 Gray (ориг. упак.) 🇷🇺 — 29 500
+Samsung A57 8/256 Gr\u200eay 🇷🇺 — 33 700
+Samsung A57 8/256 Lilac (ориг. упак.) 🇷🇺 — 33 700'''
+        second = '''Samsung A37 8/256 green 🇷🇺 — 28 800
+Samsung A57 8/128 Gray 🇷🇺 — 29 400
+Samsung A57 8/256 Gray 🇷🇺 — 33 700
+Samsung A57 8/256 Lilac 🇷🇺 — 33 700
+Samsung A57 8/256 Gray Уценка 🇷🇺 — 31 000'''
+        rows = parse_documents([first]).items + parse_documents([second]).items
+        with tempfile.TemporaryDirectory() as folder:
+            state = StateStore(Path(folder) / 'state.json')
+            service = SyncService(SimpleNamespace(), Settings(), state)
+            service.publisher.publish = AsyncMock(return_value=0)
+            count, _ = await service.render(items=rows)
+            content = '\n'.join(service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 5)
+        self.assertIn('Samsung A37 8/256 Gray Green 🇷🇺 — 28 800', content)
+        self.assertIn('Samsung A57 8/128 Gray 🇷🇺 — 29 400', content)
+        self.assertEqual(content.count('Samsung A57 8/256 Gray 🇷🇺 — 33 700'), 1)
+        self.assertEqual(content.count('Samsung A57 8/256 Lilac 🇷🇺 — 33 700'), 1)
+        self.assertIn('Gray Уценка 🇷🇺 — 31 000', content)
+        self.assertNotIn('29 300', content)
+        self.assertNotIn('29 500', content)
