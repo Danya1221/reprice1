@@ -15,7 +15,7 @@ from config import Source
 from prices import (
     FLAGS, Item, clean, identity, iphone_model, sim_type, resolve_iphone_sim, merge_physical_order, physical_brand_label,
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
-    display_title, marked_price, price_text, normalize_iphone_18_pro_max_color,
+    display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -133,17 +133,42 @@ def merge_key(item):
         if item.sim != "unknown":
             title = FLAGS.sub("", title)
     if item.block.startswith("Samsung") and not item.accessory:
-        flags = "".join(FLAGS.findall(title))
-        bare = FLAGS.sub("", title).strip()
-        # Supplier shorthand IN is an explicit market, not a colour or SKU.
-        indian_suffix = re.search(r"(?:\(\s*IN\s*\)|\bIN)\s*$", bare, re.I)
-        if indian_suffix and (not flags or set(FLAGS.findall(flags)) == {"🇮🇳"}):
-            bare = bare[:indian_suffix.start()].strip()
-            flags = flags or "🇮🇳"
+        bare, market_flags = samsung_market_parts(title)
+        bare = bare.replace("\ufe0f", "")
+        flags = "".join(market_flags)
         bare = re.sub(r"^\s*(?:samsung\s+galaxy|galaxy)\b", "Samsung", bare, flags=re.I)
         bare = re.sub(r"^\s*(?=s\s*25\b)", "Samsung ", bare, flags=re.I)
+        bare = re.sub(r"^\s*(?=(?:z\s*)?(?:fold|flip)\s*\d)", "Samsung ", bare, flags=re.I)
+        bare = re.sub(r"\bZ\s*(?=fold|flip)", "Z ", bare, flags=re.I)
         bare = re.sub(r"\b(S\d+)\s*plus\b", r"\1+", bare, flags=re.I)
         bare = re.sub(r"\b(fold|flip)\s*(\d+)\b", r"\1 \2", bare, flags=re.I)
+        # Supplier shorthand A376/A576 denotes the model family, not storage.
+        bare = re.sub(r"\bSamsung\s+A175\b", "Samsung A17 4G", bare, flags=re.I)
+        bare = re.sub(r"\bSamsung\s+A376\b", "Samsung A37 5G", bare, flags=re.I)
+        bare = re.sub(r"\bSamsung\s+A576\b", "Samsung A57 5G", bare, flags=re.I)
+        if re.search(r"\bSamsung\s+A(?:27|37|57)\b", bare, re.I):
+            bare = re.sub(r"\b5\s*G\b", " ", bare, flags=re.I)
+        if re.search(r"\bSamsung\s+A(?:37|57)\b", bare, re.I):
+            bare = re.sub(r"\bawesome\s+|\bA\.\s*", "", bare, flags=re.I)
+            bare = re.sub(r"\bgr[ae]y\s*green\b", "graygreen", bare, flags=re.I)
+            bare = re.sub(r"\bic(?:e|y)\s*blue\b", "icyblue", bare, flags=re.I)
+        if re.search(r"\bSamsung\s+A27\b", bare, re.I):
+            bare = re.sub(r"\b(?:light\s+)?pink\b", "light pink", bare, flags=re.I)
+        s26 = re.match(r"^Samsung\s+S26(?:(\+)(?=\s|$)|\s+(FE|Ultra)\b|(?=\s|$))", bare, re.I)
+        if s26:
+            version = "+" if s26.group(1) else (s26.group(2) or "").casefold()
+            markets = set(market_flags)
+            code = {"": "S942", "+": "S947", "fe": "S741", "ultra": "S948"}[version]
+            if markets and not markets.intersection({"🇭🇰", "🇨🇳"}):
+                bare = re.sub(r"\b" + code + r"B\b", " ", bare, flags=re.I)
+            elif markets and markets <= {"🇭🇰", "🇨🇳"}:
+                bare = re.sub(r"\b" + code + r"0\b", " ", bare, flags=re.I)
+            bare = re.sub(r"\b5\s*G\b", " ", bare, flags=re.I)
+            if version != "fe":
+                bare = re.sub(r"\b(?:sky\s+)?blue\b|\bголуб(?:ой|ая|ое)\b", "sky blue", bare, flags=re.I)
+                bare = re.sub(r"\b(?:cobalt\s+)?violet\b|\bфиолетов(?:ый|ая|ое)\b", "cobalt violet", bare, flags=re.I)
+            else:
+                bare = re.sub(r"\bphistachio\b", "pistachio", bare, flags=re.I)
         s25 = re.match(r"^Samsung\s+S25(?:\s+(FE|Ultra))?\b", bare, re.I)
         if s25:
             version = (s25.group(1) or "").casefold()
@@ -166,6 +191,10 @@ def merge_key(item):
         # 5G variant distinct if a supplier provides one.
         if re.search(r"\bSamsung\s+A18\b", bare, re.I):
             bare = re.sub(r"\b4\s*g\b|\blte\b", " ", bare, flags=re.I)
+            if not re.search(r"\b5\s*g\b", bare, re.I):
+                bare = re.sub(r"\b(?:light\s+)?blue\b|\bсини(?:й|я|е)\b", "light blue", bare, flags=re.I)
+        if re.search(r"\bSamsung\s+A07s\b", bare, re.I):
+            bare = re.sub(r"\b(?:light\s+)?violet\b", "light violet", bare, flags=re.I)
         for pattern, colour in ((r"\bсини(?:й|я|е)\b", "blue"),
                                 (r"\bч[её]рн(?:ый|ая|ое)\b", "black"),
                                 (r"\bзел[её]н(?:ый|ая|ое)\b", "green"),
@@ -181,6 +210,7 @@ def merge_key(item):
         # this model so distinct shades of other Samsung devices stay separate.
         if re.search(r"\bSamsung\s+A08\b", bare, re.I):
             bare = re.sub(r"\b(?:dark[\s-]+blue|navy|blue)\b", "dark blue", bare, flags=re.I)
+        bare = samsung_watch_name(bare)
         title = bare + " " + flags
     if item.block == "Realme" and not item.accessory:
         for pattern, color in ((r"\bбежев(?:ый|ая|ое)\b", "beige"),
@@ -257,7 +287,8 @@ def select_samsung_regions(items):
         if not item.block.startswith("Samsung") or item.accessory:
             keep.add(index)
             continue
-        regions = set(FLAGS.findall(item.title))
+        _, market_flags = samsung_market_parts(item.title)
+        regions = set(market_flags)
         if rst_marker.search(item.title):
             regions.add("explicit-rst")
         comparison_title = rst_marker.sub("", item.title)

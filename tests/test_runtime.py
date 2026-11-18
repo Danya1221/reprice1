@@ -641,7 +641,7 @@ Samsung S26 12/512GB Cobalt Violet 🇰🇿 — 68000"""]).items
         self.assertIn("57 500", content)
         self.assertIn("67 800", content)
         self.assertIn("68 000", content)
-        self.assertLess(content.index("12/128GB"), content.index("12/256"))
+        self.assertLess(content.index("12/128"), content.index("12/256"))
         self.assertLess(content.index("12/256"), content.index("12/512"))
         rows = re.findall(r"<code>(.*?)</code>", content)
         black = [i for i, row in enumerate(rows) if "12/256" in row and ("Black" in row or "Черный" in row)]

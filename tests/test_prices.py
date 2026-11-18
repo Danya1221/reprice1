@@ -104,7 +104,7 @@ Samsung S26 12/512GB Black 🇰🇿 — 68500""").items
         self.assertIn("Голубой 🇷🇺", rows[3])
         self.assertIn("Cobalt Violet 🇨🇳", rows[4])
         self.assertIn("Фиолетовый 🇷🇺", rows[5])
-        self.assertIn("12/512GB", rows[-1])
+        self.assertIn("12/512", rows[-1])
 
     def test_dyson_text_price_after_camera_and_delivery_emojis(self):
         result = self.parse("""🇪🇺 Gen5 SV23 Detect Absolute Purple наша вилка 🔌63000 📷
@@ -795,7 +795,7 @@ S25 12/256 Navy — 50500
 S25 Ultra 12/256 Black — 65000""").items
         page = next(value for value in render_blocks(items, Settings()).values() if value.startswith("<b>Samsung</b>"))
         self.assertIn("<b>— Samsung A + S25 —</b>", page)
-        self.assertIn("A17 8/256GB Blue — 17 800</code>\n\n<code>Samsung A27", page)
+        self.assertIn("A17 8/256 Blue — 17 800</code>\n\n<code>Samsung A27", page)
         self.assertIn("<b>— Samsung S25 —</b>", page)
         self.assertIn("S25 12/256 Navy — 50 500</code>\n\n<code>Samsung S25 Ultra", page)
 

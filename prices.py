@@ -136,6 +136,37 @@ def clean(text):
     return SPACE.sub(" ", unicodedata.normalize("NFKC", text).replace("\u200b", "")).strip()
 
 
+def samsung_market_parts(title):
+    """Return a title and explicit market flags without guessing conflicts."""
+    flags = FLAGS.findall(title)
+    bare = FLAGS.sub("", clean(title)).strip()
+    market = re.search(r"(?:\(\s*(IN|IND|MY|KZ|EU)\s*\)|\b(IN|IND|MY|KZ|EU))\s*$", bare, re.I)
+    if market:
+        code = (market.group(1) or market.group(2)).upper()
+        flag = {"IN": "🇮🇳", "IND": "🇮🇳", "MY": "🇲🇾", "KZ": "🇰🇿", "EU": "🇪🇺"}[code]
+        if not flags or set(flags) == {flag}:
+            bare = bare[:market.start()].strip()
+            if not flags:
+                flags.append(flag)
+    return bare, flags
+
+
+def samsung_watch_name(title):
+    """Canonicalise the observed watch shorthand without dropping LTE."""
+    title = title.replace("\ufe0f", "")
+    title = re.sub(r"\bWatch\s*(\d+)\b", r"Watch \1", title, flags=re.I)
+    watch = re.match(r"^Samsung\s+(?:L(325|330|345|355)\s+)?Watch\s+(8|9)\s+(?:(LTE)\s+)?(40|44)\s*(?:mm|мм)?\s*(LTE)?\b", title, re.I)
+    if not watch:
+        return title
+    sku, series, before, size, after = watch.groups()
+    lte = bool(before or after)
+    known = {"325": ("8", "40", True), "330": ("8", "44", False),
+             "345": ("9", "40", True), "355": ("9", "44", True)}
+    if sku and known[sku] != (series, size, lte):
+        return title
+    return clean(f"Samsung Watch {series} {size}mm" + (" LTE" if lte else "") + " " + title[watch.end():].lstrip())
+
+
 def is_accessory(title):
     if re.search(r"\bmonarch\b.*\bsamsung\b", title, re.I):
         return True
@@ -490,6 +521,12 @@ def normal_title(title, context=""):
         title = "PlayStation " + title
     title = re.sub(r"\bSM-[A-Za-z0-9/]+\b", "", title, flags=re.I)
     title = re.sub(r"\bайфон\b", "iPhone", title, flags=re.I)
+    # A supplier's Apple Air rows can inherit an unrelated Samsung heading.
+    # Match only the observed phone-shaped eSIM rows with iPhone Air colours.
+    if (sim_type(title) == "esim" and
+            re.search(r"\b(?:cloud\s+white|light\s+gold|sky\s+blue|space\s+black)\b", title, re.I)):
+        title = re.sub(r"^((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)Samsung\s+Air(?=\s+\d{2,4}\s*(?:GB|TB|ГБ|ТБ)?\b)",
+                       r"\1iPhone Air", title, flags=re.I)
     # A supplier abbreviates iPhone Pro Max as "17 Max" / "18 Max".
     # A preceding Samsung section used to prepend Samsung to those rows.
     # Recognize both the raw abbreviation and already-cached wrong titles,
@@ -684,7 +721,14 @@ def parse_documents(documents, default_currency="RUB", fallback_block="", docume
             sim = section_sim if model else "unknown"
         item = Item(title, amount, currency, block, sim, accessory)
         item = resolve_iphone_sim(item)
-        if item.key not in item_priorities or priority >= item_priorities[item.key]:
+        previous_priority = item_priorities.get(item.key)
+        # Repeated identical Samsung rows in the same supplier document are
+        # offers for the same variant; keep the lower price. A newer document
+        # still replaces an older one even if its price has gone up.
+        same_document_cheaper = (previous_priority == priority and item.block.startswith("Samsung")
+                                 and item.price < items[item.key].price)
+        if (previous_priority is None or priority > previous_priority or same_document_cheaper
+                or (priority == previous_priority and not item.block.startswith("Samsung"))):
             items[item.key] = item
             item_priorities[item.key] = priority
     return ParseResult(list(items.values()), rejected, closed and not items)
@@ -1040,16 +1084,21 @@ def display_title(item):
     # Apply at render time so previously saved prices lose the note as well.
     title = normal_title(ORIGINAL_PACKAGING.sub("", item.title))
     if item.block.startswith("Samsung"):
+        title, markets = samsung_market_parts(title)
         flags = r"((?:[\U0001F1E6-\U0001F1FF]{2}\s*)*)"
         title = re.sub(r"^" + flags + r"(?:samsung\s+galaxy|galaxy)\s+",
                        r"\1Samsung ", title, count=1, flags=re.I)
         title = re.sub(r"^" + flags + r"(?=[AS]\s*\d{2,3}[a-z]?\b)",
                        r"\1Samsung ", title, count=1, flags=re.I)
-        india = re.search(r"(?:\(\s*IN\s*\)|\bIN)\s*$", title, re.I)
-        markets = set(FLAGS.findall(title))
-        if india and (not markets or markets == {"🇮🇳"}):
-            title = title[:india.start()].rstrip() + ("" if markets else " 🇮🇳")
+        title = re.sub(r"^(?=(?:z\s*)?(?:fold|flip)\s*\d)", "Samsung ", title, flags=re.I)
+        title = re.sub(r"\bZ\s*(?=fold|flip)", "Z ", title, flags=re.I)
+        for sku, name in (("A175", "A17 4G"), ("A376", "A37 5G"), ("A576", "A57 5G")):
+            title = re.sub(r"\bSamsung\s+" + sku + r"\b", "Samsung " + name, title, flags=re.I)
+        title = samsung_watch_name(title)
+        title = re.sub(r"\b(\d{1,2}\s*/\s*\d{2,4})\s*(?:GB|ГБ)\b", r"\1", title, flags=re.I)
         title = clean(re.sub(r"\(\s*\)", "", title))
+        if markets:
+            title += " " + " ".join(dict.fromkeys(markets))
     if iphone_model(title) and not item.accessory:
         title = normalize_iphone_18_pro_max_color(title)
         title = FLAGS.sub("", title)
