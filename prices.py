@@ -217,18 +217,77 @@ def offer_network_spelling(title):
 def samsung_market_parts(title):
     """Return a title and explicit market flags without guessing conflicts."""
     flags = FLAGS.findall(title)
-    bare = FLAGS.sub("", clean(title)).strip()
-    market = re.search(r"(?:\(\s*(IN|IND|MY|MALAYSIA|KZ|EU|HK|HONG\s+KONG)\s*\)|\b(IN|IND|MY|MALAYSIA|KZ|EU|HK|HONG\s+KONG))\s*$", bare, re.I)
+    bare = clean(FLAGS.sub(" ", title))
+    markers = r"IN|IND|MY|MALAYSIA|KZ|EU|HK|HONG\s+KONG|ARG|ARAB"
+    market = re.search(
+        r"(?:\(\s*(" + markers + r")\s*\)|\b(" + markers + r")\b)"
+        r"(?=\s*(?:2\s*sim\s*)?$)", bare, re.I,
+    )
     if market:
         code = (market.group(1) or market.group(2)).upper()
         code = re.sub(r"\s+", " ", code)
         flag = {"IN": "🇮🇳", "IND": "🇮🇳", "MY": "🇲🇾", "MALAYSIA": "🇲🇾",
-                "KZ": "🇰🇿", "EU": "🇪🇺", "HK": "🇭🇰", "HONG KONG": "🇭🇰"}[code]
-        if not flags or set(flags) == {flag}:
-            bare = bare[:market.start()].strip()
+                "KZ": "🇰🇿", "EU": "🇪🇺", "HK": "🇭🇰", "HONG KONG": "🇭🇰",
+                "ARG": "🇦🇷", "ARAB": "🇦🇪"}[code]
+        if set(flags) == {flag} or (not flags and code != "ARAB"):
+            bare = clean(bare[:market.start()] + " " + bare[market.end():])
             if not flags:
                 flags.append(flag)
     return bare, flags
+
+
+SAMSUNG_S_OFFER_CODES = {
+    25: {"": "S931", "+": "S936", "fe": "S731", "ultra": "S938"},
+    26: {"": "S942", "+": "S947", "fe": "S741", "ultra": "S948"},
+}
+
+
+def samsung_s_offer_spelling(title, markets):
+    match = re.match(
+        r"^(?:samsung\s+)?s\s*(25|26)(?:\s*(\+|plus\b|fe\b|ultra\b|edge\b))?(?=\s|$)",
+        title, re.I,
+    )
+    if not match:
+        return title
+    generation = int(match[1])
+    variant = (match[2] or "").casefold().replace("plus", "+")
+    suffix = variant if variant in {"", "+"} else " " + variant.title()
+    if variant == "fe":
+        suffix = " FE"
+    title = f"Samsung S{generation}{suffix}" + title[match.end():]
+    code = SAMSUNG_S_OFFER_CODES[generation].get(variant)
+    markets = set(markets)
+    east_asian = {"🇭🇰", "🇨🇳"}
+    if code and not markets.intersection(east_asian):
+        title = re.sub(r"\b" + code + r"B\b", " ", title, flags=re.I)
+    elif code and markets and markets <= east_asian:
+        title = re.sub(r"\b" + code + r"0\b", " ", title, flags=re.I)
+    title = re.sub(r"\b5\s*[gг]\b", " ", title, flags=re.I)
+    title = re.sub(r"\b(\d{1,2})\s*/\s*(1024|2048)(?:\s*(?:GB|ГБ))?\b",
+                   lambda m: f"{m[1]}/{int(m[2]) // 1024}TB", title, flags=re.I)
+    if generation == 26 and variant != "fe":
+        title = re.sub(r"\b(?:sky\s+)?blue\b|\bголуб(?:ой|ая|ое)\b", "Sky Blue", title, flags=re.I)
+        title = re.sub(r"\b(?:cobalt\s+)?violet\b", "Cobalt Violet", title, flags=re.I)
+        title = re.sub(r"\bpink\s*gold\b", "Pink Gold", title, flags=re.I)
+    elif generation == 26:
+        title = re.sub(r"\bphistachio\b", "Pistachio", title, flags=re.I)
+    elif variant in {"", "+", "fe"}:
+        title = re.sub(r"\bic(?:e|y)\s*blue\b", "Icyblue", title, flags=re.I)
+        if variant in {"", "+"}:
+            title = re.sub(r"\bsilver(?:\s+shadow)?\b", "Silver Shadow", title, flags=re.I)
+    elif variant == "ultra":
+        ultracolors = (
+            (r"(?:silver[\s-]*)?blue", "Silver Blue"),
+            (r"gr[ae]y", "Gray"),
+            (r"white(?:[\s-]*silver)?", "White Silver"),
+            (r"black", "Black"),
+            (r"jet[\s-]*black", "Jet Black"),
+        )
+        for pattern, color in ultracolors:
+            title = re.sub(r"(?<=\s)(?:titanium\s+)?(?:" + pattern + r")\b", color, title, flags=re.I)
+    title = re.sub(r"\b2\s*sim\b", "2 SIM", title, flags=re.I)
+    title = re.sub(r"\(\s*([A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s*\)", r"\1", title)
+    return clean(title)
 
 
 def samsung_watch_name(title):
@@ -1212,6 +1271,8 @@ def display_title(item):
             if re.match(r"^Samsung\s+A\s*57\b", title, re.I):
                 title = re.sub(r"\bDark Blue\b", "Navy", title, flags=re.I)
         title = samsung_a_offer_spelling(title)
+        if samsung_s_model(title) and not item.accessory:
+            title = samsung_s_offer_spelling(offer_color_spelling(title), markets)
         title = re.sub(r"\b(\d{1,2}\s*/\s*\d{2,4})\s*(?:GB|ГБ)\b", r"\1", title, flags=re.I)
         title = clean(re.sub(r"\(\s*\)", "", title))
         if markets:
@@ -1335,7 +1396,8 @@ def product_storage_key(item):
     match = re.search(r"\b\d{1,2}\s*/\s*(\d{1,4})\s*(GB|TB)?\b", title, re.I)
     if not match:
         return ""
-    return match.group(1) + (match.group(2) or "GB").upper()
+    factor = 1024 if (match.group(2) or "").upper() == "TB" else 1
+    return f"{int(match.group(1)) * factor}GB"
 
 
 def iphone_storage_rank(item):
@@ -1394,8 +1456,9 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
             if block in {"Samsung A + S25", "Samsung S26", "Samsung Fold / Flip"}:
                 model = samsung_phone_group(item.title)
                 lte = bool(model and model[0] == "a" and samsung_a_lte(item.title))
+                title = display_title(item) if model and model[0] == "s" else item.title
                 return (0 if model else 1, model or (), lte,
-                        samsung_memory_sort(item.title), samsung_colour_sort(item.title), item_sort(item))
+                        samsung_memory_sort(title), samsung_colour_sort(title), item_sort(item))
             if block == "Honor":
                 memory = re.search(r"\b(\d{1,2})\s*/\s*(\d{2,4})\s*(GB|TB|ГБ|ТБ)?\b", item.title, re.I)
                 if memory:

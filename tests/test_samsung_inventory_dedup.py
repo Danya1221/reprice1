@@ -45,7 +45,8 @@ Samsung Watch 9 44mm Silver 🇷🇺 — 22 000
 Samsung Z Fold8 12/512 Lavender 🇰🇿 — 121 000
 Samsung Z Fold8 16/512 Lavender 🇰🇿 — 122 000'''
         items = select_samsung_regions(merge_lowest([parse_documents([text]).items]))
-        self.assertEqual(len(items), 13)
+        self.assertEqual(len(items), 12)
+        self.assertNotIn(Decimal('64000'), [item.price for item in items])
 
     def test_same_source_same_title_keeps_cheapest_but_later_document_can_raise_price(self):
         rows = ['Samsung A57 12/512 Gray 🇷🇺 — 42 000\nSamsung A57 12/512 Gray 🇷🇺 — 42 800']

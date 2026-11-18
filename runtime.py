@@ -18,7 +18,7 @@ from prices import (
     physical_message_labels, physical_page_labels, product_block, render_blocks, select_items,
     display_title, marked_price, price_text, normalize_iphone_18_pro_max_color, samsung_market_parts, samsung_watch_name,
     offer_color_spelling, offer_network_spelling, offer_qualifier_suffix, strip_supplier_annotations,
-    samsung_a_model, samsung_a_offer_spelling,
+    samsung_a_model, samsung_a_offer_spelling, samsung_s_model, samsung_s_offer_spelling,
 )
 from publisher import Publisher
 from supplier import SupplierReader, resolve_input_peer
@@ -140,9 +140,10 @@ def common_offer_aliases(title, item):
     return title
 
 
-def merge_key(item):
+def merge_key(item, *, ignore_samsung_market=False):
     """Match supplier spellings for the same product variant."""
     title = offer_color_spelling(strip_supplier_annotations(item.title))
+    merge_sim = item.sim
     neo_key = macbook_neo_merge_key(item)
     if neo_key is not None:
         return neo_key
@@ -158,7 +159,6 @@ def merge_key(item):
         bare = bare.replace("\ufe0f", "")
         flags = "".join(market_flags)
         bare = re.sub(r"^\s*(?:samsung\s+galaxy|galaxy)\b", "Samsung", bare, flags=re.I)
-        bare = re.sub(r"^\s*(?=s\s*25\b)", "Samsung ", bare, flags=re.I)
         bare = re.sub(r"^\s*(?=(?:z\s*)?(?:fold|flip)\s*\d)", "Samsung ", bare, flags=re.I)
         bare = re.sub(r"\bZ\s*(?=fold|flip)", "Z ", bare, flags=re.I)
         bare = re.sub(r"\b(S\d+)\s*plus\b", r"\1+", bare, flags=re.I)
@@ -173,38 +173,13 @@ def merge_key(item):
         if re.search(r"\bSamsung\s+A57\b", bare, re.I):
             bare = re.sub(r"\bdark[\s-]+blue\b", "navy", bare, flags=re.I)
         bare = samsung_a_offer_spelling(bare)
-        s26 = re.match(r"^Samsung\s+S26(?:(\+)(?=\s|$)|\s+(FE|Ultra)\b|(?=\s|$))", bare, re.I)
-        if s26:
-            version = "+" if s26.group(1) else (s26.group(2) or "").casefold()
-            markets = set(market_flags)
-            code = {"": "S942", "+": "S947", "fe": "S741", "ultra": "S948"}[version]
-            if markets and not markets.intersection({"🇭🇰", "🇨🇳"}):
-                bare = re.sub(r"\b" + code + r"B\b", " ", bare, flags=re.I)
-            elif markets and markets <= {"🇭🇰", "🇨🇳"}:
-                bare = re.sub(r"\b" + code + r"0\b", " ", bare, flags=re.I)
-            bare = re.sub(r"\b5\s*[gг]\b", " ", bare, flags=re.I)
-            if version != "fe":
-                bare = re.sub(r"\b(?:sky\s+)?blue\b|\bголуб(?:ой|ая|ое)\b", "sky blue", bare, flags=re.I)
-                bare = re.sub(r"\b(?:cobalt\s+)?violet\b|\bфиолетов(?:ый|ая|ое)\b", "cobalt violet", bare, flags=re.I)
-            else:
-                bare = re.sub(r"\bphistachio\b", "pistachio", bare, flags=re.I)
-        s25 = re.match(r"^Samsung\s+S25(?:\s+(FE|Ultra))?\b", bare, re.I)
-        if s25:
-            version = (s25.group(1) or "").casefold()
-            markets = set(FLAGS.findall(flags))
-            # Only remove known model codes for matching model/market pairs.
-            # Other codes can describe different hardware and remain distinct.
-            model_code = {"": "S931", "fe": "S731", "ultra": "S938"}[version]
-            if markets and not markets.intersection({"🇭🇰", "🇨🇳"}):
-                bare = re.sub(r"\b" + model_code + r"B\b", " ", bare, flags=re.I)
-            elif markets and markets <= {"🇭🇰", "🇨🇳"}:
-                bare = re.sub(r"\b" + model_code + r"0\b", " ", bare, flags=re.I)
-            bare = re.sub(r"\b5\s*[gг]\b", " ", bare, flags=re.I)
-            bare = re.sub(r"\b(\d{1,2}\s*/\s*)1024(?:\s*(?:GB|ГБ))?\b", r"\g<1>1TB", bare, flags=re.I)
-            if version in {"", "fe"}:
-                bare = re.sub(r"\bic(?:e|y)\s*blue\b", "icyblue", bare, flags=re.I)
-            if not version:
-                bare = re.sub(r"\bsilver(?:\s+shadow)?\b", "silver shadow", bare, flags=re.I)
+        bare = samsung_s_offer_spelling(bare, market_flags)
+        # The Hong Kong S9420 supports two nano-SIMs as standard. On that
+        # market, an explicit 2 SIM label describes the same Galaxy S26.
+        if (samsung_s_model(bare) == (26, 0) and set(market_flags) == {"🇭🇰"}
+                and item.sim == "dual" and not re.search(r"\bS\d{3}[A-Z0-9]+\b", bare, re.I)):
+            bare = re.sub(r"\b(?:2x?|dual)\s*(?:nano\s*)?sim\b|две\s*sim", " ", bare, flags=re.I)
+            merge_sim = "unknown"
         bare = re.sub(r"\bjet\s*black\b", "jetblack", bare, flags=re.I)
         # The currently listed Galaxy A18 is the LTE model; keep an explicit
         # 5G variant distinct if a supplier provides one.
@@ -220,7 +195,7 @@ def merge_key(item):
         if re.search(r"\bSamsung\s+A08\b", bare, re.I):
             bare = re.sub(r"\b(?:dark[\s-]+blue|navy|blue)\b", "dark blue", bare, flags=re.I)
         bare = samsung_watch_name(bare)
-        title = bare + " " + flags
+        title = bare if ignore_samsung_market else bare + " " + flags
     if re.search(r"\bsony\s+wh[-\s]*1000\s*xm\d", title, re.I) and not item.accessory:
         title = re.sub(r"\b(wh)[-\s]*(1000)\s*(xm\d+)", r"\1-\2\3", title, flags=re.I)
         title = re.sub(r"\bblaсk\b", "black", title, flags=re.I)  # Cyrillic с in a Latin colour
@@ -235,7 +210,8 @@ def merge_key(item):
         title = re.sub(patterns[item.sim], " ", title, flags=re.I)
     # The public SIM section combines supplier labels "SIM" and "SIM+eSIM";
     # keep eSIM-only and two-physical-SIM variants separate.
-    merge_sim = "hybrid" if iphone_model(title) and item.sim in {"sim", "hybrid"} else item.sim
+    if iphone_model(title) and item.sim in {"sim", "hybrid"}:
+        merge_sim = "hybrid"
     title = common_offer_aliases(title, item)
     # The condition can be on the row or inherited from its section.  Its
     # qualifier below preserves it, so the spelling need not duplicate it.
@@ -290,7 +266,7 @@ def select_samsung_regions(items):
     Compare only otherwise-identical descriptions; never strip condition,
     configuration, colour, SIM, or currency from the comparison key.
     """
-    protected = {"🇭🇰", "🇨🇳", "🇰🇿", "🇷🇺", "explicit-rst"}
+    protected = {"🇭🇰", "🇨🇳", "🇰🇿", "explicit-rst"}
     rst_marker = re.compile(r"(?<!\w)(?:рст|pct|rst|ростест)(?!\w)", re.I)
     groups = OrderedDict()
     keep = set()
@@ -312,12 +288,7 @@ def select_samsung_regions(items):
             comparison_title, flags = samsung_market_parts(display_title(replace(item, title=comparison_title)))
             comparison_title = re.sub(r"\s+arabic\s*$", "", comparison_title, flags=re.I)
             comparison_title = " ".join([comparison_title, *flags])
-        key_parts = merge_key(replace(item, title=comparison_title)).split("|")
-        # Compare the same configuration across markets after model and
-        # country aliases have been interpreted with their original flags.
-        if len(key_parts) == 4:
-            key_parts[1] = ""
-        key = "|".join(key_parts)
+        key = merge_key(replace(item, title=comparison_title), ignore_samsung_market=True)
         groups.setdefault(key, []).append((index, item, regions))
     for group in groups.values():
         # At equal price prefer a protected region, avoiding an extra row.

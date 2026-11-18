@@ -99,11 +99,11 @@ Samsung S26 12/512GB Black 🇰🇿 — 68500""").items
         content = "\n".join(render_blocks(items, Settings()).values())
         rows = re.findall(r"<code>(.*?)</code>", content)
         self.assertIn("Black 🇨🇳", rows[0])
-        self.assertIn("Черный 🇷🇺", rows[1])
+        self.assertIn("Black 🇷🇺", rows[1])
         self.assertIn("Sky Blue 🇰🇿", rows[2])
-        self.assertIn("Голубой 🇷🇺", rows[3])
+        self.assertIn("Sky Blue 🇷🇺", rows[3])
         self.assertIn("Cobalt Violet 🇨🇳", rows[4])
-        self.assertIn("Фиолетовый 🇷🇺", rows[5])
+        self.assertIn("Cobalt Violet 🇷🇺", rows[5])
         self.assertIn("12/512", rows[-1])
 
     def test_dyson_text_price_after_camera_and_delivery_emojis(self):

@@ -10,10 +10,10 @@ class SamsungS25DedupTest(unittest.TestCase):
         sample = 'Samsung S25 12/256GB Ice Blue 🇮🇳 — 50 500\n🇮🇳S25 12/256 S931B Silver — 50 300\nSamsung S25 12/256 silver🇮🇳 — 50 300\nSamsung S25 12/256GB Silver Shadow 🇮🇳 — 48 800\n🇭🇰S25 12/256 S9310 Mint — 49 500\n🇮🇳S25 12/256 S931B Icyblue — 50 300\n🇮🇳S25 12/256 S931B Mint — 50 300\n🇮🇳S25 12/256 S931B Navy — 50 300\nSamsung S25 12/256 (Icyblue) IN — 49 100\nSamsung S25 12/256 Blueblack (IN) — 52 800\nSamsung S25 12/256 Mint (IN) — 48 400\nSamsung S25 12/256GB Icyblue 🇮🇳 — 50 400\nSamsung S25 12/256GB Mint 🇨🇳 — 49 500\nSamsung S25 12/256GB Navy 🇮🇳 — 50 400\nSamsung S25 12/256GB Mint 🇮🇳 — 48 800\n🇮🇳S25 FE 8/128 S731B Jetblack — 38 200\nSamsung S25 FE 8/128GB Jet Black 🇮🇳 — 37 500\nSamsung S25 FE 8/128GB White 🇮🇳 — 38 000\n🇮🇳S25 FE 8/128 S731B Navy — 38 000\nSamsung S25 FE 5G 8/128GB Navy 🇮🇳 — 37 800\nSamsung S25 FE 8/128GB Navy 🇦🇪 — 37 500\n🇮🇳S25 FE 8/256 S731B Jetblack — 43 000\n🇷🇺S25 FE 8/256 S731B Jetblack — 43 300\nSamsung S25 FE 8/256 (Jetblack) IN — 42 200\nSamsung S25 FE 5G 8/256GB JetBlack 🇮🇳 — 43 000\nSamsung S25 FE 8/256GB Jet Black 🇮🇳 — 42 800\nSamsung S25 FE 8/256GB Ice Blue 🇦🇪 — 42 800\n🇸🇬S25 FE 8/256 S731B Icyblue — 43 000\n🇮🇳S25 FE 8/256 S731B Navy — 43 000\nSamsung S25 FE 5G 8/256GB IceBlue 🇲🇾 — 43 000\nSamsung S25 FE 5G 8/256GB Navy 🇮🇳 — 43 000\nSamsung S25 FE 8/256 iceblue🇷🇺 — 43 000\nSamsung S25 FE 8/256GB Navy 🇦🇪 — 42 800\n🇦🇪S25 Ultra 12/256 S938B Blue — 67 400\n🇦🇪S25 Ultra 12/256 S938B Gray — 67 400\nSamsung S25 Ultra 12/256GB Gray 🇲🇾 — 66 500\nSamsung S25 Ultra 12/512GB Black — 72 000\nSamsung S25 Ultra 12/512GB White Silver 🇻🇳 — 72 000\n🇨🇱S25 Ultra 12/1024 S938B Blue — 79 000\nSamsung S25 Ultra 12/1TB Silver Blue Arg — 78 700\nSamsung S25 Ultra 12/1TB Grey Arab 🇦🇪 — 79 000\nSamsung S25 Ultra 12/1TB White Silver Arg — 77 900\n'
         items = select_samsung_regions(merge_lowest([parse_documents([sample]).items]))
         prices = [item.price for item in items]
-        self.assertEqual(len(items), 23)
-        for value in (49100, 48800, 48400, 49500, 37500, 42200, 43300, 42800):
+        self.assertEqual(len(items), 20)
+        for value in (49100, 48800, 48400, 49500, 37500, 42200, 42800):
             self.assertIn(Decimal(value), prices)
-        for value in (50500, 50400, 38200):
+        for value in (50500, 50400, 38200, 43300):
             self.assertNotIn(Decimal(value), prices)
         silver = [i for i in items if 'Silver Shadow' in i.title]
         self.assertEqual([i.price for i in silver], [Decimal('48800')])
@@ -42,3 +42,16 @@ Samsung S25 Ultra 12/1TB Blue 🇭🇰 — 80 000"""
         items = select_samsung_regions(merge_lowest([parse_documents([sample]).items]))
         self.assertEqual(sorted(i.price for i in items), [Decimal('70000'), Decimal('78000'), Decimal('80000')])
         self.assertTrue(display_title(items[0]).startswith('🇨🇱Samsung ') or display_title(items[0]).startswith('Samsung '))
+
+    def test_s25_ultra_equivalent_one_terabyte_offers_keep_best_price(self):
+        sample = """Samsung S25 Ultra 12/1024 S938B Blue 🇨🇱 — 79 000
+Samsung S25 Ultra 12/1TB Silver Blue Arg — 78 700
+Samsung S25 Ultra 12/1024 S938B Gray 🇨🇱 — 80 200
+Samsung S25 Ultra 12/1TB Grey Arab 🇦🇪 — 79 000
+Samsung S25 Ultra 12/1024 S938B White 🇨🇱 — 80 200"""
+        items = select_samsung_regions(merge_lowest([parse_documents([sample]).items]))
+        self.assertEqual({display_title(item): item.price for item in items}, {
+            'Samsung S25 Ultra 12/1TB Silver Blue 🇦🇷': Decimal('78700'),
+            'Samsung S25 Ultra 12/1TB Gray 🇦🇪': Decimal('79000'),
+            'Samsung S25 Ultra 12/1TB White Silver 🇨🇱': Decimal('80200'),
+        })

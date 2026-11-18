@@ -555,7 +555,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🇮🇳", content)
         self.assertNotIn("🇹🇭", content)
 
-    async def test_samsung_preserves_russian_market_and_explicit_rst(self):
+    async def test_samsung_keeps_explicit_rst_and_filters_ordinary_russian_offer(self):
         rows = parse_documents(["\n".join([
             "Samsung S26 12/256 Black 🇦🇪 — 57 000",
             "Samsung S26 12/256 Black 🇮🇳 — 58 000",
@@ -568,10 +568,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         ])]).items
         count, _ = await self.service.render(items=merge_lowest([rows]))
         content = "\n".join(self.service.publisher.publish.await_args.args[0].values())
-        self.assertEqual(count, 6)
-        for price in ("57 000", "58 500", "59 000", "59 500", "60 000", "61 000"):
+        self.assertEqual(count, 5)
+        for price in ("57 000", "58 500", "59 000", "59 500", "61 000"):
             self.assertIn(price, content)
         self.assertNotIn("58 000", content)
+        self.assertNotIn("60 000", content)
         self.assertNotIn("62 000", content)
         self.assertEqual(content.count("РСТ"), 1)
 

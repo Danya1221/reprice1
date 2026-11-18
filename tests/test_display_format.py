@@ -134,7 +134,7 @@ Galaxy Z Fold7 12/256 Blue Shadow 🇰🇿 — 97600
 Samsung Galaxy Z Fold 7 12/256GB Blue Shadow 🇭🇰 — 98000
 Samsung Galaxy Watch 8 40mm Silver 🇮🇳 — 16800"""]).items
         titles = [display_title(item) for item in items]
-        self.assertEqual(titles[0], "Samsung S25 FE 5G 8/256 Navy 🇮🇳")
+        self.assertEqual(titles[0], "Samsung S25 FE 8/256 Navy 🇮🇳")
         self.assertEqual(titles[1], "Samsung Z Fold7 12/256 Blue Shadow 🇰🇿")
         self.assertEqual(titles[2], "Samsung Z Fold 7 12/256 Blue Shadow 🇭🇰")
         self.assertEqual(titles[3], "Samsung Watch 8 40mm Silver 🇮🇳")
