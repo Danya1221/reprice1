@@ -871,9 +871,13 @@ Xiaomi Pad 8 Pro 11.2" 8/256GB Wi-Fi Gray 🇷🇺 — 46 000
         count, _ = await self.service.render(items=rows)
         text = "\n".join(self.service.publisher.publish.await_args.args[0].values())
         self.assertEqual(count, 22)
-        model_rows = re.findall(r"<code>Xiaomi 17T Pro (\d+/\S+) .*?</code>", text)
-        self.assertEqual(model_rows, ["12/256", "12/256", "12/512", "12/1ТБ", "12/1ТБ"])
-        self.assertLess(text.index("16/512 Green"), text.index("16/1ТБ Starlit Green"))
+        models = re.findall(r"<code>(.*?)</code>", text)
+        pro_indices = [i for i, title in enumerate(models) if title.startswith("Xiaomi 17T Pro ")]
+        self.assertEqual(len(pro_indices), 5)
+        self.assertEqual(pro_indices, list(range(pro_indices[0], pro_indices[0] + 5)))
+        model_rows = [models[index].split()[3] for index in pro_indices]
+        self.assertEqual(model_rows, ["12/256", "12/256", "12/512", "12/1TB", "12/1TB"])
+        self.assertLess(text.index("16/512 Green"), text.index("16/1TB Starlit Green"))
         for title in ("POCO C95 Pro", "POCO F9 Pro 12/512 Aurora Green", "POCO X8 Pro", "Baseus PicoGo",
                       "SilverStone F1 Hybrid", "70mai Dash Cam", "Xiaomi Mix Flip 12/512 Black — 45 300",
                       "Xiaomi 17T 12/512 Blue 🇨🇳 — 42 000", "Xiaomi 17T 12/512 Blue 🇪🇺 — 45 800",
@@ -896,8 +900,8 @@ Xiaomi Mi 17 Ultra 16/512GB White 🇪🇺 — 96 000''']).items
             "16/512 Black 🇪🇺 — 93 000",
             "16/512 Starlit Green 🇪🇺 — 93 500",
             "16/512 White 🇪🇺 — 96 000",
-            "16/1ТБ Starlit Green 🇰🇿 — 105 000",
-            "16/1ТБ White 🇷🇺 — 106 500",
+            "16/1TB Starlit Green 🇰🇿 — 105 000",
+            "16/1TB White 🇷🇺 — 106 500",
         ])
 
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):

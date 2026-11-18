@@ -250,7 +250,7 @@ TABLET_NETWORK_ALIASES = {
     "LTE": r"\b(?:lte|4\s*[gг])\b",
     "5G": r"\b5\s*[gг]\b",
 }
-TABLET_MEMORY = re.compile(r"\b(\d{1,2})\s*/\s*(\d{2,4}(?:\s*(?:TB|ТБ))?)(?:\s*(?:GB|ГБ))?\b", re.I)
+TABLET_MEMORY = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,4}\s*(?:TB|ТБ)|\d{2,4})(?:\s*(?:GB|ГБ))?\b", re.I)
 SAMSUNG_TAB_CODES = {
     "A11": ("8.7", {"X130": "Wi-Fi", "X133": "Wi-Fi", "X135": "LTE"}),
     "A11+": ("11", {"X230": "Wi-Fi", "X236": "5G"}),
@@ -1630,7 +1630,7 @@ def display_title(item):
     if item.block == "Huawei" and not item.accessory:
         title = huawei_offer_name(title)
     if item.block in XIAOMI_PRICE_BLOCKS and not item.accessory:
-        title = re.sub(r"\b(\d{1,2}/\d+)TB\b", r"\1ТБ", xiaomi_offer_name(title))
+        title = xiaomi_offer_name(title)
     if iphone_model(title) and not item.accessory:
         title = normalize_iphone_18_pro_max_color(title)
         title = FLAGS.sub("", title)
