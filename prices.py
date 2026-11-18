@@ -423,10 +423,15 @@ HUAWEI_FINISH_ALIASES = {
     },
 }
 HUAWEI_MATEPAD_BUNDLES = {
-    "с клавиатурой": r"(?:\+\s*)?\b(?:kb|keyboard|клавиатура|с\s+клавиатурой)\b",
-    "со стилусом": r"(?:\+\s*)?(?<![\w-])(?:pen|stylus|стилус|со\s+стилусом)\b",
-    "с чехлом": r"(?:\+\s*)?\b(?:cover|с\s+чехлом)\b",
+    "без клавиатуры": r"\b(?:без\s+(?:клавиатуры|клавы)|(?:without|no|w/o)\s+(?:kb|keyboard))\b",
+    "без стилуса": r"\b(?:без\s+стилуса|(?:without|no|w/o)\s+(?:pen|stylus))\b",
+    "без чехла": r"\b(?:без\s+чехла|(?:without|no|w/o)\s+cover)\b",
+    "с клавиатурой": r"(?:\+\s*)?\b(?:with\s+)?(?:kb|keyboard|клавиатура|с\s+клавиатурой)\b",
+    "со стилусом": r"(?:\+\s*)?(?<![\w-])(?:with\s+)?(?:pen|stylus|стилус|со\s+стилусом)\b",
+    "с чехлом": r"(?:\+\s*)?\b(?:with\s+)?(?:cover|с\s+чехлом)\b",
 }
+MATEPAD_NETWORK_LABELS = {"Wi-Fi": "Wi-Fi", "LTE": "LTE (SIM)", "5G": "5G (SIM)",
+                          "SIM": "SIM", "": "Связь не указана"}
 
 
 def huawei_matepad_name(title):
@@ -868,6 +873,8 @@ def ordered_blocks(blocks, preferred=()):
             return (-1, preferred.index(name), (), "")
         model = iphone_model(name)
         family = "iPhone" if model else ("Apple Watch" if name.startswith("Apple Watch") else ("Samsung" if name.startswith("Samsung") else name))
+        if name.startswith("Huawei MatePad"):
+            family = "Huawei"
         rank = defaults.index(family) if family in defaults else len(defaults) - 4
         samsung_order = ("Samsung Buds", "Samsung A + S25", "Samsung S26", "Samsung Tab S",
                          "Samsung Fold / Flip", "Samsung", *SAMSUNG_NETWORK_BLOCKS)
@@ -1621,6 +1628,8 @@ def physical_brand_label(title):
         return "Apple"
     if lower.startswith("samsung"):
         return "Samsung"
+    if lower.startswith("huawei matepad"):
+        return "Huawei"
     if lower.startswith("ray-ban"):
         return "Ray-Ban Meta"
     if lower.startswith("dji") or lower.startswith("insta360"):
@@ -1653,10 +1662,27 @@ def iphone_storage_rank(item):
     return value
 
 
+def matepad_offer_group(title):
+    networks = tablet_networks(title)
+    network = next((kind for kind in ("5G", "LTE") if kind in networks), "")
+    no_sim = re.search(r"\b(?:без|without|no)\s+(?:SIM|сим|cellular)\b", title, re.I)
+    if not network:
+        if not no_sim and (sim_type(title) != "unknown" or re.search(r"\b(?:cellular|сим)\b", title, re.I)):
+            network = "SIM"
+        elif "Wi-Fi" in networks:
+            network = "Wi-Fi"
+    bundles = tuple(label for label, pattern in HUAWEI_MATEPAD_BUNDLES.items() if re.search(pattern, title, re.I))
+    if re.search(r"\bKids\b", title, re.I):
+        bundles += ("Kids",)
+    return network, bundles, bool(re.search(r"\bPaperMatte\b", title, re.I))
+
+
 def render_block_lines(block, block_items, settings, overrides, closed=False):
     if closed:
         return ["Продажи закрыты"]
 
+    matepad_groups = ({item: matepad_offer_group(display_title(item)) for item in block_items}
+                      if block.startswith("Huawei MatePad") else {})
     has_activation = any(activation_state(item.title) != "unknown" or iphone_model(item.title) for item in block_items)
 
     def condition(item):
@@ -1678,12 +1704,17 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
         last_sim = None
         last_samsung_section = None
         last_dyson_model = None
+        last_matepad_group = None
         last_model_key = None
         last_iphone_model = None
         last_storage = None
         sorter = samsung_a_s25_sort if block == "Samsung A + S25" else item_sort
 
         def full_sort(item):
+            if matepad_groups:
+                network, bundles, matte = matepad_groups[item]
+                ram, storage = samsung_memory_sort(display_title(item))
+                return (tuple(MATEPAD_NETWORK_LABELS).index(network), bundles, matte, storage, ram, item_sort(item))
             if block in SAMSUNG_NETWORK_BLOCKS or block == "Huawei":
                 return item_sort(replace(item, title=display_title(item)))
             if block == "Dyson":
@@ -1720,6 +1751,17 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
             return (SIM_ORDER.get(item.sim, 99), 0, sorter(item))
 
         for item in sorted(status_items, key=full_sort):
+            if matepad_groups and matepad_groups[item] != last_matepad_group:
+                last_matepad_group = matepad_groups[item]
+                network, bundles, matte = last_matepad_group
+                labels = [MATEPAD_NETWORK_LABELS[network], *bundles]
+                if matte:
+                    labels.append("PaperMatte")
+                label = " · ".join(labels)
+                if lines and lines[-1] != "":
+                    lines.append("")
+                lines.extend((f"<b>{html.escape(label)}</b>", ""))
+
             if block == "Dyson":
                 current_model = dyson_model(item.title)
                 if current_model != last_dyson_model:
@@ -1761,7 +1803,7 @@ def render_block_lines(block, block_items, settings, overrides, closed=False):
                 last_iphone_model = model
                 if storage:
                     last_storage = storage
-            else:
+            elif not matepad_groups:
                 model_key = model_group_key(item)
                 model_changed = last_model_key is not None and model_key != last_model_key
                 if (model_changed and lines and lines[-1] != "" and not lines[-1].startswith("<b>")):
@@ -1795,7 +1837,8 @@ def section_chunks(title, lines, limit=3200):
     result = []
     chunk = []
     size = 0
-    dyson_heading = None
+    context_heading = None
+    is_matepad = title.startswith("Huawei MatePad")
     previous_samsung_model = None
     for index, line in enumerate(lines):
         # Keep an entire Samsung A-model together when it fits a message.
@@ -1819,24 +1862,24 @@ def section_chunks(title, lines, limit=3200):
                     result.append({"title": title, "body": "\n".join(chunk), "part": len(result)})
                     chunk, size = [], 0
             previous_samsung_model = current
-        if title == "Dyson" and line.startswith("<b>— "):
-            dyson_heading = line
+        if (title == "Dyson" and line.startswith("<b>— ")) or (is_matepad and line.startswith("<b>")):
+            context_heading = line
         line_size = units(line) + 1
         if chunk and size + line_size > limit:
-            # Keep a Dyson category heading with its first product when the
+            # Keep a category heading with its first product when the
             # Telegram message limit falls between the heading and that row.
             tail = []
-            if title == "Dyson" and line.startswith("<code>"):
+            if context_heading and (not line or line.startswith("<code>")):
                 last = len(chunk) - 1
                 while last >= 0 and chunk[last] == "":
                     last -= 1
-                if last > 0 and chunk[last].startswith("<b>— "):
+                if last > 0 and chunk[last] == context_heading:
                     tail = chunk[last:]
                     chunk = chunk[:last]
-                elif dyson_heading:
+                elif line.startswith("<code>"):
                     # If one model spans several posts, every continuation
                     # still identifies the model for the reader.
-                    tail = [dyson_heading, ""]
+                    tail = [context_heading, ""]
             while chunk and chunk[-1] == "":
                 chunk.pop()
             result.append({"title": title, "body": "\n".join(chunk), "part": len(result)})
@@ -2151,12 +2194,28 @@ def samsung_network_block(item):
     return item.block
 
 
+def matepad_block(item):
+    if item.block != "Huawei" or item.accessory or not re.match(r"^Huawei\s+MatePad\b", FLAGS.sub("", item.title).strip(), re.I):
+        return item.block
+    title = display_title(item)
+    memory = TABLET_MEMORY.search(title)
+    model = title[:memory.start()].strip() if memory else "Huawei MatePad"
+    if memory and not re.search(r"\b20[1-3]\d\b", model):
+        year = re.search(r"\b20[1-3]\d\b", title[memory.end():])
+        if year:
+            model += " " + year[0]
+    return model
+
+
 def render_blocks(items, settings, overrides=None, closed=False):
     """Render logical sections, pack them, then order the real Telegram messages."""
     overrides = overrides or {}
     groups = OrderedDict()
     for item in items:
-        groups.setdefault(item.block if closed else samsung_network_block(item), []).append(item)
+        block = item.block
+        if not closed:
+            block = matepad_block(item) if block == "Huawei" else samsung_network_block(item)
+        groups.setdefault(block, []).append(item)
 
     # Old block_order contained parser-level names such as Mac mini, AirPods or
     # Samsung S26. Those are no longer Telegram messages, so it must not drive

@@ -802,6 +802,37 @@ Huawei Pura 90S Pro Max 5G 12/256GB Orange Ocean 🇷🇺 — 63 500''']).items
         for value in ("12 100", "14 500", "27 500", "54 500", "36 000", "24 300", "52 000", "73 600"):
             self.assertNotIn(value, text)
 
+    async def test_matepad_layout_groups_model_generation_network_and_bundle(self):
+        rows = parse_documents(['''Huawei MatePad SE 11 4/128 LTE Gray 🇷🇺 — 17 100
+Huawei MatePad 11.5 8/128 Wi-Fi Gray с клавиатурой 🇷🇺 — 29 000
+Huawei MatePad Air 12.2" 8/256 PaperMatte Wi-Fi Blue с клавиатурой 🇷🇺 — 49 000
+Huawei MatePad 11.5 8/256 PaperMatte Wi-Fi Gray 🇷🇺 — 25 400
+Huawei MatePad Air 12" 8/256 PaperMatte Wi-Fi White с клавиатурой 🇷🇺 — 48 500
+Huawei MatePad SE 11 4/128 Wi-Fi Gray 🇷🇺 — 16 000
+Huawei MatePad 11.5 8/256 Wi-Fi Gray 🇷🇺 — 22 500
+Huawei MatePad Air 12" 8/256 PaperMatte Wi-Fi Blue с клавиатурой 🇷🇺 — 48 500
+Huawei MatePad 11.5s 12/512 PaperMatte Wi-Fi Gray 🇷🇺 — 35 000
+Huawei MatePad Pro Max 12/512 PaperMatte WF+KB Blue 🇷🇺 — 88 000
+Huawei MatePad Pro Max 12/256 PaperMatte WF+KB Space Gray 🇷🇺 — 76 500
+Huawei MatePad Pro Max 12/256 PaperMatte WF+Cover Space Gray 🇷🇺 — 71 000
+Huawei MatePad SE 11 8/128 Wi-Fi without keyboard Gray 🇷🇺 — 19 300
+Huawei MatePad SE 11 8/128 Wi-Fi with keyboard Gray 🇷🇺 — 21 000
+Huawei MatePad 11.5 2025 8/256 Wi-Fi Gray 🇷🇺 — 24 500
+Huawei MatePad SE 11 8/128 SIM Gray 🇷🇺 — 19 100''']).items
+        count, _ = await self.service.render(items=rows)
+        pages = list(self.service.publisher.publish.await_args.args[0].values())
+        self.assertEqual(count, 16)
+        self.assertEqual(len(pages), 1)
+        text = pages[0]
+        for heading in ("11.5", "11.5 2025", "11.5s", "Air 12&quot;", "Air 12.2&quot;", "Pro Max", "SE 11"):
+            self.assertEqual(text.count(f"<b>— Huawei MatePad {heading} —</b>"), 1)
+        self.assertIn("<b>LTE (SIM)</b>\n\n<code>Huawei MatePad SE 11 4/128 LTE", text)
+        self.assertIn("<b>SIM</b>\n\n<code>Huawei MatePad SE 11 8/128 SIM", text)
+        self.assertIn("<b>Wi-Fi · без клавиатуры</b>", text)
+        self.assertIn("<b>Wi-Fi · с чехлом · PaperMatte</b>", text)
+        self.assertIn("с клавиатурой 🇷🇺 — 48 500</code>\n<code>Huawei MatePad Air 12&quot; 8/256 PaperMatte Wi-Fi White", text)
+        self.assertLess(text.index("76 500"), text.index("88 000"))
+
     async def test_user_samsung_a57_examples_only_publish_lowest_price_per_colour(self):
         rows = parse_documents(["\n".join([
             "Samsung A57 5G 12/256GB A.Icyblue 🇦🇪 — 40 300",
