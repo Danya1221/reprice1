@@ -395,6 +395,7 @@ def standard_colour_case(title):
 
 
 HUAWEI_NAME_ALIASES = (
+    (r"^(Huawei\s+Band\s+11\b.*?)\s*\(\s*(CDY-B\d{2})\s*\)", r"\1 \2"),
     (r"^Huawei\s+(?:FB\s*Neo|Free\s*Buds\s*Neo)\b", "Huawei FreeBuds Neo"),
     (r"^Huawei\s+Free\s*Buds\s+(SE|Pro)\s*(\d+)\b", lambda m: f"Huawei FreeBuds {m[1].upper() if m[1].lower() == 'se' else 'Pro'} {m[2]}"),
     (r"^Huawei\s+Free\s*Clip\s*2\s*S\b", "Huawei FreeClip 2 S"),
