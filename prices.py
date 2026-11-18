@@ -140,10 +140,12 @@ def samsung_market_parts(title):
     """Return a title and explicit market flags without guessing conflicts."""
     flags = FLAGS.findall(title)
     bare = FLAGS.sub("", clean(title)).strip()
-    market = re.search(r"(?:\(\s*(IN|IND|MY|KZ|EU)\s*\)|\b(IN|IND|MY|KZ|EU))\s*$", bare, re.I)
+    market = re.search(r"(?:\(\s*(IN|IND|MY|MALAYSIA|KZ|EU|HK|HONG\s+KONG)\s*\)|\b(IN|IND|MY|MALAYSIA|KZ|EU|HK|HONG\s+KONG))\s*$", bare, re.I)
     if market:
         code = (market.group(1) or market.group(2)).upper()
-        flag = {"IN": "🇮🇳", "IND": "🇮🇳", "MY": "🇲🇾", "KZ": "🇰🇿", "EU": "🇪🇺"}[code]
+        code = re.sub(r"\s+", " ", code)
+        flag = {"IN": "🇮🇳", "IND": "🇮🇳", "MY": "🇲🇾", "MALAYSIA": "🇲🇾",
+                "KZ": "🇰🇿", "EU": "🇪🇺", "HK": "🇭🇰", "HONG KONG": "🇭🇰"}[code]
         if not flags or set(flags) == {flag}:
             bare = bare[:market.start()].strip()
             if not flags:
